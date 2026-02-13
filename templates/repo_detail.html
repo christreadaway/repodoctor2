@@ -51,20 +51,27 @@
                 {% if branch.has_pr %}<span class="badge badge-pr">HAS PR</span>{% endif %}
             </div>
             <div class="branch-meta">
+                {% if preferences.display_mode == 'shorthand' %}
+                <span class="meta-item">{{ branch.ahead_by }} ahead</span>
+                <span class="meta-sep">|</span>
+                <span class="meta-item">{{ branch.behind_by }} behind</span>
+                {% else %}
                 <span class="meta-item">{{ branch.ahead_by }} unique change{{ 's' if branch.ahead_by != 1 }} not in {{ repo.default_branch }}</span>
                 {% if branch.behind_by > 0 %}
                 <span class="meta-sep">|</span>
                 <span class="meta-item">{{ repo.default_branch }} has {{ branch.behind_by }} change{{ 's' if branch.behind_by != 1 }} this branch is missing</span>
                 {% endif %}
+                {% endif %}
                 {% if branch.last_commit_date %}
                 <span class="meta-sep">|</span>
-                <span class="meta-item">Last updated: {{ branch.last_commit_date[:10] }}</span>
+                <span class="meta-item">{% if preferences.display_mode == 'shorthand' %}{{ branch.last_commit_date[:10] }}{% else %}Last updated: {{ branch.last_commit_date[:10] }}{% endif %}</span>
                 {% endif %}
                 {% if branch.last_commit_author %}
                 <span class="meta-sep">|</span>
-                <span class="meta-item">by {{ branch.last_commit_author }}</span>
+                <span class="meta-item">{% if preferences.display_mode == 'shorthand' %}{{ branch.last_commit_author }}{% else %}by {{ branch.last_commit_author }}{% endif %}</span>
                 {% endif %}
             </div>
+            {% if preferences.display_mode != 'shorthand' %}
             <div class="branch-recommendation">
                 {% if branch.classification == 'SAFE TO DELETE' %}
                 <span class="rec rec-safe">Recommendation: This branch is already in {{ repo.default_branch }}. Safe to archive and delete.</span>
@@ -78,6 +85,7 @@
                 <span class="rec rec-pr">Recommendation: Has an open pull request. Review and merge the PR on GitHub, then clean up.</span>
                 {% endif %}
             </div>
+            {% endif %}
         </div>
 
         {% if branch.analysis is defined and branch.analysis %}

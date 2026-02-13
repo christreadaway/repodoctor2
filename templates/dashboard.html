@@ -109,11 +109,19 @@
                 {% elif b.classification == 'ACTIVE PR' %}{% set ns.pr = ns.pr + 1 %}
                 {% endif %}
             {% endfor %}
-            {% if ns.diverged %}<span class="badge badge-diverged">{{ ns.diverged }} need{{ '' if ns.diverged == 1 else '' }} careful merge</span>{% endif %}
+            {% if preferences.display_mode == 'shorthand' %}
+            {% if ns.diverged %}<span class="badge badge-diverged">{{ ns.diverged }} DIVERGED</span>{% endif %}
+            {% if ns.ahead %}<span class="badge badge-ahead">{{ ns.ahead }} AHEAD</span>{% endif %}
+            {% if ns.stale %}<span class="badge badge-stale">{{ ns.stale }} STALE</span>{% endif %}
+            {% if ns.safe %}<span class="badge badge-safe">{{ ns.safe }} SAFE</span>{% endif %}
+            {% if ns.pr %}<span class="badge badge-pr">{{ ns.pr }} PR</span>{% endif %}
+            {% else %}
+            {% if ns.diverged %}<span class="badge badge-diverged">{{ ns.diverged }} need careful merge</span>{% endif %}
             {% if ns.ahead %}<span class="badge badge-ahead">{{ ns.ahead }} ready to merge</span>{% endif %}
             {% if ns.stale %}<span class="badge badge-stale">{{ ns.stale }} stale (30+ days)</span>{% endif %}
             {% if ns.safe %}<span class="badge badge-safe">{{ ns.safe }} safe to delete</span>{% endif %}
             {% if ns.pr %}<span class="badge badge-pr">{{ ns.pr }} open PR{{ 's' if ns.pr != 1 else '' }}</span>{% endif %}
+            {% endif %}
         </div>
         {% endif %}
         {% if repo.error is defined and repo.error %}

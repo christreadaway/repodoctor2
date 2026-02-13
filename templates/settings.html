@@ -34,6 +34,18 @@
                 <span class="form-hint">Haiku is great for branch analysis. Use Sonnet or Opus for complex repos with many conflicts.</span>
             </div>
             <div class="form-group">
+                <label for="display_mode">Display Mode</label>
+                <select id="display_mode" name="display_mode">
+                    <option value="plain_english" {% if preferences.display_mode == 'plain_english' %}selected{% endif %}>
+                        Plain English — Full descriptions and recommendations
+                    </option>
+                    <option value="shorthand" {% if preferences.display_mode == 'shorthand' %}selected{% endif %}>
+                        Shorthand — Compact labels (AHEAD, DIVERGED, STALE)
+                    </option>
+                </select>
+                <span class="form-hint">Plain English is great if you're new to Git. Shorthand is denser for experienced users.</span>
+            </div>
+            <div class="form-group">
                 <label for="excluded_repos">Excluded Repositories</label>
                 <input type="text" id="excluded_repos" name="excluded_repos"
                        value="{{ preferences.excluded_repos | join(', ') }}"

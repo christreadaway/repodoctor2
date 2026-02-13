@@ -40,6 +40,7 @@ DEFAULT_PREFS = {
     "sort_branches_by": "classification",
     "excluded_repos": [],
     "ai_model": "claude-haiku-4-5-20251001",
+    "display_mode": "plain_english",
 }
 
 

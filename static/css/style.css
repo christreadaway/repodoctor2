@@ -249,6 +249,26 @@ img {
   color: var(--green-80);
 }
 
+/* Display mode toggle in nav */
+.display-mode-toggle {
+  background: transparent;
+  border: 1px solid var(--green-80);
+  color: var(--green-80);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.05em;
+  transition: background 0.15s, color 0.15s;
+  margin-right: 0.75rem;
+}
+
+.display-mode-toggle:hover {
+  background: var(--green-80);
+  color: var(--bg-deep);
+}
+
 /* Mobile nav toggle */
 .navbar-toggle {
   display: none;
