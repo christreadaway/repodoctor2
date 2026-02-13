@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}RepDoctor2 — Login{% endblock %}
+{% block content %}
+<div class="login-page">
+    <div class="login-header">
+        <h1 class="login-title">RepDoctor2</h1>
+        <p class="login-subtitle">AI-Powered Repository Management</p>
+    </div>
+
+    <div class="login-card">
+        {% if has_credentials %}
+        <h2>Enter Password</h2>
+        <p class="text-secondary">Your credentials are encrypted. Enter your password to unlock.</p>
+        <form method="POST" action="{{ url_for('login') }}">
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required autofocus
+                       placeholder="Enter your password">
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">UNLOCK</button>
+        </form>
+        <p class="text-secondary login-hint">Forgot password? Delete <code>config/credentials.enc</code> and restart.</p>
+        {% else %}
+        <h2>First-Time Setup</h2>
+        <p class="text-secondary">Enter your API keys and choose a password to encrypt them.</p>
+        <form method="POST" action="{{ url_for('login') }}">
+            <div class="form-group">
+                <label for="github_pat">GitHub Personal Access Token</label>
+                <input type="password" id="github_pat" name="github_pat" required
+                       placeholder="ghp_xxxxxxxxxxxxxxxxxxxx">
+                <span class="form-hint">Needs <code>repo</code> scope. Create at GitHub &rarr; Settings &rarr; Developer settings &rarr; Personal access tokens.</span>
+            </div>
+            <div class="form-group">
+                <label for="anthropic_key">Anthropic API Key</label>
+                <input type="password" id="anthropic_key" name="anthropic_key" required
+                       placeholder="sk-ant-xxxxxxxxxxxxxxxxxxxx">
+                <span class="form-hint">Get yours at console.anthropic.com.</span>
+            </div>
+            <div class="form-group">
+                <label for="password">Choose a Password</label>
+                <input type="password" id="password" name="password" required
+                       placeholder="Min 4 characters — encrypts your keys locally">
+                <span class="form-hint">This password encrypts both keys on your machine. Not sent anywhere.</span>
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">SAVE &amp; CONNECT</button>
+        </form>
+        {% endif %}
+    </div>
+
+    <div class="login-footer">
+        <p class="text-secondary">Keys encrypted locally with Fernet + PBKDF2. Never transmitted cross-API.</p>
+    </div>
+</div>
+{% endblock %}

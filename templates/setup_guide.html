@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}RepDoctor2 — Setup Guide{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Setup Guide</h1>
+    <p class="text-secondary">Configure your tools to prevent branch sprawl. Under 10 minutes for all repos.</p>
+</div>
+
+<div class="guide-cards">
+    <!-- 5A: CLAUDE.md Configuration -->
+    <div class="guide-card">
+        <div class="guide-card-header">
+            <h2>Add this to your CLAUDE.md file</h2>
+            <button class="btn btn-copy" onclick="copyToClipboard(document.getElementById('claudemd-content').textContent, this)">
+                COPY TO CLIPBOARD
+            </button>
+        </div>
+        <pre class="guide-code" id="claudemd-content">## Branch Management Rules
+- ALWAYS work on the main branch unless explicitly told otherwise
+- NEVER create a new branch without asking the user first
+- If you need to test something risky, ask before branching
+- When starting a session, confirm you are on main before changes
+- If you find yourself on a non-main branch, alert the user
+
+## Commit Practices
+- Commit frequently with descriptive messages
+- Always push to origin after committing
+- Include what changed AND why in commit messages
+
+## Session Start Checklist
+- Run: git branch --show-current (confirm main)
+- Run: git status (confirm clean working directory)
+- Run: git pull origin main (get latest)
+- Only then proceed with the task</pre>
+        <div class="guide-steps">
+            <h3>Steps:</h3>
+            <ol>
+                <li>Open Terminal</li>
+                <li>Navigate to your project folder (<code>cd ~/your-project</code>)</li>
+                <li>Open or create CLAUDE.md (<code>nano CLAUDE.md</code> or any editor)</li>
+                <li>Paste the copied text at the top</li>
+                <li>Save and close</li>
+                <li>Repeat for each repo</li>
+            </ol>
+        </div>
+    </div>
+
+    <!-- 5B: Claude Chat Project Instructions -->
+    <div class="guide-card">
+        <div class="guide-card-header">
+            <h2>Add this to your Claude Chat project instructions</h2>
+            <button class="btn btn-copy" onclick="copyToClipboard(document.getElementById('chatinstructions-content').textContent, this)">
+                COPY TO CLIPBOARD
+            </button>
+        </div>
+        <pre class="guide-code" id="chatinstructions-content">When discussing code changes or implementation:
+- Always assume work happens on the main branch
+- Do not suggest creating feature branches unless the user asks
+- When writing specs for Claude Code, include a reminder to
+  verify the active branch is main before starting
+- If a task seems risky enough to warrant a branch, say so
+  explicitly and let the user decide
+- When generating terminal commands, start with:
+  cd ~/claudesync2/[project] && git checkout main && git pull</pre>
+        <div class="guide-steps">
+            <h3>Steps:</h3>
+            <ol>
+                <li>Go to <strong>claude.ai</strong></li>
+                <li>Open your Project settings</li>
+                <li>Find "Custom Instructions" or "Project Instructions"</li>
+                <li>Paste the copied text</li>
+                <li>Save</li>
+            </ol>
+        </div>
+    </div>
+
+    <!-- 5C: Claude Code Session Best Practices -->
+    <div class="guide-card">
+        <div class="guide-card-header">
+            <h2>Claude Code Session Best Practices</h2>
+        </div>
+        <div class="best-practices">
+            <div class="practice-item">
+                <strong>Always use --continue</strong> when returning to a project &mdash; stays on the same branch with full context
+            </div>
+            <div class="practice-item">
+                <strong>Start from your project folder</strong> &mdash; cd into the specific directory before launching Claude Code
+            </div>
+            <div class="practice-item">
+                <strong>Check your branch first</strong> &mdash; ask Claude Code "What branch am I on?"
+            </div>
+            <div class="practice-item">
+                <strong>One project per session</strong> &mdash; close and reopen in another folder to switch
+            </div>
+            <div class="practice-item">
+                <strong>Name your sessions</strong> &mdash; /rename early for easier --resume later
+            </div>
+        </div>
+    </div>
+
+    <!-- Personalized quick-start commands -->
+    {% if repos %}
+    <div class="guide-card">
+        <div class="guide-card-header">
+            <h2>Personalized Quick-Start Commands</h2>
+        </div>
+        <p class="text-secondary">One-liner for each repo. Click to copy.</p>
+        <div class="quickstart-list">
+            {% for repo in repos %}
+            <div class="quickstart-item">
+                <span class="quickstart-repo">{{ repo.name }}</span>
+                <code class="quickstart-cmd" id="qs-{{ repo.name }}">cd {{ local_root }}/{{ repo.name }} && git checkout main && git pull origin main && claude --continue</code>
+                <button class="btn btn-copy btn-sm" onclick="copyToClipboard(document.getElementById('qs-{{ repo.name }}').textContent, this)">COPY</button>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- CLAUDE.md Status per Repo -->
+    {% if repos %}
+    <div class="guide-card">
+        <div class="guide-card-header">
+            <h2>CLAUDE.md Status</h2>
+        </div>
+        <div class="claudemd-checklist">
+            {% for repo in repos %}
+            <div class="checklist-item">
+                {% if repo.has_claude_md %}
+                <span class="status-ok">&#10003;</span>
+                {% else %}
+                <span class="status-warn">&#9888;</span>
+                {% endif %}
+                <span class="checklist-repo">{{ repo.name }}</span>
+                <span class="text-secondary">{{ local_root }}/{{ repo.name }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

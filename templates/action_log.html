@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}RepDoctor2 — Action Log{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Action Log</h1>
+    <p class="text-secondary">History of all actions: scans, analyses, archives, verifications.</p>
+</div>
+
+{% if actions | length == 0 %}
+<div class="empty-state">
+    <h2>No actions yet</h2>
+    <p class="text-secondary">Actions will appear here as you scan, analyze, and archive branches.</p>
+</div>
+{% else %}
+<div class="action-log-table">
+    <div class="log-header">
+        <span class="log-col log-col-time">Timestamp</span>
+        <span class="log-col log-col-type">Action</span>
+        <span class="log-col log-col-repo">Repository</span>
+        <span class="log-col log-col-branch">Branch</span>
+        <span class="log-col log-col-details">Details</span>
+    </div>
+    {% for action in actions %}
+    <div class="log-row">
+        <span class="log-col log-col-time text-secondary">{{ action.timestamp[:19] | replace('T', ' ') }}</span>
+        <span class="log-col log-col-type">
+            <span class="badge badge-action-{{ action.type }}">{{ action.type | upper }}</span>
+        </span>
+        <span class="log-col log-col-repo">{{ action.repo }}</span>
+        <span class="log-col log-col-branch">{{ action.branch }}</span>
+        <span class="log-col log-col-details text-secondary">{{ action.details }}</span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

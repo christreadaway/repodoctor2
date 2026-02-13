@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}RepDoctor2 — Dashboard{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Dashboard</h1>
+    <form method="POST" action="{{ url_for('scan') }}" class="inline-form">
+        <button type="submit" class="btn btn-primary" id="scan-btn">
+            {% if scan_results %}RE-SCAN ALL REPOS{% else %}SCAN REPOS{% endif %}
+        </button>
+    </form>
+</div>
+
+{% if not scan_results %}
+<div class="empty-state">
+    <h2>No scan data yet</h2>
+    <p class="text-secondary">Click "SCAN REPOS" to connect to GitHub and fetch all your repositories and branches.</p>
+</div>
+{% else %}
+<div class="scan-summary">
+    <div class="summary-stat">
+        <span class="stat-value">{{ scan_results.total_repos }}</span>
+        <span class="stat-label">Repositories</span>
+    </div>
+    <div class="summary-stat">
+        <span class="stat-value">{{ scan_results.total_branches }}</span>
+        <span class="stat-label">Non-Default Branches</span>
+    </div>
+    <div class="summary-stat">
+        <span class="stat-value">{{ scan_results.repos | selectattr('branch_count', 'gt', 0) | list | length }}</span>
+        <span class="stat-label">Repos Needing Cleanup</span>
+    </div>
+</div>
+
+<div class="repo-grid">
+    {% for repo in scan_results.repos %}
+    <a href="{{ url_for('repo_detail', owner=repo.owner, name=repo.name) }}" class="repo-card">
+        <div class="repo-card-header">
+            <h3 class="repo-name">{{ repo.name }}</h3>
+            {% if repo.private %}
+            <span class="badge badge-dim">PRIVATE</span>
+            {% endif %}
+        </div>
+        {% if repo.description %}
+        <p class="repo-description">{{ repo.description }}</p>
+        {% endif %}
+        <div class="repo-card-stats">
+            <div class="repo-stat">
+                <span class="stat-number {% if repo.branch_count > 0 %}stat-warning{% endif %}">{{ repo.branch_count }}</span>
+                <span class="stat-text">branch{{ 'es' if repo.branch_count != 1 }}</span>
+            </div>
+            <div class="repo-stat">
+                {% if repo.has_claude_md %}
+                <span class="stat-icon stat-ok">&#10003;</span>
+                <span class="stat-text">CLAUDE.md</span>
+                {% else %}
+                <span class="stat-icon stat-warn">!</span>
+                <span class="stat-text">No CLAUDE.md</span>
+                {% endif %}
+            </div>
+        </div>
+        {% if repo.branches %}
+        <div class="repo-card-badges">
+            {% set ns = namespace(safe=0, ahead=0, diverged=0, stale=0, pr=0) %}
+            {% for b in repo.branches %}
+                {% if b.classification == 'SAFE TO DELETE' %}{% set ns.safe = ns.safe + 1 %}
+                {% elif b.classification == 'AHEAD ONLY' %}{% set ns.ahead = ns.ahead + 1 %}
+                {% elif b.classification == 'DIVERGED' %}{% set ns.diverged = ns.diverged + 1 %}
+                {% elif b.classification == 'STALE' %}{% set ns.stale = ns.stale + 1 %}
+                {% elif b.classification == 'ACTIVE PR' %}{% set ns.pr = ns.pr + 1 %}
+                {% endif %}
+            {% endfor %}
+            {% if ns.diverged %}<span class="badge badge-diverged">{{ ns.diverged }} DIVERGED</span>{% endif %}
+            {% if ns.ahead %}<span class="badge badge-ahead">{{ ns.ahead }} AHEAD</span>{% endif %}
+            {% if ns.stale %}<span class="badge badge-stale">{{ ns.stale }} STALE</span>{% endif %}
+            {% if ns.safe %}<span class="badge badge-safe">{{ ns.safe }} SAFE</span>{% endif %}
+            {% if ns.pr %}<span class="badge badge-pr">{{ ns.pr }} PR</span>{% endif %}
+        </div>
+        {% endif %}
+        {% if repo.error is defined and repo.error %}
+        <div class="repo-error">Error: {{ repo.error }}</div>
+        {% endif %}
+    </a>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

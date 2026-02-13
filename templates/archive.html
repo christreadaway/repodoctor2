@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}RepDoctor2 — Archive{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Archive Browser</h1>
+    <p class="text-secondary">Branches preserved as Git tags. Searchable, reinstateable, never lost.</p>
+</div>
+
+{% if not scan_results %}
+<div class="empty-state">
+    <h2>No scan data</h2>
+    <p class="text-secondary">Run a scan from the Dashboard first to discover archive tags.</p>
+</div>
+{% elif archives | length == 0 %}
+<div class="empty-state">
+    <h2>No archived branches</h2>
+    <p class="text-secondary">Archive branches from the repo detail page. They'll appear here.</p>
+</div>
+{% else %}
+<div class="archive-controls">
+    <input type="text" id="archive-search" placeholder="Search by repo, branch, or keyword..."
+           class="search-input" oninput="filterArchives(this.value)">
+</div>
+
+<div class="archive-list" id="archive-list">
+    {% for arch in archives %}
+    <div class="archive-item" data-search="{{ arch.repo_name }} {{ arch.branch_name }} {{ arch.archive_date }} {{ arch.analysis.plain_english_summary if arch.analysis else '' }}">
+        <div class="archive-header">
+            <div class="archive-info">
+                <span class="badge badge-dim">{{ arch.repo_name }}</span>
+                <h3 class="archive-branch">{{ arch.branch_name }}</h3>
+            </div>
+            <span class="archive-date">Archived: {{ arch.archive_date }}</span>
+        </div>
+        {% if arch.analysis %}
+        <p class="archive-summary">{{ arch.analysis.plain_english_summary }}</p>
+        {% endif %}
+        <div class="archive-actions">
+            <button class="btn btn-primary btn-sm"
+                    onclick="reinstateInstructions('{{ arch.owner }}', '{{ arch.repo_name }}', '{{ arch.branch_name }}', '{{ arch.tag_name }}')">
+                REINSTATE
+            </button>
+            <a href="{{ arch.html_url }}" target="_blank" class="btn btn-secondary btn-sm">VIEW ON GITHUB</a>
+        </div>
+        <div class="reinstate-panel" id="reinstate-{{ arch.tag_name | replace('/', '-') }}" style="display: none;">
+            <pre class="instructions-code"></pre>
+            <button class="btn btn-copy btn-sm" onclick="copyToClipboard(this.parentElement.querySelector('pre').textContent, this)">COPY</button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
