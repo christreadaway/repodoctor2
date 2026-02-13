@@ -1778,3 +1778,133 @@ tbody tr:hover {
     color: black;
   }
 }
+
+/* === Onboarding === */
+
+.onboarding {
+  max-width: 720px;
+  margin: 2rem auto;
+}
+
+.onboarding-welcome h2 {
+  color: var(--green-100);
+  font-size: 1.4rem;
+  margin-bottom: 0.25rem;
+}
+
+.onboarding-welcome p {
+  color: var(--text-primary);
+  margin-bottom: 2rem;
+}
+
+.onboarding-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  margin-bottom: 2.5rem;
+}
+
+.onboarding-step {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.25rem;
+}
+
+.step-number {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--green-100);
+  color: var(--bg-deep);
+  font-weight: 700;
+  font-size: 1rem;
+  border-radius: 50%;
+}
+
+.step-content h3 {
+  color: var(--green-100);
+  font-size: 1rem;
+  margin: 0 0 0.35rem 0;
+}
+
+.step-content p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.step-content a {
+  color: var(--cyan-100);
+}
+
+.onboarding-action {
+  text-align: center;
+  padding: 1.5rem 0;
+}
+
+.onboarding-action p {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.btn-large {
+  padding: 0.9rem 2.5rem;
+  font-size: 1.1rem;
+  letter-spacing: 0.05em;
+}
+
+/* === Branch Recommendations === */
+
+.branch-recommendation {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.rec {
+  line-height: 1.5;
+}
+
+.rec-safe {
+  color: var(--green-100);
+  border-color: var(--green-100);
+}
+
+.rec-merge {
+  color: var(--cyan-100);
+}
+
+.branch-recommendation:has(.rec-merge) {
+  border-left-color: var(--cyan-100);
+}
+
+.rec-caution {
+  color: var(--amber-100);
+}
+
+.branch-recommendation:has(.rec-caution) {
+  border-left-color: var(--amber-100);
+}
+
+.rec-archive {
+  color: var(--red-100);
+}
+
+.branch-recommendation:has(.rec-archive) {
+  border-left-color: var(--red-100);
+}
+
+.rec-pr {
+  color: var(--cyan-100);
+}
+
+.branch-recommendation:has(.rec-pr) {
+  border-left-color: var(--cyan-100);
+}

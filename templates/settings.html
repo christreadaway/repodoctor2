@@ -21,13 +21,17 @@
             <div class="form-group">
                 <label for="ai_model">AI Model</label>
                 <select id="ai_model" name="ai_model">
+                    <option value="claude-haiku-4-5-20251001" {% if preferences.ai_model == 'claude-haiku-4-5-20251001' %}selected{% endif %}>
+                        Haiku 4.5 — Fastest, cheapest (~$0.80/M input) — Recommended
+                    </option>
                     <option value="claude-sonnet-4-5-20250929" {% if preferences.ai_model == 'claude-sonnet-4-5-20250929' %}selected{% endif %}>
-                        Claude Sonnet (Fast, Cost-Effective)
+                        Sonnet 4.5 — Balanced quality &amp; cost (~$3/M input)
                     </option>
                     <option value="claude-opus-4-6" {% if preferences.ai_model == 'claude-opus-4-6' %}selected{% endif %}>
-                        Claude Opus (Most Capable)
+                        Opus 4.6 — Most capable, highest cost (~$15/M input)
                     </option>
                 </select>
+                <span class="form-hint">Haiku is great for branch analysis. Use Sonnet or Opus for complex repos with many conflicts.</span>
             </div>
             <div class="form-group">
                 <label for="excluded_repos">Excluded Repositories</label>

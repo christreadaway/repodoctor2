@@ -51,16 +51,31 @@
                 {% if branch.has_pr %}<span class="badge badge-pr">HAS PR</span>{% endif %}
             </div>
             <div class="branch-meta">
-                <span class="meta-item">{{ branch.ahead_by }} ahead</span>
+                <span class="meta-item">{{ branch.ahead_by }} unique change{{ 's' if branch.ahead_by != 1 }} not in {{ repo.default_branch }}</span>
+                {% if branch.behind_by > 0 %}
                 <span class="meta-sep">|</span>
-                <span class="meta-item">{{ branch.behind_by }} behind</span>
+                <span class="meta-item">{{ repo.default_branch }} has {{ branch.behind_by }} change{{ 's' if branch.behind_by != 1 }} this branch is missing</span>
+                {% endif %}
                 {% if branch.last_commit_date %}
                 <span class="meta-sep">|</span>
-                <span class="meta-item">Last: {{ branch.last_commit_date[:10] }}</span>
+                <span class="meta-item">Last updated: {{ branch.last_commit_date[:10] }}</span>
                 {% endif %}
                 {% if branch.last_commit_author %}
                 <span class="meta-sep">|</span>
-                <span class="meta-item">{{ branch.last_commit_author }}</span>
+                <span class="meta-item">by {{ branch.last_commit_author }}</span>
+                {% endif %}
+            </div>
+            <div class="branch-recommendation">
+                {% if branch.classification == 'SAFE TO DELETE' %}
+                <span class="rec rec-safe">Recommendation: This branch is already in {{ repo.default_branch }}. Safe to archive and delete.</span>
+                {% elif branch.classification == 'AHEAD ONLY' %}
+                <span class="rec rec-merge">Recommendation: This branch has work not in {{ repo.default_branch }}. Merge it to keep these changes, then archive.</span>
+                {% elif branch.classification == 'DIVERGED' %}
+                <span class="rec rec-caution">Recommendation: Both this branch and {{ repo.default_branch }} have changed since they split. Merge carefully &mdash; may need conflict resolution.</span>
+                {% elif branch.classification == 'STALE' %}
+                <span class="rec rec-archive">Recommendation: Untouched for 30+ days. Archive it now; if nobody needs it in 30 days, delete.</span>
+                {% elif branch.classification == 'ACTIVE PR' %}
+                <span class="rec rec-pr">Recommendation: Has an open pull request. Review and merge the PR on GitHub, then clean up.</span>
                 {% endif %}
             </div>
         </div>

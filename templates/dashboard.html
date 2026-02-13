@@ -11,9 +11,49 @@
 </div>
 
 {% if not scan_results %}
-<div class="empty-state">
-    <h2>No scan data yet</h2>
-    <p class="text-secondary">Click "SCAN REPOS" to connect to GitHub and fetch all your repositories and branches.</p>
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>Welcome to RepDoctor2, {{ session.get('github_user', '') }}.</h2>
+        <p>Let's get your repositories cleaned up. Here's how this works:</p>
+    </div>
+
+    <div class="onboarding-steps">
+        <div class="onboarding-step">
+            <span class="step-number">1</span>
+            <div class="step-content">
+                <h3>Scan your repos</h3>
+                <p class="text-secondary">Click the button below. RepDoctor2 connects to GitHub and finds every branch across all your repositories. Takes about 10 seconds.</p>
+            </div>
+        </div>
+        <div class="onboarding-step">
+            <span class="step-number">2</span>
+            <div class="step-content">
+                <h3>Review what AI finds</h3>
+                <p class="text-secondary">Click into any repo to see its branches. Hit "Analyze with AI" and get a plain-English summary of what each branch contains and whether it matters.</p>
+            </div>
+        </div>
+        <div class="onboarding-step">
+            <span class="step-number">3</span>
+            <div class="step-content">
+                <h3>Copy instructions into Claude Code</h3>
+                <p class="text-secondary">For each branch, RepDoctor2 generates exact commands you paste into Claude Code. It handles the merge, tests, and cleanup. You just copy and paste.</p>
+            </div>
+        </div>
+        <div class="onboarding-step">
+            <span class="step-number">4</span>
+            <div class="step-content">
+                <h3>Prevent it from happening again</h3>
+                <p class="text-secondary">Visit the <a href="{{ url_for('setup_guide') }}">Setup Guide</a> to configure CLAUDE.md so future sessions stay on main.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="onboarding-action">
+        <form method="POST" action="{{ url_for('scan') }}" class="inline-form">
+            <button type="submit" class="btn btn-primary btn-large">SCAN MY REPOS</button>
+        </form>
+        <p class="text-secondary">This reads your GitHub repos and branches. It does not modify anything.</p>
+    </div>
 </div>
 {% else %}
 <div class="scan-summary">
@@ -69,11 +109,11 @@
                 {% elif b.classification == 'ACTIVE PR' %}{% set ns.pr = ns.pr + 1 %}
                 {% endif %}
             {% endfor %}
-            {% if ns.diverged %}<span class="badge badge-diverged">{{ ns.diverged }} DIVERGED</span>{% endif %}
-            {% if ns.ahead %}<span class="badge badge-ahead">{{ ns.ahead }} AHEAD</span>{% endif %}
-            {% if ns.stale %}<span class="badge badge-stale">{{ ns.stale }} STALE</span>{% endif %}
-            {% if ns.safe %}<span class="badge badge-safe">{{ ns.safe }} SAFE</span>{% endif %}
-            {% if ns.pr %}<span class="badge badge-pr">{{ ns.pr }} PR</span>{% endif %}
+            {% if ns.diverged %}<span class="badge badge-diverged">{{ ns.diverged }} need{{ '' if ns.diverged == 1 else '' }} careful merge</span>{% endif %}
+            {% if ns.ahead %}<span class="badge badge-ahead">{{ ns.ahead }} ready to merge</span>{% endif %}
+            {% if ns.stale %}<span class="badge badge-stale">{{ ns.stale }} stale (30+ days)</span>{% endif %}
+            {% if ns.safe %}<span class="badge badge-safe">{{ ns.safe }} safe to delete</span>{% endif %}
+            {% if ns.pr %}<span class="badge badge-pr">{{ ns.pr }} open PR{{ 's' if ns.pr != 1 else '' }}</span>{% endif %}
         </div>
         {% endif %}
         {% if repo.error is defined and repo.error %}

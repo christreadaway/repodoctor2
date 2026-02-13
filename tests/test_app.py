@@ -247,10 +247,12 @@ class TestAIAnalyzer(unittest.TestCase):
         self.assertGreater(cost, 0)
         self.assertLess(cost, 1.0)
 
-    def test_estimate_cost_opus_more_expensive(self):
-        """Opus model costs more than Sonnet."""
+    def test_estimate_cost_haiku_cheapest(self):
+        """Haiku model is cheapest."""
+        haiku_cost = ai.estimate_cost(1000, 500, "claude-haiku-4-5-20251001")
         sonnet_cost = ai.estimate_cost(1000, 500, "claude-sonnet-4-5-20250929")
         opus_cost = ai.estimate_cost(1000, 500, "claude-opus-4-6")
+        self.assertGreater(sonnet_cost, haiku_cost)
         self.assertGreater(opus_cost, sonnet_cost)
 
     def test_build_analysis_prompt(self):
