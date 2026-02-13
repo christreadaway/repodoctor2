@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}RepDoctor2{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Fira+Code:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="scanlines"></div>
+
+    {% if session.get('authenticated') %}
+    <nav class="top-nav">
+        <div class="nav-brand">RepDoctor2</div>
+        <div class="nav-links">
+            <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">Dashboard</a>
+            <a href="{{ url_for('setup_guide') }}" class="nav-link {% if request.endpoint == 'setup_guide' %}active{% endif %}">Setup Guide</a>
+            <a href="{{ url_for('archive') }}" class="nav-link {% if request.endpoint == 'archive' %}active{% endif %}">Archive</a>
+            <a href="{{ url_for('action_log') }}" class="nav-link {% if request.endpoint == 'action_log' %}active{% endif %}">Action Log</a>
+            <a href="{{ url_for('settings') }}" class="nav-link {% if request.endpoint == 'settings' %}active{% endif %}">Settings</a>
+        </div>
+        <div class="nav-user">
+            <span class="user-name">{{ session.get('github_user', '') }}</span>
+            <a href="{{ url_for('logout') }}" class="nav-link nav-logout">Logout</a>
+        </div>
+    </nav>
+    {% endif %}
+
+    <main class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="flash-messages">
+            {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    {% if session.get('authenticated') %}
+    <footer class="app-footer">
+        <div class="footer-content">
+            <span class="footer-label">RepDoctor2 v4.0</span>
+            <span class="footer-separator">|</span>
+            <span class="session-cost" id="session-cost">
+                Session: $<span id="cost-value">{{ "%.4f"|format(session_cost.total_cost|default(0)) }}</span>
+                (<span id="cost-analyses">{{ session_cost.analyses_count|default(0) }}</span> analyses)
+            </span>
+        </div>
+    </footer>
+    {% endif %}
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

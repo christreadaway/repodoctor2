@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}RepDoctor2 — {{ repo.name }}{% endblock %}
+{% block content %}
+<div class="page-header">
+    <div class="breadcrumb">
+        <a href="{{ url_for('dashboard') }}" class="breadcrumb-link">Dashboard</a>
+        <span class="breadcrumb-sep">/</span>
+        <span class="breadcrumb-current">{{ repo.name }}</span>
+    </div>
+    <div class="page-actions">
+        <button class="btn btn-primary" onclick="analyzeAll('{{ repo.owner }}', '{{ repo.name }}')">
+            ANALYZE ALL WITH AI
+        </button>
+        <a href="{{ repo.html_url }}" target="_blank" class="btn btn-secondary">VIEW ON GITHUB</a>
+    </div>
+</div>
+
+<div class="repo-info-bar">
+    <span class="info-item">
+        <strong>{{ repo.full_name }}</strong>
+        {% if repo.private %}<span class="badge badge-dim">PRIVATE</span>{% endif %}
+    </span>
+    <span class="info-item">Default: <strong>{{ repo.default_branch }}</strong></span>
+    <span class="info-item">Branches: <strong>{{ repo.branch_count }}</strong></span>
+    <span class="info-item">
+        CLAUDE.md:
+        {% if repo.has_claude_md %}
+        <span class="status-ok">&#10003; Present</span>
+        {% else %}
+        <span class="status-warn">&#9888; Missing</span>
+        {% endif %}
+    </span>
+    {% if has_spec %}
+    <span class="info-item"><span class="status-ok">&#10003; Product spec loaded</span></span>
+    {% endif %}
+</div>
+
+{% if repo.branches | length == 0 %}
+<div class="empty-state">
+    <h2>Clean!</h2>
+    <p class="text-secondary">This repository only has the default branch ({{ repo.default_branch }}). No cleanup needed.</p>
+</div>
+{% else %}
+<div class="branch-list">
+    {% for branch in repo.branches %}
+    <div class="branch-card {% if branch.analysis is defined and branch.analysis %}analyzed{% endif %}" id="branch-{{ branch.name | replace('/', '-') }}">
+        <div class="branch-card-header">
+            <div class="branch-name-row">
+                <span class="badge badge-{{ branch.classification | lower | replace(' ', '-') }}">{{ branch.classification }}</span>
+                <h3 class="branch-name">{{ branch.name }}</h3>
+                {% if branch.has_pr %}<span class="badge badge-pr">HAS PR</span>{% endif %}
+            </div>
+            <div class="branch-meta">
+                <span class="meta-item">{{ branch.ahead_by }} ahead</span>
+                <span class="meta-sep">|</span>
+                <span class="meta-item">{{ branch.behind_by }} behind</span>
+                {% if branch.last_commit_date %}
+                <span class="meta-sep">|</span>
+                <span class="meta-item">Last: {{ branch.last_commit_date[:10] }}</span>
+                {% endif %}
+                {% if branch.last_commit_author %}
+                <span class="meta-sep">|</span>
+                <span class="meta-item">{{ branch.last_commit_author }}</span>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if branch.analysis is defined and branch.analysis %}
+        <div class="branch-analysis">
+            <div class="analysis-summary">
+                <p class="ai-summary">{{ branch.analysis.plain_english_summary }}</p>
+                <div class="analysis-badges">
+                    <span class="badge badge-risk-{{ branch.analysis.risk_level | lower }}">Risk: {{ branch.analysis.risk_level }}</span>
+                    <span class="badge badge-assessment">{{ branch.analysis.feature_assessment }}</span>
+                    {% if branch.analysis.merge_strategy %}
+                    <span class="badge badge-dim">Strategy: {{ branch.analysis.merge_strategy }}</span>
+                    {% endif %}
+                </div>
+                {% if branch.analysis.conflict_prediction and branch.analysis.conflict_prediction != 'No conflicts expected' %}
+                <p class="conflict-prediction"><strong>Conflicts:</strong> {{ branch.analysis.conflict_prediction }}</p>
+                {% endif %}
+                {% if branch.analysis.spec_alignment %}
+                <p class="spec-alignment"><strong>Spec:</strong> {{ branch.analysis.spec_alignment }}</p>
+                {% endif %}
+            </div>
+
+            <div class="branch-actions">
+                <button class="btn btn-primary" onclick="toggleInstructions('instructions-{{ loop.index }}')">
+                    SHOW CLAUDE CODE INSTRUCTIONS
+                </button>
+                <button class="btn btn-secondary" onclick="archiveBranch('{{ repo.owner }}', '{{ repo.name }}', '{{ branch.name }}', '{{ branch.commit_sha }}', this)">
+                    ARCHIVE
+                </button>
+                <label class="done-check">
+                    <input type="checkbox" onchange="markDone('{{ repo.name }}', '{{ branch.name }}', this)">
+                    <span>Mark as Done</span>
+                </label>
+            </div>
+
+            <div class="instructions-panel" id="instructions-{{ loop.index }}" style="display: none;">
+                <div class="instructions-header">
+                    <span>Claude Code Instructions</span>
+                    <button class="btn btn-copy" onclick="copyToClipboard(document.getElementById('code-{{ loop.index }}').textContent, this)">
+                        COPY ALL
+                    </button>
+                </div>
+                <pre class="instructions-code" id="code-{{ loop.index }}">{{ branch.analysis.claude_code_instructions }}</pre>
+            </div>
+        </div>
+        {% else %}
+        <div class="branch-unanalyzed">
+            <div class="branch-actions">
+                <button class="btn btn-primary analyze-btn"
+                        onclick="analyzeBranch('{{ repo.owner }}', '{{ repo.name }}', '{{ branch.name }}', '{{ branch.commit_sha }}', this)"
+                        data-branch="{{ branch.name }}">
+                    ANALYZE WITH AI
+                </button>
+                <button class="btn btn-secondary" onclick="archiveBranch('{{ repo.owner }}', '{{ repo.name }}', '{{ branch.name }}', '{{ branch.commit_sha }}', this)">
+                    ARCHIVE
+                </button>
+            </div>
+            {% if branch.commit_messages %}
+            <details class="commit-details">
+                <summary class="text-secondary">{{ branch.commit_messages | length }} commit{{ 's' if branch.commit_messages | length != 1 }}</summary>
+                <ul class="commit-list">
+                    {% for c in branch.commit_messages %}
+                    <li>{{ c.message }} <span class="text-secondary">({{ c.author }})</span></li>
+                    {% endfor %}
+                </ul>
+            </details>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
