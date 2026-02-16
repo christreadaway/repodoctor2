@@ -72,33 +72,55 @@ repodoctor2/
 - **repodoctor2** has cleaner UI, better onboarding, model selection
 
 ## Session End Routine
+Before ending EVERY session, Claude will automatically create/update SESSION_NOTES.md:
+
 ```markdown
-## Session Handoff - [Date]
+## [Date] [Time] - [Brief Description]
 
 ### What We Built
 - [Feature 1]: [files modified]
+- [Feature 2]: [what was implemented]
+
+### Technical Details
+Files changed:
+- path/to/file.ext (what changed)
+- path/to/file2.ext (what changed)
+
+Code patterns used:
+- [Pattern or approach used]
+- [Libraries or techniques applied]
 
 ### Current Status
-✅ Working: [tested features]
+✅ Working: [what's tested and works]
 ❌ Broken: [known issues]
-🚧 In Progress: [incomplete]
+🚧 In Progress: [incomplete features]
 
-### Files Changed
-- app.py
-- static/js/app.js
-
-### Current Branch
+### Branch Info
 Branch: [branch-name]
-Ready to merge: [Yes/No]
+Commits: [X files changed, Y insertions, Z deletions]
+Ready to merge: [Yes/No - why or why not]
 
-### Test Results
-- Tests passing: [X]/43
-- Manual testing: [summary]
+### Decisions Made
+- [Decision 1 and rationale]
+- [Decision 2 and rationale]
 
 ### Next Steps
-1. [Priority 1]
-2. [Priority 2]
+1. [Priority 1 with specific action]
+2. [Priority 2 with specific action]
+3. [Priority 3 with specific action]
+
+### Questions/Blockers
+- [Open question or blocker]
+- [Uncertainty that needs resolution]
 ```
+
+**To execute:** Say "Append session notes to SESSION_NOTES.md" and Claude will:
+1. Create/update SESSION_NOTES.md in repo root
+2. Add new session at the TOP (most recent first)
+3. Commit the file to current branch
+4. Confirm completion
+
+SESSION_NOTES.md is committed to the repo and tracks all session progress over time.
 
 ## Git Branch Strategy
 - Claude Code creates new branch per session
