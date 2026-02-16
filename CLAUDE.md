@@ -1,119 +1,75 @@
-# RepoDoctor2 — CLAUDE.md
+# Claude Code Instructions - RepoDoctor2
 
-> **Repository:** `github.com/christreadaway/repodoctor2`
-> **Category:** Infrastructure
-> **Stack:** Python, GitHub API, reportlab
-> **Localhost Port:** 3011
+## About This Project
+v2 of RepoDoctor — rebuilt from spec v4.0. Same concept (GitHub branch analysis + AI summaries + cleanup) but rebuilt with improved architecture, better UI, model selection, and enhanced features. Flask web app with retro terminal aesthetic. 43 tests passing, ~5,100 lines of code.
 
-## What This Project Is
-Next-gen repository health analysis with PDF reports
+## About Me (Chris Treadaway)
+Product builder, not a coder. I bring requirements and vision — you handle implementation.
 
-## Session Start Protocol (MANDATORY — DO THIS FIRST)
-**Before writing ANY code or making ANY changes, execute these steps in order:**
+**Working with me:**
+- Bias toward action — just do it, don't argue
+- Make terminal commands dummy-proof (always start with `cd ~/repodoctor2`)
+- Minimize questions — make judgment calls and tell me what you chose
+- I get interrupted frequently — always end sessions with clear handoff
 
-### Step 1: Sync with remote
-```bash
-git fetch origin
-```
+## Tech Stack
+- **Backend:** Python + Flask
+- **AI:** Anthropic Claude API (user-selectable model)
+- **GitHub:** REST API v3 with Personal Access Token
+- **Security:** Fernet + PBKDF2 credential encryption
+- **Frontend:** Jinja2 templates + retro terminal CSS
+- **Testing:** 43 tests across full test suite
+- **Port:** localhost:5001
 
-### Step 2: Check for critical files
-```bash
-ls PROJECT_STATUS.md SESSION_NOTES.md 2>/dev/null
-```
-
-### Step 3: If EITHER file is missing, recover from main
-```bash
-git checkout origin/main -- PROJECT_STATUS.md 2>/dev/null; git checkout origin/main -- SESSION_NOTES.md 2>/dev/null
-```
-
-### Step 4: If creating a new branch, ALWAYS branch from latest origin/main
-```bash
-git fetch origin
-git checkout -b <branch-name> origin/main
-```
-This ensures the new branch starts with all files from main, including PROJECT_STATUS.md and SESSION_NOTES.md.
-
-### Step 5: Read SESSION_NOTES.md for prior context
-Check what was built last session, what's broken, and what the next steps were. This is your continuity lifeline.
-
-### Step 6: Confirm branch state
-Run `git status` and `git branch` to confirm where you are before making changes.
-
-**DO NOT SKIP THESE STEPS.** Missing them causes context loss and wasted time.
-
-## Session End Routine (MANDATORY — DO THIS LAST)
-**Before ending EVERY session, create/update SESSION_NOTES.md with this format:**
-
-```markdown
-## [Date] [Time] - [Brief Description]
-
-### What We Built
-- [Feature 1]: [files modified]
-- [Feature 2]: [what was implemented]
-
-### Technical Details
-Files changed:
-- path/to/file.ext (what changed)
-
-Code patterns used:
-- [Pattern or approach used]
-
-### Current Status
-- Working: [what's tested and works]
-- Broken: [known issues]
-- In Progress: [incomplete features]
-
-### Branch Info
-Branch: [branch-name]
-Ready to merge: [Yes/No - why or why not]
-
-### Decisions Made
-- [Decision 1 and rationale]
-
-### Next Steps
-1. [Priority 1 with specific action]
-2. [Priority 2 with specific action]
-3. [Priority 3 with specific action]
-
-### Questions/Blockers
-- [Open question or blocker]
-```
-
-**How to execute:**
-1. Create or update SESSION_NOTES.md in the repo root
-2. Add new session entry at the TOP (most recent first)
-3. Run: `git add SESSION_NOTES.md && git commit -m "Update session notes"`
-4. Confirm completion to the user
-
-**DO NOT END A SESSION WITHOUT DOING THIS.**
-
-## Slash Commands
-- `/start` — Run the Session Start Protocol (branch sync + file recovery + context load)
-- `/end` — Run the Session End Routine (save session notes + commit)
-
-## Project-Specific Notes
-- PDF report generation for repo health
-- Evolution of RepoDoctor
-- GitHub API integration
-
-## Security Requirements
-- Proactively self-evaluate for SQL injection, XSS, CSRF, auth bypasses, and other common vulnerabilities
-- Flag security issues before completing builds — do not wait to be asked
-- NEVER expose API keys, tokens, or credentials in code or committed files
-- Use .env files (with .gitignore protection) for local secrets
-- Use secrets managers or environment variables for production
+## File Paths
+- **Always use:** `~/repodoctor2/`
+- **Always start commands with:** `cd ~/repodoctor2`
 
 ## PII Rules
-- No real institution names, people, addresses, phones, or emails in code — use [Parish Name], [Staff Name], etc.
-- No local file paths in committed code — use ~/ or environment variables
-- No API keys, tokens, or credentials in any committed files
-- These rules apply to ALL code, artifacts, files, or snippets generated
+❌ NEVER include: GitHub tokens, Anthropic API keys, real repo data, credential files, file paths with /Users/christreadaway → use ~/
+✅ Keys encrypted locally via Fernet + PBKDF2
 
-## User Context
-- Chris is a product builder, NOT a developer — provide detailed, dummy-proof instructions
-- When giving terminal commands, ALWAYS start with `cd` to the correct directory
-- Default to Windows paths (C:\Users\chris-treadaway\) — Chris works primarily on Windows
-- Minimize questions — make reasonable judgment calls and explain what you chose
-- Auth preference: Google Sign-In via Firebase (never username/password)
-- Chris gets interrupted frequently — SESSION_NOTES.md is the continuity lifeline
+## Running Locally
+```
+cd ~/repodoctor2
+pip install -r requirements.txt
+python app.py
+```
+Opens at http://localhost:5001
 
+## Key Differences from RepoDoctor v1
+- User can select which AI model to use
+- Improved UI (was "all white and black" in v1)
+- Better error handling and security review
+- 43 automated tests
+- Built from comprehensive PDF spec (v4.0)
+
+## Git Branch Strategy
+- Claude Code creates new branch per session
+- Merge to main when stable
+- Delete merged branches immediately
+
+## Session End Routine
+
+At the end of EVERY session — or when I say "end session" — do ALL of the following:
+
+### A. Update SESSION_NOTES.md
+Append a detailed entry at the TOP of SESSION_NOTES.md (most recent first) with: What We Built, Technical Details, Current Status (✅/❌/🚧), Branch Info, Decisions Made, Next Steps, Questions/Blockers.
+
+### B. Update PROJECT_STATUS.md
+Overwrite PROJECT_STATUS.md with the CURRENT state of the project — progress %, what's working, what's broken, what's in progress, next steps, last session date/summary. This is a snapshot, not a log.
+
+### C. Commit Both Files
+```
+git add SESSION_NOTES.md PROJECT_STATUS.md
+git commit -m "Session end: [brief description of what was done]"
+git push
+```
+
+### D. Tell the User
+- What branch you're on
+- Whether it's ready to merge to main (and if not, why)
+- Top 3 next steps for the next session
+
+---
+Last Updated: February 16, 2026
