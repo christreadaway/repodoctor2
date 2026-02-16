@@ -169,3 +169,29 @@ Fully built from PDF spec v4.0. All 43 tests passing. Ready for production use.
 
 ---
 Last Updated: February 16, 2026
+
+
+## Session Management
+
+### Reading Past Work
+- `SESSION_NOTES.md` contains complete session history with detailed conversations
+- Read this file at session start if you need context on recent work
+- Sessions are ordered newest-first with full technical details
+
+### Ending Sessions
+At the end of each session, say:
+> "Append session notes to SESSION_NOTES.md"
+
+Claude will automatically:
+1. Generate a detailed session entry with conversation highlights
+2. Add it to the top of SESSION_NOTES.md (newest first)
+3. Include all technical work, files changed, commands used
+4. Commit the updated file
+
+### What Gets Logged
+- Conversation highlights (substantial exchanges)
+- Technical work and implementation details
+- Files modified/created
+- Commands executed
+- URLs and documentation referenced
+- Problem-solving context and decisions made
