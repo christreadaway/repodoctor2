@@ -8,25 +8,41 @@
 ## What This Project Is
 Next-gen repository health analysis with PDF reports
 
-## Session Start Protocol
-Before starting ANY work:
+## Session Start Protocol (MANDATORY — DO THIS FIRST)
+**Before writing ANY code or making ANY changes, execute these steps in order:**
 
-1. Run `git fetch origin` to get latest remote state
-2. If creating a new branch, ALWAYS branch from latest `origin/main`:
-   ```
-   git fetch origin
-   git checkout -b <branch-name> origin/main
-   ```
-3. If PROJECT_STATUS.md or SESSION_NOTES.md are missing on the current branch, recover them:
-   ```
-   git checkout origin/main -- PROJECT_STATUS.md SESSION_NOTES.md 2>/dev/null || true
-   ```
-4. Read CLAUDE.md (this file) fully before starting work
-5. Read SESSION_NOTES.md if it exists — check for prior session context, blockers, and next steps
-6. Confirm the current branch and its relationship to main before making changes
+### Step 1: Sync with remote
+```bash
+git fetch origin
+```
 
-## Session End Routine
-Before ending EVERY session, Claude will automatically create/update SESSION_NOTES.md:
+### Step 2: Check for critical files
+```bash
+ls PROJECT_STATUS.md SESSION_NOTES.md 2>/dev/null
+```
+
+### Step 3: If EITHER file is missing, recover from main
+```bash
+git checkout origin/main -- PROJECT_STATUS.md 2>/dev/null; git checkout origin/main -- SESSION_NOTES.md 2>/dev/null
+```
+
+### Step 4: If creating a new branch, ALWAYS branch from latest origin/main
+```bash
+git fetch origin
+git checkout -b <branch-name> origin/main
+```
+This ensures the new branch starts with all files from main, including PROJECT_STATUS.md and SESSION_NOTES.md.
+
+### Step 5: Read SESSION_NOTES.md for prior context
+Check what was built last session, what's broken, and what the next steps were. This is your continuity lifeline.
+
+### Step 6: Confirm branch state
+Run `git status` and `git branch` to confirm where you are before making changes.
+
+**DO NOT SKIP THESE STEPS.** Missing them causes context loss and wasted time.
+
+## Session End Routine (MANDATORY — DO THIS LAST)
+**Before ending EVERY session, create/update SESSION_NOTES.md with this format:**
 
 ```markdown
 ## [Date] [Time] - [Brief Description]
@@ -38,25 +54,21 @@ Before ending EVERY session, Claude will automatically create/update SESSION_NOT
 ### Technical Details
 Files changed:
 - path/to/file.ext (what changed)
-- path/to/file2.ext (what changed)
 
 Code patterns used:
 - [Pattern or approach used]
-- [Libraries or techniques applied]
 
 ### Current Status
-✅ Working: [what's tested and works]
-❌ Broken: [known issues]
-🚧 In Progress: [incomplete features]
+- Working: [what's tested and works]
+- Broken: [known issues]
+- In Progress: [incomplete features]
 
 ### Branch Info
 Branch: [branch-name]
-Commits: [X files changed, Y insertions, Z deletions]
 Ready to merge: [Yes/No - why or why not]
 
 ### Decisions Made
 - [Decision 1 and rationale]
-- [Decision 2 and rationale]
 
 ### Next Steps
 1. [Priority 1 with specific action]
@@ -65,27 +77,30 @@ Ready to merge: [Yes/No - why or why not]
 
 ### Questions/Blockers
 - [Open question or blocker]
-- [Uncertainty that needs resolution]
 ```
 
-**To execute:** Say "Append session notes to SESSION_NOTES.md" and Claude will:
-1. Create/update SESSION_NOTES.md in repo root
-2. Add new session at the TOP (most recent first)
-3. Commit the file to current branch
-4. Confirm completion
+**How to execute:**
+1. Create or update SESSION_NOTES.md in the repo root
+2. Add new session entry at the TOP (most recent first)
+3. Run: `git add SESSION_NOTES.md && git commit -m "Update session notes"`
+4. Confirm completion to the user
 
-SESSION_NOTES.md is committed to the repo and tracks all session progress over time.
+**DO NOT END A SESSION WITHOUT DOING THIS.**
+
+## Slash Commands
+- `/start` — Run the Session Start Protocol (branch sync + file recovery + context load)
+- `/end` — Run the Session End Routine (save session notes + commit)
 
 ## Project-Specific Notes
 - PDF report generation for repo health
-- Evolution of RepoDoctor with enhanced features
+- Evolution of RepoDoctor
 - GitHub API integration
 
 ## Security Requirements
 - Proactively self-evaluate for SQL injection, XSS, CSRF, auth bypasses, and other common vulnerabilities
 - Flag security issues before completing builds — do not wait to be asked
 - NEVER expose API keys, tokens, or credentials in code or committed files
-- Use .env files with .gitignore for local secrets
+- Use .env files (with .gitignore protection) for local secrets
 - Use secrets managers or environment variables for production
 
 ## PII Rules
@@ -100,4 +115,5 @@ SESSION_NOTES.md is committed to the repo and tracks all session progress over t
 - Default to Windows paths (C:\Users\chris-treadaway\) — Chris works primarily on Windows
 - Minimize questions — make reasonable judgment calls and explain what you chose
 - Auth preference: Google Sign-In via Firebase (never username/password)
+- Chris gets interrupted frequently — SESSION_NOTES.md is the continuity lifeline
 
