@@ -1,75 +1,29 @@
-# Claude Code Instructions - RepoDoctor2
+# RepoDoctor2 — CLAUDE.md
 
-## About This Project
-Enhanced version of RepoDoctor. Flask web app for Git branch management with GitHub integration, AI analysis via Anthropic, retro terminal UI, and credential encryption. Analyzes branches, provides AI summaries, shows merge risks, and helps clean up orphaned branches. Built from comprehensive PDF spec v4.0.
+> **Repository:** `github.com/christreadaway/repodoctor2`
+> **Category:** Infrastructure
+> **Stack:** Python, GitHub API, reportlab
+> **Localhost Port:** 3011
 
-## About Me (Chris Treadaway)
-Product builder, not a coder. I bring requirements and vision — you handle implementation.
+## What This Project Is
+Next-gen repository health analysis with PDF reports
 
-**Working with me:**
-- Bias toward action - just do it, don't argue
-- Make terminal commands dummy-proof (always start with `cd ~/repodoctor2`)
-- Minimize questions - make judgment calls and tell me what you chose
-- I get interrupted frequently - always end sessions with a handoff note
+## Session Start Protocol
+Before starting ANY work:
 
-## Tech Stack
-- **Language:** Python 3.9+
-- **Framework:** Flask
-- **Frontend:** Jinja2 templates + vanilla JavaScript
-- **Styling:** Retro terminal aesthetic (green-on-black CRT)
-- **Git Integration:** GitHub REST API v3
-- **AI:** Anthropic Claude API (default: Haiku 4.5 for cost efficiency)
-- **Security:** Fernet + PBKDF2 credential encryption
-- **Storage:** JSON files for local state
-
-## File Paths
-- **Always use:** `~/repodoctor2/path/to/file`
-- **Never use:** `/Users/christreadaway/...`
-- **Always start commands with:** `cd ~/repodoctor2`
-
-## PII Rules (CRITICAL)
-❌ NEVER include:
-- Real repo names in examples → use [Repo Name]
-- Commit messages with personal info → redact
-- File paths with /Users/christreadaway → use ~/
-- API keys in code (use environment variables)
-
-✅ ALWAYS use placeholders
-
-## Project Structure
-```
-repodoctor2/
-├── app.py                    # Flask app with all routes
-├── security.py               # Fernet + PBKDF2 encryption
-├── github_client.py          # GitHub REST API v3 client
-├── ai_analyzer.py            # Anthropic API integration
-├── models.py                 # Local storage (JSON files)
-├── static/
-│   ├── css/style.css         # Retro terminal design
-│   └── js/app.js             # Frontend JavaScript
-├── templates/                # 8 Jinja2 templates
-│   ├── dashboard.html
-│   ├── settings.html
-│   ├── lock.html
-│   └── ...
-├── tests/test_app.py         # 43 unit tests
-└── requirements.txt
-```
-
-## Key Features
-- **Branch Analysis:** Categorizes as clean/merge/conflict/stale
-- **AI Summaries:** Claude API analyzes diffs, provides plain-English descriptions
-- **Risk Assessment:** Calculates merge risk (file changes, age, conflicts)
-- **One-Click Actions:** Merge clean branches, delete stale ones
-- **Display Modes:** "Plain English" (default) or "Shorthand" mode
-- **Model Selection:** User picks Haiku/Sonnet/Opus based on budget
-- **Guided Onboarding:** 4-step walkthrough for first-time users
-- **Credential Encryption:** All API keys encrypted at rest
-
-## Differences from Original RepoDoctor
-- **repodoctor:** Browser-based with isomorphic-git
-- **repodoctor2:** Flask server with GitHub REST API
-- **repodoctor2** has cleaner UI, better onboarding, model selection
+1. Run `git fetch origin` to get latest remote state
+2. If creating a new branch, ALWAYS branch from latest `origin/main`:
+   ```
+   git fetch origin
+   git checkout -b <branch-name> origin/main
+   ```
+3. If PROJECT_STATUS.md or SESSION_NOTES.md are missing on the current branch, recover them:
+   ```
+   git checkout origin/main -- PROJECT_STATUS.md SESSION_NOTES.md 2>/dev/null || true
+   ```
+4. Read CLAUDE.md (this file) fully before starting work
+5. Read SESSION_NOTES.md if it exists — check for prior session context, blockers, and next steps
+6. Confirm the current branch and its relationship to main before making changes
 
 ## Session End Routine
 Before ending EVERY session, Claude will automatically create/update SESSION_NOTES.md:
@@ -122,76 +76,28 @@ Ready to merge: [Yes/No - why or why not]
 
 SESSION_NOTES.md is committed to the repo and tracks all session progress over time.
 
-## Git Branch Strategy
-- Claude Code creates new branch per session
-- Merge to main when all 43 tests pass
-- Delete merged branches immediately
+## Project-Specific Notes
+- PDF report generation for repo health
+- Evolution of RepoDoctor with enhanced features
+- GitHub API integration
 
-## Testing Approach
-- Run full test suite: `python -m pytest tests/`
-- All 43 tests must pass before merge
-- Manual testing on real repos with multiple branches
-- Test both display modes (plain English + shorthand)
-- Verify credential encryption works
+## Security Requirements
+- Proactively self-evaluate for SQL injection, XSS, CSRF, auth bypasses, and other common vulnerabilities
+- Flag security issues before completing builds — do not wait to be asked
+- NEVER expose API keys, tokens, or credentials in code or committed files
+- Use .env files with .gitignore for local secrets
+- Use secrets managers or environment variables for production
 
-## Setup/Installation
-```bash
-cd ~/repodoctor2
-pip install -r requirements.txt
-python app.py
-# Open http://localhost:5001
-```
+## PII Rules
+- No real institution names, people, addresses, phones, or emails in code — use [Parish Name], [Staff Name], etc.
+- No local file paths in committed code — use ~/ or environment variables
+- No API keys, tokens, or credentials in any committed files
+- These rules apply to ALL code, artifacts, files, or snippets generated
 
-## First Run Setup
-1. Enter GitHub Personal Access Token (with repo scope)
-2. Enter Anthropic API Key
-3. Set password for credential encryption
-4. Select AI model (Haiku recommended for cost)
+## User Context
+- Chris is a product builder, NOT a developer — provide detailed, dummy-proof instructions
+- When giving terminal commands, ALWAYS start with `cd` to the correct directory
+- Default to Windows paths (C:\Users\chris-treadaway\) — Chris works primarily on Windows
+- Minimize questions — make reasonable judgment calls and explain what you chose
+- Auth preference: Google Sign-In via Firebase (never username/password)
 
-## API Model Recommendations
-- **Haiku 4.5:** ~$0.80/M tokens - Best value, sufficient for branch summaries
-- **Sonnet 4.5:** ~$3/M tokens - Better quality, use for complex repos
-- **Opus 4.5:** ~$15/M tokens - Overkill for most use cases
-
-## Common Issues
-- **GitHub token needs `repo` scope** - not just read-only
-- **Display mode toggle** - Stored in user preferences
-- **Credential encryption** - Don't lose password, can't recover
-- **Port 5001 conflicts** - Change in app.py if needed
-
-## Current Status
-Fully built from PDF spec v4.0. All 43 tests passing. Ready for production use.
-
-## Product Vision
-**Phase 1 (Current):** Desktop web app for local branch management
-**Phase 2:** Scheduled reports, email notifications
-**Phase 3:** GitHub integration for remote repo analysis
-
----
-Last Updated: February 16, 2026
-
-
-## Session Management
-
-### Reading Past Work
-- `SESSION_NOTES.md` contains complete session history with detailed conversations
-- Read this file at session start if you need context on recent work
-- Sessions are ordered newest-first with full technical details
-
-### Ending Sessions
-At the end of each session, say:
-> "Append session notes to SESSION_NOTES.md"
-
-Claude will automatically:
-1. Generate a detailed session entry with conversation highlights
-2. Add it to the top of SESSION_NOTES.md (newest first)
-3. Include all technical work, files changed, commands used
-4. Commit the updated file
-
-### What Gets Logged
-- Conversation highlights (substantial exchanges)
-- Technical work and implementation details
-- Files modified/created
-- Commands executed
-- URLs and documentation referenced
-- Problem-solving context and decisions made
