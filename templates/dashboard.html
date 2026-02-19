@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}RepDoctor2 — Dashboard{% endblock %}
+{% block title %}RepDoctor2 — My Repos{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>Dashboard</h1>
+    <h1>My Repositories</h1>
     <form method="POST" action="{{ url_for('scan') }}" class="inline-form">
         <button type="submit" class="btn btn-primary" id="scan-btn">
-            {% if scan_results %}RE-SCAN ALL REPOS{% else %}SCAN REPOS{% endif %}
+            {% if scan_results %}RE-SCAN{% else %}SCAN REPOS{% endif %}
         </button>
     </form>
 </div>
@@ -13,49 +13,20 @@
 {% if not scan_results %}
 <div class="onboarding">
     <div class="onboarding-welcome">
-        <h2>Welcome to RepDoctor2, {{ session.get('github_user', '') }}.</h2>
-        <p>Let's get your repositories cleaned up. Here's how this works:</p>
-    </div>
-
-    <div class="onboarding-steps">
-        <div class="onboarding-step">
-            <span class="step-number">1</span>
-            <div class="step-content">
-                <h3>Scan your repos</h3>
-                <p class="text-secondary">Click the button below. RepDoctor2 connects to GitHub and finds every branch across all your repositories. Takes about 10 seconds.</p>
-            </div>
-        </div>
-        <div class="onboarding-step">
-            <span class="step-number">2</span>
-            <div class="step-content">
-                <h3>Review what AI finds</h3>
-                <p class="text-secondary">Click into any repo to see its branches. Hit "Analyze with AI" and get a plain-English summary of what each branch contains and whether it matters.</p>
-            </div>
-        </div>
-        <div class="onboarding-step">
-            <span class="step-number">3</span>
-            <div class="step-content">
-                <h3>Copy instructions into Claude Code</h3>
-                <p class="text-secondary">For each branch, RepDoctor2 generates exact commands you paste into Claude Code. It handles the merge, tests, and cleanup. You just copy and paste.</p>
-            </div>
-        </div>
-        <div class="onboarding-step">
-            <span class="step-number">4</span>
-            <div class="step-content">
-                <h3>Prevent it from happening again</h3>
-                <p class="text-secondary">Visit the <a href="{{ url_for('setup_guide') }}">Setup Guide</a> to configure CLAUDE.md so future sessions stay on main.</p>
-            </div>
-        </div>
+        <h2>Welcome, {{ session.get('github_user', '') }}.</h2>
+        <p>Click SCAN REPOS to pull all your GitHub repositories and check their branch counts and required files.</p>
     </div>
 
     <div class="onboarding-action">
         <form method="POST" action="{{ url_for('scan') }}" class="inline-form">
             <button type="submit" class="btn btn-primary btn-large">SCAN MY REPOS</button>
         </form>
-        <p class="text-secondary">This reads your GitHub repos and branches. It does not modify anything.</p>
+        <p class="text-secondary">This reads your GitHub repos. It does not modify anything.</p>
     </div>
 </div>
 {% else %}
+
+{# --- Summary stats --- #}
 <div class="scan-summary">
     <div class="summary-stat">
         <span class="stat-value">{{ scan_results.total_repos }}</span>
@@ -63,72 +34,107 @@
     </div>
     <div class="summary-stat">
         <span class="stat-value">{{ scan_results.total_branches }}</span>
-        <span class="stat-label">Non-Default Branches</span>
+        <span class="stat-label">Total Branches</span>
     </div>
     <div class="summary-stat">
-        <span class="stat-value">{{ scan_results.repos | selectattr('branch_count', 'gt', 0) | list | length }}</span>
-        <span class="stat-label">Repos Needing Cleanup</span>
+        {% set repos_missing_files = scan_results.repos | selectattr('files_present', 'lt', 6) | list | length %}
+        <span class="stat-value {% if repos_missing_files > 0 %}stat-warning{% endif %}">{{ repos_missing_files }}</span>
+        <span class="stat-label">Missing Required Files</span>
     </div>
 </div>
 
-<div class="repo-grid">
-    {% for repo in scan_results.repos %}
-    <a href="{{ url_for('repo_detail', owner=repo.owner, name=repo.name) }}" class="repo-card">
-        <div class="repo-card-header">
-            <h3 class="repo-name">{{ repo.name }}</h3>
-            {% if repo.private %}
-            <span class="badge badge-dim">PRIVATE</span>
+{# --- Required files legend --- #}
+<div class="file-legend">
+    <span class="legend-label">Required files:</span>
+    <span class="legend-item">BUSINESS_SPEC.md</span>
+    <span class="legend-item">CLAUDE.md</span>
+    <span class="legend-item">LICENSE</span>
+    <span class="legend-item">PRODUCT_SPEC.md</span>
+    <span class="legend-item">PROJECT_STATUS.md</span>
+    <span class="legend-item">SESSION_NOTES.md</span>
+</div>
+
+{# --- Repo table --- #}
+<div class="repo-table-wrap">
+    <table class="repo-table">
+        <thead>
+            <tr>
+                <th class="col-repo">Repository</th>
+                <th class="col-vis">Visibility</th>
+                <th class="col-branches">Branches</th>
+                <th class="col-file">BIZ</th>
+                <th class="col-file">CLAUDE</th>
+                <th class="col-file">LICENSE</th>
+                <th class="col-file">PROD</th>
+                <th class="col-file">STATUS</th>
+                <th class="col-file">NOTES</th>
+                <th class="col-score">Score</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for repo in scan_results.repos %}
+            <tr class="repo-row {% if repo.files_present == repo.files_total %}row-complete{% endif %}">
+                <td class="col-repo">
+                    <a href="{{ repo.html_url }}" target="_blank" rel="noopener" class="repo-link">{{ repo.name }}</a>
+                    {% if repo.description %}
+                    <span class="repo-desc">{{ repo.description | truncate(50) }}</span>
+                    {% endif %}
+                </td>
+                <td class="col-vis">
+                    {% if repo.private %}
+                    <span class="badge badge-dim">PRIVATE</span>
+                    {% else %}
+                    <span class="badge badge-public">PUBLIC</span>
+                    {% endif %}
+                </td>
+                <td class="col-branches">
+                    <span class="branch-count {% if repo.total_branch_count > 3 %}count-warn{% elif repo.total_branch_count > 1 %}count-note{% endif %}">{{ repo.total_branch_count }}</span>
+                </td>
+                {# File checks: BUSINESS_SPEC.md, CLAUDE.md, LICENSE, PRODUCT_SPEC.md, PROJECT_STATUS.md, SESSION_NOTES.md #}
+                {% set files = repo.required_files %}
+                <td class="col-file">
+                    {% if files.get('BUSINESS_SPEC.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-file">
+                    {% if files.get('CLAUDE.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-file">
+                    {% if files.get('LICENSE') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-file">
+                    {% if files.get('PRODUCT_SPEC.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-file">
+                    {% if files.get('PROJECT_STATUS.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-file">
+                    {% if files.get('SESSION_NOTES.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-score">
+                    <span class="file-score {% if repo.files_present == repo.files_total %}score-perfect{% elif repo.files_present >= 4 %}score-good{% elif repo.files_present >= 2 %}score-fair{% else %}score-poor{% endif %}">{{ repo.files_present }}/{{ repo.files_total }}</span>
+                </td>
+            </tr>
+            {% if repo.total_branch_count > 1 %}
+            <tr class="branch-detail-row">
+                <td colspan="10">
+                    <div class="branch-names">
+                        {% for bname in repo.branch_names %}
+                        <span class="branch-tag {% if bname == repo.default_branch %}branch-default{% endif %}">{{ bname }}{% if bname == repo.default_branch %} *{% endif %}</span>
+                        {% endfor %}
+                    </div>
+                </td>
+            </tr>
             {% endif %}
-        </div>
-        {% if repo.description %}
-        <p class="repo-description">{{ repo.description }}</p>
-        {% endif %}
-        <div class="repo-card-stats">
-            <div class="repo-stat">
-                <span class="stat-number {% if repo.branch_count > 0 %}stat-warning{% endif %}">{{ repo.branch_count }}</span>
-                <span class="stat-text">branch{{ 'es' if repo.branch_count != 1 }}</span>
-            </div>
-            <div class="repo-stat">
-                {% if repo.has_claude_md %}
-                <span class="stat-icon stat-ok">&#10003;</span>
-                <span class="stat-text">CLAUDE.md</span>
-                {% else %}
-                <span class="stat-icon stat-warn">!</span>
-                <span class="stat-text">No CLAUDE.md</span>
-                {% endif %}
-            </div>
-        </div>
-        {% if repo.branches %}
-        <div class="repo-card-badges">
-            {% set ns = namespace(safe=0, ahead=0, diverged=0, stale=0, pr=0) %}
-            {% for b in repo.branches %}
-                {% if b.classification == 'SAFE TO DELETE' %}{% set ns.safe = ns.safe + 1 %}
-                {% elif b.classification == 'AHEAD ONLY' %}{% set ns.ahead = ns.ahead + 1 %}
-                {% elif b.classification == 'DIVERGED' %}{% set ns.diverged = ns.diverged + 1 %}
-                {% elif b.classification == 'STALE' %}{% set ns.stale = ns.stale + 1 %}
-                {% elif b.classification == 'ACTIVE PR' %}{% set ns.pr = ns.pr + 1 %}
-                {% endif %}
+            {% if repo.error is defined and repo.error %}
+            <tr class="error-row">
+                <td colspan="10">
+                    <span class="repo-error">Error scanning: {{ repo.error }}</span>
+                </td>
+            </tr>
+            {% endif %}
             {% endfor %}
-            {% if preferences.display_mode == 'shorthand' %}
-            {% if ns.diverged %}<span class="badge badge-diverged">{{ ns.diverged }} DIVERGED</span>{% endif %}
-            {% if ns.ahead %}<span class="badge badge-ahead">{{ ns.ahead }} AHEAD</span>{% endif %}
-            {% if ns.stale %}<span class="badge badge-stale">{{ ns.stale }} STALE</span>{% endif %}
-            {% if ns.safe %}<span class="badge badge-safe">{{ ns.safe }} SAFE</span>{% endif %}
-            {% if ns.pr %}<span class="badge badge-pr">{{ ns.pr }} PR</span>{% endif %}
-            {% else %}
-            {% if ns.diverged %}<span class="badge badge-diverged">{{ ns.diverged }} need careful merge</span>{% endif %}
-            {% if ns.ahead %}<span class="badge badge-ahead">{{ ns.ahead }} ready to merge</span>{% endif %}
-            {% if ns.stale %}<span class="badge badge-stale">{{ ns.stale }} stale (30+ days)</span>{% endif %}
-            {% if ns.safe %}<span class="badge badge-safe">{{ ns.safe }} safe to delete</span>{% endif %}
-            {% if ns.pr %}<span class="badge badge-pr">{{ ns.pr }} open PR{{ 's' if ns.pr != 1 else '' }}</span>{% endif %}
-            {% endif %}
-        </div>
-        {% endif %}
-        {% if repo.error is defined and repo.error %}
-        <div class="repo-error">Error: {{ repo.error }}</div>
-        {% endif %}
-    </a>
-    {% endfor %}
+        </tbody>
+    </table>
 </div>
 {% endif %}
 {% endblock %}
