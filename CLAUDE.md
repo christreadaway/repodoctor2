@@ -1,48 +1,41 @@
 # Claude Code Instructions - RepoDoctor2
 
 ## About This Project
-v2 of RepoDoctor — rebuilt from spec v4.0. Same concept (GitHub branch analysis + AI summaries + cleanup) but rebuilt with improved architecture, better UI, model selection, and enhanced features. Flask web app with retro terminal aesthetic. 43 tests passing, ~5,100 lines of code.
+Repository visualization tool showing branch counts and required file status across all GitHub repos (public and private). Flask web app.
 
 ## About Me (Chris Treadaway)
 Product builder, not a coder. I bring requirements and vision — you handle implementation.
 
 **Working with me:**
 - Bias toward action — just do it, don't argue
-- Make terminal commands dummy-proof (always start with `cd ~/repodoctor2`)
+- Make terminal commands dummy-proof (always start with `cd ~/repodoctor22`)
 - Minimize questions — make judgment calls and tell me what you chose
 - I get interrupted frequently — always end sessions with clear handoff
 
 ## Tech Stack
 - **Backend:** Python + Flask
-- **AI:** Anthropic Claude API (user-selectable model)
+- **AI:** Anthropic Claude API (Sonnet 3.5) for branch summaries
 - **GitHub:** REST API v3 with Personal Access Token
 - **Security:** Fernet + PBKDF2 credential encryption
-- **Frontend:** Jinja2 templates + retro terminal CSS
-- **Testing:** 43 tests across full test suite
-- **Port:** localhost:5001
+- **Frontend:** Single-page app with retro terminal CSS
+- **Session:** 30-minute auto-lock
 
 ## File Paths
-- **Always use:** `~/repodoctor2/`
-- **Always start commands with:** `cd ~/repodoctor2`
+- **Always use:** `~/RepoDoctor2/`
+- **Always start commands with:** `cd ~/repodoctor22`
 
 ## PII Rules
-❌ NEVER include: GitHub tokens, Anthropic API keys, real repo data, credential files, file paths with /Users/christreadaway → use ~/
-✅ Keys encrypted locally via Fernet + PBKDF2
+❌ NEVER include: GitHub tokens, Anthropic API keys, real repo analysis data, credential files, file paths with /Users/christreadaway → use ~/
+✅ Keys stored encrypted locally, never in prompts/logs/UI
 
-## Running Locally
-```
-cd ~/repodoctor2
-pip install -r requirements.txt
-python app.py
-```
-Opens at http://localhost:5001
-
-## Key Differences from RepoDoctor v1
-- User can select which AI model to use
-- Improved UI (was "all white and black" in v1)
-- Better error handling and security review
-- 43 automated tests
-- Built from comprehensive PDF spec (v4.0)
+## Key Features
+- Secure Credential Storage (encrypted at rest)
+- Cross-Repo Dashboard with health indicators
+- AI-Powered Branch Summaries
+- Smart Branch Categories with auto-delete/one-click merge
+- Claude Conversation Integration (import ZIP exports + local sessions)
+- Activity Log with color-coded messages
+- Cost tracking (~$0.003 per conversation analyzed)
 
 ## Git Branch Strategy
 - Claude Code creates new branch per session
@@ -73,3 +66,8 @@ git push
 
 ---
 Last Updated: February 16, 2026
+
+
+## Branch Rules
+Always work on the main branch. Do not create new branches unless explicitly asked. Commit and push all changes directly to main.
+
