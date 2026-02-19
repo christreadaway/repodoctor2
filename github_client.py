@@ -113,6 +113,25 @@ class GitHubClient:
         )
         return resp.status_code == 200
 
+    def check_file_exists(self, owner: str, repo: str, path: str) -> bool:
+        """Check if a file exists in the repo root."""
+        resp = self.session.head(
+            f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}",
+        )
+        return resp.status_code == 200
+
+    def check_required_files(self, owner: str, repo: str) -> dict[str, bool]:
+        """Check which required project files exist in the repo."""
+        required = [
+            "BUSINESS_SPEC.md",
+            "CLAUDE.md",
+            "LICENSE",
+            "PRODUCT_SPEC.md",
+            "PROJECT_STATUS.md",
+            "SESSION_NOTES.md",
+        ]
+        return {f: self.check_file_exists(owner, repo, f) for f in required}
+
     def create_archive_tag(
         self, owner: str, repo: str, branch_name: str, commit_sha: str, message: str
     ) -> dict | None:
@@ -185,6 +204,36 @@ class GitHubClient:
             return "AHEAD ONLY"
 
         return "AHEAD ONLY"
+
+
+def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
+    """Lightweight scan: just branch count + required file checks."""
+    owner = repo["owner"]["login"]
+    name = repo["name"]
+    default_branch = repo.get("default_branch", "main")
+
+    branches = client.get_branches(owner, name)
+    total_branch_count = len(branches)
+    non_default_count = total_branch_count - 1 if total_branch_count > 0 else 0
+
+    required_files = client.check_required_files(owner, name)
+
+    return {
+        "owner": owner,
+        "name": name,
+        "full_name": repo["full_name"],
+        "default_branch": default_branch,
+        "private": repo.get("private", False),
+        "html_url": repo.get("html_url", ""),
+        "description": repo.get("description", ""),
+        "updated_at": repo.get("updated_at", ""),
+        "total_branch_count": total_branch_count,
+        "non_default_branch_count": non_default_count,
+        "branch_names": [b["name"] for b in branches],
+        "required_files": required_files,
+        "files_present": sum(1 for v in required_files.values() if v),
+        "files_total": len(required_files),
+    }
 
 
 def scan_repo(client: GitHubClient, repo: dict) -> dict:

@@ -1928,3 +1928,249 @@ tbody tr:hover {
 .branch-recommendation:has(.rec-pr) {
   border-left-color: var(--cyan-100);
 }
+
+
+/* ================================================================
+   Repo Overview Table (simplified dashboard)
+   ================================================================ */
+
+.file-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
+
+.legend-label {
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-right: 0.25rem;
+}
+
+.legend-item {
+  color: var(--cyan-100);
+  padding: 0.15rem 0.5rem;
+  background: rgba(64, 255, 208, 0.06);
+  border: 1px solid rgba(64, 255, 208, 0.15);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.repo-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+}
+
+.repo-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.repo-table thead {
+  background: rgba(26, 42, 26, 0.8);
+  border-bottom: 2px solid var(--green-100);
+}
+
+.repo-table th {
+  padding: 0.65rem 0.5rem;
+  text-align: center;
+  color: var(--green-100);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.repo-table th.col-repo {
+  text-align: left;
+  padding-left: 1rem;
+  min-width: 180px;
+}
+
+.repo-table td {
+  padding: 0.55rem 0.5rem;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.repo-table td.col-repo {
+  text-align: left;
+  padding-left: 1rem;
+}
+
+.repo-row:hover {
+  background: rgba(51, 255, 51, 0.03);
+}
+
+.row-complete {
+  /* subtle highlight for repos with all files */
+}
+
+.repo-link {
+  color: var(--green-100);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.repo-link:hover {
+  color: #33ff33;
+  text-shadow: 0 0 8px rgba(51, 255, 51, 0.4);
+}
+
+.repo-desc {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  margin-top: 0.15rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 250px;
+}
+
+.badge-public {
+  background: rgba(64, 255, 208, 0.1);
+  color: var(--cyan-100);
+  border: 1px solid rgba(64, 255, 208, 0.25);
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+}
+
+.branch-count {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.count-warn {
+  color: var(--amber-100);
+  text-shadow: 0 0 6px rgba(255, 170, 0, 0.3);
+}
+
+.count-note {
+  color: var(--cyan-100);
+}
+
+/* File status indicators */
+.file-ok {
+  color: var(--green-100);
+  font-weight: 700;
+}
+
+.file-missing {
+  color: var(--red-100);
+  opacity: 0.6;
+}
+
+.file-score {
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 3px;
+}
+
+.score-perfect {
+  color: var(--green-100);
+  background: rgba(51, 255, 51, 0.08);
+  border: 1px solid rgba(51, 255, 51, 0.2);
+}
+
+.score-good {
+  color: var(--cyan-100);
+  background: rgba(64, 255, 208, 0.08);
+  border: 1px solid rgba(64, 255, 208, 0.2);
+}
+
+.score-fair {
+  color: var(--amber-100);
+  background: rgba(255, 170, 0, 0.08);
+  border: 1px solid rgba(255, 170, 0, 0.2);
+}
+
+.score-poor {
+  color: var(--red-100);
+  background: rgba(255, 64, 64, 0.08);
+  border: 1px solid rgba(255, 64, 64, 0.2);
+}
+
+/* Branch name tags in expandable row */
+.branch-detail-row td {
+  padding: 0.35rem 1rem 0.65rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(8, 10, 8, 0.4);
+}
+
+.branch-names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.branch-tag {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  background: rgba(184, 216, 184, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-secondary);
+}
+
+.branch-default {
+  color: var(--green-100);
+  border-color: rgba(51, 255, 51, 0.25);
+  background: rgba(51, 255, 51, 0.06);
+}
+
+.error-row td {
+  padding: 0.35rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.repo-error {
+  color: var(--red-100);
+  font-size: 0.8rem;
+}
+
+/* Responsive table */
+@media (max-width: 768px) {
+  .repo-table {
+    font-size: 0.75rem;
+  }
+
+  .repo-table th,
+  .repo-table td {
+    padding: 0.4rem 0.3rem;
+  }
+
+  .repo-table th.col-repo {
+    padding-left: 0.5rem;
+    min-width: 120px;
+  }
+
+  .repo-table td.col-repo {
+    padding-left: 0.5rem;
+  }
+
+  .repo-desc {
+    max-width: 120px;
+  }
+
+  .file-legend {
+    font-size: 0.7rem;
+  }
+}
