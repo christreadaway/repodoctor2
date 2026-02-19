@@ -26,6 +26,12 @@ _session_cost = models.SessionCost()
 _scan_results: dict | None = None  # Latest scan results
 
 
+@app.context_processor
+def inject_preferences():
+    """Make preferences available in all templates."""
+    return {"preferences": models.get_preferences()}
+
+
 def _require_auth(f):
     """Decorator: redirect to login if not authenticated."""
     from functools import wraps
@@ -509,7 +515,8 @@ def settings():
 
         if action == "save_preferences":
             prefs["local_root"] = request.form.get("local_root", "~/claudesync2")
-            prefs["ai_model"] = request.form.get("ai_model", "claude-sonnet-4-5-20250929")
+            prefs["ai_model"] = request.form.get("ai_model", "claude-haiku-4-5-20251001")
+            prefs["display_mode"] = request.form.get("display_mode", "plain_english")
             excluded = request.form.get("excluded_repos", "")
             prefs["excluded_repos"] = [r.strip() for r in excluded.split(",") if r.strip()]
             models.save_preferences(prefs)
@@ -556,6 +563,19 @@ def mark_done():
     branch_name = data.get("branch_name")
     models.log_action("mark_done", repo_name, branch_name, "Marked as done by user")
     return jsonify({"success": True})
+
+
+# --- API: Toggle display mode ---
+
+@app.route("/api/toggle-display-mode", methods=["POST"])
+@_require_auth
+def toggle_display_mode():
+    prefs = models.get_preferences()
+    current = prefs.get("display_mode", "plain_english")
+    new_mode = "shorthand" if current == "plain_english" else "plain_english"
+    prefs["display_mode"] = new_mode
+    models.save_preferences(prefs)
+    return jsonify({"display_mode": new_mode})
 
 
 if __name__ == "__main__":

@@ -39,14 +39,17 @@ def estimate_tokens(branch_data: dict, spec_text: str | None = None) -> int:
     return len(text) // 4 + 500  # 500 for system prompt overhead
 
 
-def estimate_cost(input_tokens: int, output_tokens: int = 1000, model: str = "claude-sonnet-4-5-20250929") -> float:
+def estimate_cost(input_tokens: int, output_tokens: int = 1000, model: str = "claude-haiku-4-5-20251001") -> float:
     """Estimate cost in USD. Rough estimates based on public pricing."""
     if "opus" in model:
         input_cost = input_tokens * 15.0 / 1_000_000
         output_cost = output_tokens * 75.0 / 1_000_000
-    else:  # sonnet
+    elif "sonnet" in model:
         input_cost = input_tokens * 3.0 / 1_000_000
         output_cost = output_tokens * 15.0 / 1_000_000
+    else:  # haiku
+        input_cost = input_tokens * 0.80 / 1_000_000
+        output_cost = output_tokens * 4.0 / 1_000_000
     return round(input_cost + output_cost, 4)
 
 
@@ -107,7 +110,7 @@ def analyze_branch(
     default_branch_commits: list[dict] | None = None,
     spec_text: str | None = None,
     local_path: str | None = None,
-    model: str = "claude-sonnet-4-5-20250929",
+    model: str = "claude-haiku-4-5-20251001",
 ) -> dict:
     """Analyze a branch using the Anthropic API. Returns structured analysis."""
     client = anthropic.Anthropic(api_key=api_key)

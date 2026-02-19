@@ -877,7 +877,30 @@
   document.addEventListener("DOMContentLoaded", initArchiveSearch);
 
   // ---------------------------------------------------------------------------
-  // 9. Keyboard Shortcuts & UX Niceties
+  // 9. Display Mode Toggle
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Toggle between "plain_english" and "shorthand" display modes.
+   * POSTs to the API, then reloads the page to reflect the new mode.
+   */
+  window.toggleDisplayMode = function toggleDisplayMode() {
+    var btn = document.getElementById("display-mode-toggle");
+    if (btn) btn.disabled = true;
+
+    postJson("/api/toggle-display-mode", {})
+      .then(function (data) {
+        // Reload so templates re-render with the new mode
+        window.location.reload();
+      })
+      .catch(function (err) {
+        if (btn) btn.disabled = false;
+        alert("Failed to toggle display mode: " + err.message);
+      });
+  };
+
+  // ---------------------------------------------------------------------------
+  // 10. Keyboard Shortcuts & UX Niceties
   // ---------------------------------------------------------------------------
 
   document.addEventListener("keydown", function (e) {
@@ -893,7 +916,7 @@
   });
 
   // ---------------------------------------------------------------------------
-  // 10. Auto-collapse long commit lists
+  // 11. Auto-collapse long commit lists
   // ---------------------------------------------------------------------------
 
   document.addEventListener("DOMContentLoaded", function () {
