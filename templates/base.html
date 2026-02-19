@@ -23,6 +23,10 @@
             <a href="{{ url_for('settings') }}" class="nav-link {% if request.endpoint == 'settings' %}active{% endif %}">Settings</a>
         </div>
         <div class="nav-user">
+            <button class="display-mode-toggle" id="display-mode-toggle" onclick="toggleDisplayMode()" title="Switch between Plain English and Shorthand display">
+                {% set dm = preferences.display_mode|default('plain_english') %}
+                {% if dm == 'shorthand' %}SHORTHAND{% else %}PLAIN ENGLISH{% endif %}
+            </button>
             <span class="user-name">{{ session.get('github_user', '') }}</span>
             <a href="{{ url_for('logout') }}" class="nav-link nav-logout">Logout</a>
         </div>
