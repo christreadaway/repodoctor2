@@ -2,160 +2,99 @@
 {% block title %}RepDoctor2 — {{ repo.name }}{% endblock %}
 {% block content %}
 <div class="page-header">
-    <div class="breadcrumb">
-        <a href="{{ url_for('dashboard') }}" class="breadcrumb-link">Dashboard</a>
-        <span class="breadcrumb-sep">/</span>
-        <span class="breadcrumb-current">{{ repo.name }}</span>
+    <div>
+        <div class="breadcrumb">
+            <a href="{{ url_for('dashboard') }}" class="breadcrumb-link">&larr; Dashboard</a>
+            <span class="breadcrumb-sep">/</span>
+            <span class="breadcrumb-current">{{ repo.name }}</span>
+        </div>
     </div>
     <div class="page-actions">
-        <button class="btn btn-primary" onclick="analyzeAll('{{ repo.owner }}', '{{ repo.name }}')">
-            ANALYZE ALL WITH AI
-        </button>
-        <a href="{{ repo.html_url }}" target="_blank" class="btn btn-secondary">VIEW ON GITHUB</a>
+        <a href="{{ repo.html_url }}" target="_blank" rel="noopener" class="btn btn-secondary">VIEW ON GITHUB</a>
     </div>
 </div>
 
+{# --- Repo info bar --- #}
 <div class="repo-info-bar">
     <span class="info-item">
         <strong>{{ repo.full_name }}</strong>
-        {% if repo.private %}<span class="badge badge-dim">PRIVATE</span>{% endif %}
+        {% if repo.private %}<span class="badge badge-dim">PRIVATE</span>{% else %}<span class="badge badge-public">PUBLIC</span>{% endif %}
     </span>
-    <span class="info-item">Default: <strong>{{ repo.default_branch }}</strong></span>
-    <span class="info-item">Branches: <strong>{{ repo.branch_count }}</strong></span>
-    <span class="info-item">
-        CLAUDE.md:
-        {% if repo.has_claude_md %}
-        <span class="status-ok">&#10003; Present</span>
-        {% else %}
-        <span class="status-warn">&#9888; Missing</span>
-        {% endif %}
-    </span>
-    {% if has_spec %}
-    <span class="info-item"><span class="status-ok">&#10003; Product spec loaded</span></span>
+    <span class="info-item">Default branch: <strong>{{ repo.default_branch }}</strong></span>
+    <span class="info-item">Branches: <strong>{{ repo.total_branch_count }}</strong></span>
+    {% if repo.description %}
+    <span class="info-item repo-full-desc">{{ repo.description }}</span>
     {% endif %}
 </div>
 
-{% if repo.branches | length == 0 %}
-<div class="empty-state">
-    <h2>Clean!</h2>
-    <p class="text-secondary">This repository only has the default branch ({{ repo.default_branch }}). No cleanup needed.</p>
-</div>
-{% else %}
-<div class="branch-list">
-    {% for branch in repo.branches %}
-    <div class="branch-card {% if branch.analysis is defined and branch.analysis %}analyzed{% endif %}" id="branch-{{ branch.name | replace('/', '-') }}">
-        <div class="branch-card-header">
-            <div class="branch-name-row">
-                <span class="badge badge-{{ branch.classification | lower | replace(' ', '-') }}">{{ branch.classification }}</span>
-                <h3 class="branch-name">{{ branch.name }}</h3>
-                {% if branch.has_pr %}<span class="badge badge-pr">HAS PR</span>{% endif %}
-            </div>
-            <div class="branch-meta">
-                {% if preferences.display_mode == 'shorthand' %}
-                <span class="meta-item">{{ branch.ahead_by }} ahead</span>
-                <span class="meta-sep">|</span>
-                <span class="meta-item">{{ branch.behind_by }} behind</span>
-                {% else %}
-                <span class="meta-item">{{ branch.ahead_by }} unique change{{ 's' if branch.ahead_by != 1 }} not in {{ repo.default_branch }}</span>
-                {% if branch.behind_by > 0 %}
-                <span class="meta-sep">|</span>
-                <span class="meta-item">{{ repo.default_branch }} has {{ branch.behind_by }} change{{ 's' if branch.behind_by != 1 }} this branch is missing</span>
-                {% endif %}
-                {% endif %}
-                {% if branch.last_commit_date %}
-                <span class="meta-sep">|</span>
-                <span class="meta-item">{% if preferences.display_mode == 'shorthand' %}{{ branch.last_commit_date[:10] }}{% else %}Last updated: {{ branch.last_commit_date[:10] }}{% endif %}</span>
-                {% endif %}
-                {% if branch.last_commit_author %}
-                <span class="meta-sep">|</span>
-                <span class="meta-item">{% if preferences.display_mode == 'shorthand' %}{{ branch.last_commit_author }}{% else %}by {{ branch.last_commit_author }}{% endif %}</span>
-                {% endif %}
-            </div>
-            {% if preferences.display_mode != 'shorthand' %}
-            <div class="branch-recommendation">
-                {% if branch.classification == 'SAFE TO DELETE' %}
-                <span class="rec rec-safe">Recommendation: This branch is already in {{ repo.default_branch }}. Safe to archive and delete.</span>
-                {% elif branch.classification == 'AHEAD ONLY' %}
-                <span class="rec rec-merge">Recommendation: This branch has work not in {{ repo.default_branch }}. Merge it to keep these changes, then archive.</span>
-                {% elif branch.classification == 'DIVERGED' %}
-                <span class="rec rec-caution">Recommendation: Both this branch and {{ repo.default_branch }} have changed since they split. Merge carefully &mdash; may need conflict resolution.</span>
-                {% elif branch.classification == 'STALE' %}
-                <span class="rec rec-archive">Recommendation: Untouched for 30+ days. Archive it now; if nobody needs it in 30 days, delete.</span>
-                {% elif branch.classification == 'ACTIVE PR' %}
-                <span class="rec rec-pr">Recommendation: Has an open pull request. Review and merge the PR on GitHub, then clean up.</span>
-                {% endif %}
-            </div>
-            {% endif %}
-        </div>
-
-        {% if branch.analysis is defined and branch.analysis %}
-        <div class="branch-analysis">
-            <div class="analysis-summary">
-                <p class="ai-summary">{{ branch.analysis.plain_english_summary }}</p>
-                <div class="analysis-badges">
-                    <span class="badge badge-risk-{{ branch.analysis.risk_level | lower }}">Risk: {{ branch.analysis.risk_level }}</span>
-                    <span class="badge badge-assessment">{{ branch.analysis.feature_assessment }}</span>
-                    {% if branch.analysis.merge_strategy %}
-                    <span class="badge badge-dim">Strategy: {{ branch.analysis.merge_strategy }}</span>
-                    {% endif %}
-                </div>
-                {% if branch.analysis.conflict_prediction and branch.analysis.conflict_prediction != 'No conflicts expected' %}
-                <p class="conflict-prediction"><strong>Conflicts:</strong> {{ branch.analysis.conflict_prediction }}</p>
-                {% endif %}
-                {% if branch.analysis.spec_alignment %}
-                <p class="spec-alignment"><strong>Spec:</strong> {{ branch.analysis.spec_alignment }}</p>
-                {% endif %}
-            </div>
-
-            <div class="branch-actions">
-                <button class="btn btn-primary" onclick="toggleInstructions('instructions-{{ loop.index }}')">
-                    SHOW CLAUDE CODE INSTRUCTIONS
-                </button>
-                <button class="btn btn-secondary" onclick="archiveBranch('{{ repo.owner }}', '{{ repo.name }}', '{{ branch.name }}', '{{ branch.commit_sha }}', this)">
-                    ARCHIVE
-                </button>
-                <label class="done-check">
-                    <input type="checkbox" onchange="markDone('{{ repo.name }}', '{{ branch.name }}', this)">
-                    <span>Mark as Done</span>
-                </label>
-            </div>
-
-            <div class="instructions-panel" id="instructions-{{ loop.index }}" style="display: none;">
-                <div class="instructions-header">
-                    <span>Claude Code Instructions</span>
-                    <button class="btn btn-copy" onclick="copyToClipboard(document.getElementById('code-{{ loop.index }}').textContent, this)">
-                        COPY ALL
-                    </button>
-                </div>
-                <pre class="instructions-code" id="code-{{ loop.index }}">{{ branch.analysis.claude_code_instructions }}</pre>
-            </div>
-        </div>
-        {% else %}
-        <div class="branch-unanalyzed">
-            <div class="branch-actions">
-                <button class="btn btn-primary analyze-btn"
-                        onclick="analyzeBranch('{{ repo.owner }}', '{{ repo.name }}', '{{ branch.name }}', '{{ branch.commit_sha }}', this)"
-                        data-branch="{{ branch.name }}">
-                    ANALYZE WITH AI
-                </button>
-                <button class="btn btn-secondary" onclick="archiveBranch('{{ repo.owner }}', '{{ repo.name }}', '{{ branch.name }}', '{{ branch.commit_sha }}', this)">
-                    ARCHIVE
-                </button>
-            </div>
-            {% if branch.commit_messages %}
-            <details class="commit-details">
-                <summary class="text-secondary">{{ branch.commit_messages | length }} commit{{ 's' if branch.commit_messages | length != 1 }}</summary>
-                <ul class="commit-list">
-                    {% for c in branch.commit_messages %}
-                    <li>{{ c.message }} <span class="text-secondary">({{ c.author }})</span></li>
-                    {% endfor %}
-                </ul>
-            </details>
-            {% endif %}
-        </div>
-        {% endif %}
+{# --- Required files status --- #}
+<div class="file-status-grid">
+    {% set files = repo.required_files %}
+    {% for fname, present in files.items() %}
+    <div class="file-status-item {% if present %}file-present{% else %}file-absent{% endif %}">
+        <span class="file-status-icon">{% if present %}Y{% else %}-{% endif %}</span>
+        <span class="file-status-name">{{ fname }}</span>
     </div>
     {% endfor %}
+</div>
+
+{# --- Spec file contents --- #}
+<div class="spec-panels">
+    {% if specs.BUSINESS_SPEC %}
+    <div class="spec-panel">
+        <h3 class="spec-panel-title">Business Spec</h3>
+        <div class="spec-panel-content">
+            <pre class="spec-text">{{ specs.BUSINESS_SPEC }}</pre>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if specs.PRODUCT_SPEC %}
+    <div class="spec-panel">
+        <h3 class="spec-panel-title">Product Spec</h3>
+        <div class="spec-panel-content">
+            <pre class="spec-text">{{ specs.PRODUCT_SPEC }}</pre>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if specs.PROJECT_STATUS %}
+    <div class="spec-panel">
+        <h3 class="spec-panel-title">Project Status</h3>
+        <div class="spec-panel-content">
+            <pre class="spec-text">{{ specs.PROJECT_STATUS }}</pre>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if specs.SESSION_NOTES %}
+    <div class="spec-panel">
+        <h3 class="spec-panel-title">Session Notes</h3>
+        <div class="spec-panel-content">
+            <pre class="spec-text">{{ specs.SESSION_NOTES }}</pre>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if not specs.BUSINESS_SPEC and not specs.PRODUCT_SPEC and not specs.PROJECT_STATUS and not specs.SESSION_NOTES %}
+    <div class="empty-state">
+        <h3>No spec files found</h3>
+        <p>This repo doesn't have any of the expected spec files (BUSINESS_SPEC, PRODUCT_SPEC, PROJECT_STATUS, SESSION_NOTES) in its root directory.</p>
+    </div>
+    {% endif %}
+</div>
+
+{# --- Branch list --- #}
+{% if repo.total_branch_count > 1 %}
+<div class="spec-panel" style="margin-top: var(--space-lg);">
+    <h3 class="spec-panel-title">Branches ({{ repo.total_branch_count }})</h3>
+    <div class="spec-panel-content">
+        <div class="branch-names">
+            {% for bname in repo.branch_names %}
+            <span class="branch-tag {% if bname == repo.default_branch %}branch-default{% endif %}">{{ bname }}{% if bname == repo.default_branch %} *{% endif %}</span>
+            {% endfor %}
+        </div>
+    </div>
 </div>
 {% endif %}
 {% endblock %}

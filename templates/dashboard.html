@@ -46,9 +46,9 @@
 {# --- Required files legend --- #}
 <div class="file-legend">
     <span class="legend-label">Required files:</span>
-    <span class="legend-item">BUSINESS_SPEC.md</span>
     <span class="legend-item">CLAUDE.md</span>
     <span class="legend-item">LICENSE</span>
+    <span class="legend-item">BUSINESS_SPEC.md</span>
     <span class="legend-item">PRODUCT_SPEC.md</span>
     <span class="legend-item">PROJECT_STATUS.md</span>
     <span class="legend-item">SESSION_NOTES.md</span>
@@ -59,25 +59,27 @@
     <table class="repo-table">
         <thead>
             <tr>
-                <th class="col-repo">Repository</th>
-                <th class="col-vis">Visibility</th>
-                <th class="col-branches">Branches</th>
-                <th class="col-file">BIZ</th>
-                <th class="col-file">CLAUDE</th>
-                <th class="col-file">LICENSE</th>
-                <th class="col-file">PROD</th>
-                <th class="col-file">STATUS</th>
-                <th class="col-file">NOTES</th>
-                <th class="col-score">Score</th>
+                <th class="col-repo sortable" data-sort="text" data-col="0">Repository</th>
+                <th class="col-vis sortable" data-sort="text" data-col="1">Visibility</th>
+                <th class="col-date sortable" data-sort="text" data-col="2">Created</th>
+                <th class="col-date sortable" data-sort="text" data-col="3">Updated</th>
+                <th class="col-branches sortable" data-sort="num" data-col="4">Branches</th>
+                <th class="col-file sortable" data-sort="text" data-col="5">CLAUDE</th>
+                <th class="col-file sortable" data-sort="text" data-col="6">LICENSE</th>
+                <th class="col-file sortable" data-sort="text" data-col="7">BIZ</th>
+                <th class="col-file sortable" data-sort="text" data-col="8">PROD</th>
+                <th class="col-file sortable" data-sort="text" data-col="9">STATUS</th>
+                <th class="col-file sortable" data-sort="text" data-col="10">NOTES</th>
+                <th class="col-score sortable" data-sort="text" data-col="11">Score</th>
             </tr>
         </thead>
         <tbody>
             {% for repo in scan_results.repos %}
             <tr class="repo-row {% if repo.files_present == repo.files_total %}row-complete{% endif %}">
                 <td class="col-repo">
-                    <a href="{{ repo.html_url }}" target="_blank" rel="noopener" class="repo-link">{{ repo.name }}</a>
+                    <a href="{{ url_for('repo_detail', owner=repo.owner, name=repo.name) }}" class="repo-link">{{ repo.name }}</a>
                     {% if repo.description %}
-                    <span class="repo-desc">{{ repo.description | truncate(50) }}</span>
+                    <span class="repo-desc" title="{{ repo.description }}">{{ repo.description | truncate(50) }}</span>
                     {% endif %}
                 </td>
                 <td class="col-vis">
@@ -87,23 +89,28 @@
                     <span class="badge badge-public">PUBLIC</span>
                     {% endif %}
                 </td>
+                <td class="col-date">
+                    <span class="date-value">{{ repo.created_at[:10] if repo.created_at else '—' }}</span>
+                </td>
+                <td class="col-date">
+                    <span class="date-value">{{ repo.updated_at[:10] if repo.updated_at else '—' }}</span>
+                </td>
                 <td class="col-branches">
                     {% if repo.total_branch_count > 1 %}
-                    <span class="branch-count branch-toggle {% if repo.total_branch_count > 3 %}count-warn{% elif repo.total_branch_count > 1 %}count-note{% endif %}" onclick="this.closest('tr').nextElementSibling.classList.toggle('branch-hidden')" title="Click to show branches">{{ repo.total_branch_count }}</span>
+                    <span class="branch-count branch-toggle {% if repo.total_branch_count > 3 %}count-warn{% elif repo.total_branch_count > 1 %}count-note{% endif %}" onclick="event.preventDefault(); this.closest('tr').nextElementSibling.classList.toggle('branch-hidden')" title="Click to show branches">{{ repo.total_branch_count }}</span>
                     {% else %}
                     <span class="branch-count">{{ repo.total_branch_count }}</span>
                     {% endif %}
                 </td>
-                {# File checks: BUSINESS_SPEC.md, CLAUDE.md, LICENSE, PRODUCT_SPEC.md, PROJECT_STATUS.md, SESSION_NOTES.md #}
                 {% set files = repo.required_files %}
-                <td class="col-file">
-                    {% if files.get('BUSINESS_SPEC.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
-                </td>
                 <td class="col-file">
                     {% if files.get('CLAUDE.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
                 </td>
                 <td class="col-file">
                     {% if files.get('LICENSE') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-file">
+                    {% if files.get('BUSINESS_SPEC.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
                 </td>
                 <td class="col-file">
                     {% if files.get('PRODUCT_SPEC.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
@@ -120,7 +127,7 @@
             </tr>
             {% if repo.total_branch_count > 1 %}
             <tr class="branch-detail-row branch-hidden">
-                <td colspan="10">
+                <td colspan="12">
                     <div class="branch-names">
                         {% for bname in repo.branch_names %}
                         <span class="branch-tag {% if bname == repo.default_branch %}branch-default{% endif %}">{{ bname }}{% if bname == repo.default_branch %} *{% endif %}</span>
@@ -131,7 +138,7 @@
             {% endif %}
             {% if repo.error is defined and repo.error %}
             <tr class="error-row">
-                <td colspan="10">
+                <td colspan="12">
                     <span class="repo-error">Error scanning: {{ repo.error }}</span>
                 </td>
             </tr>
@@ -141,4 +148,55 @@
     </table>
 </div>
 {% endif %}
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.sortable').forEach(function(th) {
+        th.addEventListener('click', function() {
+            var table = th.closest('table');
+            var tbody = table.querySelector('tbody');
+            var col = parseInt(th.dataset.col);
+            var sortType = th.dataset.sort;
+            var asc = th.classList.contains('sort-asc');
+
+            table.querySelectorAll('.sortable').forEach(function(h) {
+                h.classList.remove('sort-asc', 'sort-desc');
+            });
+            th.classList.add(asc ? 'sort-desc' : 'sort-asc');
+
+            var groups = [];
+            var rows = Array.from(tbody.children);
+            var i = 0;
+            while (i < rows.length) {
+                var group = [rows[i]];
+                i++;
+                while (i < rows.length && !rows[i].classList.contains('repo-row')) {
+                    group.push(rows[i]);
+                    i++;
+                }
+                groups.push(group);
+            }
+
+            groups.sort(function(a, b) {
+                var cellA = a[0].children[col];
+                var cellB = b[0].children[col];
+                var valA = (cellA ? cellA.textContent : '').trim();
+                var valB = (cellB ? cellB.textContent : '').trim();
+                if (sortType === 'num') {
+                    valA = parseFloat(valA) || 0;
+                    valB = parseFloat(valB) || 0;
+                    return asc ? valB - valA : valA - valB;
+                }
+                return asc ? valB.localeCompare(valA) : valA.localeCompare(valB);
+            });
+
+            groups.forEach(function(group) {
+                group.forEach(function(row) {
+                    tbody.appendChild(row);
+                });
+            });
+        });
+    });
+});
+</script>
 {% endblock %}

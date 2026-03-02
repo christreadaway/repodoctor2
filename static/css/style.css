@@ -2107,6 +2107,44 @@ tbody tr:hover {
   border: 1px solid rgba(255, 64, 64, 0.2);
 }
 
+/* Date columns */
+.col-date {
+  white-space: nowrap;
+}
+
+.date-value {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+/* Sortable column headers */
+.sortable {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+}
+
+.sortable:hover {
+  color: #33ff33;
+  text-shadow: 0 0 6px rgba(51, 255, 51, 0.3);
+}
+
+.sortable::after {
+  content: ' \2195';
+  font-size: 0.65rem;
+  opacity: 0.4;
+}
+
+.sortable.sort-asc::after {
+  content: ' \2191';
+  opacity: 1;
+}
+
+.sortable.sort-desc::after {
+  content: ' \2193';
+  opacity: 1;
+}
+
 /* Branch toggle — click number to expand */
 .branch-toggle {
   cursor: pointer;
@@ -2189,4 +2227,141 @@ tbody tr:hover {
   .file-legend {
     font-size: 0.7rem;
   }
+}
+
+
+/* ================================================================
+   Repo Detail Page
+   ================================================================ */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.breadcrumb-link {
+  color: var(--text-secondary);
+}
+
+.breadcrumb-link:hover {
+  color: var(--green-100);
+}
+
+.breadcrumb-sep {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
+.breadcrumb-current {
+  color: var(--green-100);
+  font-weight: 600;
+}
+
+.repo-info-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: var(--space-lg);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  align-items: center;
+}
+
+.info-item strong {
+  color: var(--text-primary);
+}
+
+.repo-full-desc {
+  flex-basis: 100%;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+/* File status grid */
+.file-status-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: var(--space-lg);
+}
+
+.file-status-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+}
+
+.file-status-item.file-present {
+  border-color: rgba(51, 255, 51, 0.25);
+  background: rgba(51, 255, 51, 0.04);
+}
+
+.file-status-item.file-present .file-status-icon {
+  color: var(--green-100);
+  font-weight: 700;
+}
+
+.file-status-item.file-absent {
+  border-color: rgba(255, 64, 64, 0.2);
+  background: rgba(255, 64, 64, 0.03);
+}
+
+.file-status-item.file-absent .file-status-icon {
+  color: var(--red-100);
+  opacity: 0.6;
+}
+
+.file-status-name {
+  color: var(--text-secondary);
+}
+
+/* Spec panels */
+.spec-panels {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.spec-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.spec-panel-title {
+  padding: var(--space-sm) var(--space-lg);
+  margin: 0;
+  font-size: 1rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(26, 42, 26, 0.4);
+}
+
+.spec-panel-content {
+  padding: var(--space-md) var(--space-lg);
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.spec-text {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-size: 0.82rem;
+  line-height: 1.7;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
 }
