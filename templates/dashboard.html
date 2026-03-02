@@ -88,7 +88,11 @@
                     {% endif %}
                 </td>
                 <td class="col-branches">
-                    <span class="branch-count {% if repo.total_branch_count > 3 %}count-warn{% elif repo.total_branch_count > 1 %}count-note{% endif %}">{{ repo.total_branch_count }}</span>
+                    {% if repo.total_branch_count > 1 %}
+                    <span class="branch-count branch-toggle {% if repo.total_branch_count > 3 %}count-warn{% elif repo.total_branch_count > 1 %}count-note{% endif %}" onclick="this.closest('tr').nextElementSibling.classList.toggle('branch-hidden')" title="Click to show branches">{{ repo.total_branch_count }}</span>
+                    {% else %}
+                    <span class="branch-count">{{ repo.total_branch_count }}</span>
+                    {% endif %}
                 </td>
                 {# File checks: BUSINESS_SPEC.md, CLAUDE.md, LICENSE, PRODUCT_SPEC.md, PROJECT_STATUS.md, SESSION_NOTES.md #}
                 {% set files = repo.required_files %}
@@ -115,7 +119,7 @@
                 </td>
             </tr>
             {% if repo.total_branch_count > 1 %}
-            <tr class="branch-detail-row">
+            <tr class="branch-detail-row branch-hidden">
                 <td colspan="10">
                     <div class="branch-names">
                         {% for bname in repo.branch_names %}

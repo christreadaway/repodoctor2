@@ -113,14 +113,19 @@ class GitHubClient:
         )
         return resp.status_code == 200
 
-    def check_file_exists(self, owner: str, repo: str, path: str) -> bool:
+    def check_file_exists(self, owner: str, repo: str, path: str, ref: str | None = None) -> bool:
         """Check if a file exists in the repo root."""
-        resp = self.session.head(
+        params = {}
+        if ref:
+            params["ref"] = ref
+        resp = self.session.get(
             f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}",
+            params=params,
+            headers={"If-None-Match": ""},
         )
         return resp.status_code == 200
 
-    def check_required_files(self, owner: str, repo: str) -> dict[str, bool]:
+    def check_required_files(self, owner: str, repo: str, ref: str | None = None) -> dict[str, bool]:
         """Check which required project files exist in the repo."""
         required = [
             "BUSINESS_SPEC.md",
@@ -130,7 +135,7 @@ class GitHubClient:
             "PROJECT_STATUS.md",
             "SESSION_NOTES.md",
         ]
-        return {f: self.check_file_exists(owner, repo, f) for f in required}
+        return {f: self.check_file_exists(owner, repo, f, ref=ref) for f in required}
 
     def create_archive_tag(
         self, owner: str, repo: str, branch_name: str, commit_sha: str, message: str
@@ -216,7 +221,7 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
     total_branch_count = len(branches)
     non_default_count = total_branch_count - 1 if total_branch_count > 0 else 0
 
-    required_files = client.check_required_files(owner, name)
+    required_files = client.check_required_files(owner, name, ref=default_branch)
 
     return {
         "owner": owner,

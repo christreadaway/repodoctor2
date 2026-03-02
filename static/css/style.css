@@ -2107,6 +2107,22 @@ tbody tr:hover {
   border: 1px solid rgba(255, 64, 64, 0.2);
 }
 
+/* Branch toggle — click number to expand */
+.branch-toggle {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+.branch-toggle:hover {
+  color: var(--green-100);
+}
+
+.branch-detail-row.branch-hidden {
+  display: none;
+}
+
 /* Branch name tags in expandable row */
 .branch-detail-row td {
   padding: 0.35rem 1rem 0.65rem;
