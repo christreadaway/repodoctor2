@@ -17,6 +17,8 @@ import security
 import github_client as gh
 # import ai_analyzer as ai  # Commented out — not needed in simplified mode
 import models
+import spec_cleaner
+import project_mapper
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
@@ -234,20 +236,29 @@ def repo_detail(owner, name):
             stem = stem[:dot]
         file_map[stem] = f
 
+    raw_specs = {}
     for key in spec_files:
         actual_name = file_map.get(key.lower())
         if actual_name:
             content = client.get_file_content(owner, name, actual_name, ref=ref)
             if content:
-                # Truncate very long files for display
                 if len(content) > 10000:
                     content = content[:10000] + "\n\n... (truncated)"
-                spec_files[key] = content
+                raw_specs[key] = content
+                spec_files[key] = spec_cleaner.clean_markdown(content)
+
+    # Pull conversations mapped to this repo
+    conversations = project_mapper.get_conversations_for_repo(name)
+
+    # Extract What's Next from raw specs + conversations
+    whats_next = spec_cleaner.extract_whats_next(raw_specs, conversations)
 
     return render_template(
         "repo_detail.html",
         repo=repo_info,
         specs=spec_files,
+        whats_next=whats_next,
+        conversations=conversations,
     )
 
 
