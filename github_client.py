@@ -231,6 +231,7 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
         "private": repo.get("private", False),
         "html_url": repo.get("html_url", ""),
         "description": repo.get("description", ""),
+        "created_at": repo.get("created_at", ""),
         "updated_at": repo.get("updated_at", ""),
         "total_branch_count": total_branch_count,
         "non_default_branch_count": non_default_count,

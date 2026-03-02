@@ -2107,6 +2107,44 @@ tbody tr:hover {
   border: 1px solid rgba(255, 64, 64, 0.2);
 }
 
+/* Date columns */
+.col-date {
+  white-space: nowrap;
+}
+
+.date-value {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+/* Sortable column headers */
+.sortable {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+}
+
+.sortable:hover {
+  color: #33ff33;
+  text-shadow: 0 0 6px rgba(51, 255, 51, 0.3);
+}
+
+.sortable::after {
+  content: ' \2195';
+  font-size: 0.65rem;
+  opacity: 0.4;
+}
+
+.sortable.sort-asc::after {
+  content: ' \2191';
+  opacity: 1;
+}
+
+.sortable.sort-desc::after {
+  content: ' \2193';
+  opacity: 1;
+}
+
 /* Branch toggle — click number to expand */
 .branch-toggle {
   cursor: pointer;
