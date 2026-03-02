@@ -2,7 +2,7 @@
 
 **Repository:** `repodoctor2`  
 **Filename:** `repodoctor2-PRODUCT_SPEC.md`  
-**Last Updated:** 2026-02-16 at 16:30 UTC
+**Last Updated:** 2026-03-02
 
 ---
 
@@ -16,7 +16,7 @@
 
 ## Tech Stack
 
-Python Flask web app, GitHub REST API v3, Anthropic Claude API (Haiku 4.5 default), Fernet + PBKDF2 credential encryption, retro terminal UI aesthetic, local storage with models.py
+Python Flask web app, GitHub REST API v3, Anthropic Claude API (Haiku 4.5 default), Fernet + PBKDF2 credential encryption, retro terminal UI aesthetic, local storage with models.py, flexible file matching via root directory listing
 
 ---
 
@@ -48,7 +48,12 @@ The following features have been implemented based on development sessions:
 22. Eight Jinja2 templates
 23. Comprehensive test suite (43 tests, all passing)
 24. Dashboard with descriptive status badges
-25. Repository detail pages with branch analysis
+25. Repository detail pages with spec content viewer
+26. Flexible file matching — case-insensitive, any extension (e.g. .pdf, .md, .txt all count)
+27. Single API call root directory listing replaces 6 individual file checks per repo
+28. Clickable repo names linking to detail pages with spec file contents
+29. File status grid showing present/missing required files at a glance
+30. Dashboard column reorder: CLAUDE, LICENSE, BIZ, PROD, STATUS, NOTES
 
 ---
 
@@ -56,19 +61,19 @@ The following features have been implemented based on development sessions:
 
 Key technical details from implementation:
 
-- app.py - Flask application with all routes
+- app.py - Flask application with all routes including `/repo/<owner>/<name>` detail page
 - security.py - Fernet + PBKDF2 credential encryption for GitHub PAT and API keys
-- github_client.py - GitHub REST API v3 client for repo/branch operations
+- github_client.py - GitHub REST API v3 client; `get_root_files()` for single-call directory listing; `get_file_content()` for base64-decoded file fetching; flexible stem-based file matching
 - ai_analyzer.py - Anthropic API integration for intelligent branch analysis
 - models.py - Local storage for credentials and preferences
-- static/css/style.css - Retro terminal UI aesthetic
+- static/css/style.css - Retro terminal UI aesthetic + repo detail page styles
 - static/js/app.js - Frontend JavaScript for interactivity
-- templates/ directory with 8 Jinja2 templates
+- templates/ directory with 8 Jinja2 templates (including repo_detail.html spec viewer)
 - tests/test_app.py - 43 comprehensive tests (100% passing)
 - Requirements: Flask, Anthropic, cryptography libraries
 - Runs on localhost:5001
 - Built from PDF specification (repodoctor2-spec-v4.pdf)
-- ~5,100 lines of code across 20 files
+- ~5,400 lines of code across 20 files
 
 ---
 
@@ -88,6 +93,9 @@ Key decisions made during development:
 - Session-based authentication (not per-repo tokens)
 - GitHub PAT with repo scope for full account access
 - Local storage model for simplicity (no database dependency)
+- Flexible file matching: stem-based comparison (strip extension, lowercase) so BUSINESS_SPEC.pdf, business_spec.md, etc. all match
+- Single root directory listing per repo replaces 6 individual API calls (~83% fewer requests)
+- Spec file content truncated at 10,000 chars for display performance
 
 ---
 
