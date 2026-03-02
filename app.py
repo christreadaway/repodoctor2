@@ -166,6 +166,8 @@ def scan():
                 "private": repo.get("private", False),
                 "html_url": repo.get("html_url", ""),
                 "description": repo.get("description", ""),
+                "created_at": repo.get("created_at", ""),
+                "updated_at": repo.get("updated_at", ""),
                 "total_branch_count": 0,
                 "non_default_branch_count": 0,
                 "branch_names": [],
@@ -188,6 +190,65 @@ def scan():
 
     flash(f"Scan complete: {len(results)} repos, {_scan_results['total_branches']} total branches found.", "success")
     return redirect(url_for("dashboard"))
+
+
+# --- Repo Detail ---
+
+@app.route("/repo/<owner>/<name>")
+@_require_auth
+def repo_detail(owner, name):
+    client = _get_github_client()
+    if not client:
+        flash("Not authenticated with GitHub.", "error")
+        return redirect(url_for("dashboard"))
+
+    # Find repo in scan results for basic info
+    repo_info = None
+    if _scan_results:
+        for r in _scan_results.get("repos", []):
+            if r["owner"] == owner and r["name"] == name:
+                repo_info = r
+                break
+
+    if not repo_info:
+        flash("Repo not found. Try scanning first.", "error")
+        return redirect(url_for("dashboard"))
+
+    ref = repo_info.get("default_branch", "main")
+
+    # Fetch file contents for the spec files
+    spec_files = {
+        "BUSINESS_SPEC": None,
+        "PRODUCT_SPEC": None,
+        "PROJECT_STATUS": None,
+        "SESSION_NOTES": None,
+    }
+
+    # Get root file listing to find actual filenames (flexible match)
+    root_files = client.get_root_files(owner, name, ref=ref)
+    file_map = {}
+    for f in root_files:
+        stem = f.lower()
+        dot = stem.rfind(".")
+        if dot > 0:
+            stem = stem[:dot]
+        file_map[stem] = f
+
+    for key in spec_files:
+        actual_name = file_map.get(key.lower())
+        if actual_name:
+            content = client.get_file_content(owner, name, actual_name, ref=ref)
+            if content:
+                # Truncate very long files for display
+                if len(content) > 10000:
+                    content = content[:10000] + "\n\n... (truncated)"
+                spec_files[key] = content
+
+    return render_template(
+        "repo_detail.html",
+        repo=repo_info,
+        specs=spec_files,
+    )
 
 
 # --- Settings (kept active for excluded repos / credential reset) ---

@@ -113,29 +113,68 @@ class GitHubClient:
         )
         return resp.status_code == 200
 
-    def check_file_exists(self, owner: str, repo: str, path: str, ref: str | None = None) -> bool:
-        """Check if a file exists in the repo root."""
+    def get_file_content(self, owner: str, repo: str, path: str, ref: str | None = None) -> str | None:
+        """Fetch the text content of a file from the repo. Returns None if not found."""
+        import base64
         params = {}
         if ref:
             params["ref"] = ref
         resp = self.session.get(
             f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}",
             params=params,
+            headers={"If-None-Match": "", "Accept": "application/vnd.github.v3+json"},
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if data.get("encoding") == "base64" and data.get("content"):
+            try:
+                return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+            except Exception:
+                return None
+        return None
+
+    def get_root_files(self, owner: str, repo: str, ref: str | None = None) -> list[str]:
+        """Fetch the list of file/dir names in the repo root."""
+        params = {}
+        if ref:
+            params["ref"] = ref
+        resp = self.session.get(
+            f"{GITHUB_API}/repos/{owner}/{repo}/contents",
+            params=params,
             headers={"If-None-Match": ""},
         )
-        return resp.status_code == 200
+        if resp.status_code != 200:
+            return []
+        return [item["name"] for item in resp.json() if isinstance(item, dict)]
 
     def check_required_files(self, owner: str, repo: str, ref: str | None = None) -> dict[str, bool]:
-        """Check which required project files exist in the repo."""
-        required = [
-            "BUSINESS_SPEC.md",
-            "CLAUDE.md",
-            "LICENSE",
-            "PRODUCT_SPEC.md",
-            "PROJECT_STATUS.md",
-            "SESSION_NOTES.md",
-        ]
-        return {f: self.check_file_exists(owner, repo, f, ref=ref) for f in required}
+        """Check which required project files exist (flexible: case-insensitive, any extension)."""
+        root_files = self.get_root_files(owner, repo, ref=ref)
+        # Lowercase all root filenames for case-insensitive matching
+        root_lower = [f.lower() for f in root_files]
+        # Strip extensions for stem matching
+        root_stems = set()
+        for f in root_lower:
+            # Keep the full name and also the stem (without extension)
+            root_stems.add(f)
+            dot = f.rfind(".")
+            if dot > 0:
+                root_stems.add(f[:dot])
+
+        required = {
+            "BUSINESS_SPEC.md": "business_spec",
+            "CLAUDE.md": "claude",
+            "LICENSE": "license",
+            "PRODUCT_SPEC.md": "product_spec",
+            "PROJECT_STATUS.md": "project_status",
+            "SESSION_NOTES.md": "session_notes",
+        }
+        results = {}
+        for display_name, stem in required.items():
+            # Match if the stem exists (with any extension) or exact lowercase match
+            results[display_name] = stem in root_stems
+        return results
 
     def create_archive_tag(
         self, owner: str, repo: str, branch_name: str, commit_sha: str, message: str
