@@ -27,6 +27,23 @@
     {% endif %}
 </div>
 
+{# --- WHAT'S NEXT — hero section at the top --- #}
+{% if whats_next %}
+<div class="whats-next-hero">
+    <div class="whats-next-header">
+        <h2 class="whats-next-title">What's Next</h2>
+        <span class="whats-next-count">{{ whats_next|length }} item{{ 's' if whats_next|length != 1 }}</span>
+    </div>
+    <ul class="whats-next-list">
+        {% for item in whats_next %}
+        <li class="whats-next-item {% if 'Discussed:' in item %}whats-next-from-chat{% endif %}">
+            {{ item }}
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
 {# --- Required files status --- #}
 <div class="file-status-grid">
     {% set files = repo.required_files %}
@@ -38,7 +55,38 @@
     {% endfor %}
 </div>
 
-{# --- Spec file contents --- #}
+{# --- Claude Conversations for this repo --- #}
+{% if conversations %}
+<div class="spec-panel conversations-panel">
+    <h3 class="spec-panel-title">Claude Conversations ({{ conversations|length }})</h3>
+    <div class="spec-panel-content">
+        <div class="conversation-list">
+            {% for conv in conversations[:10] %}
+            <div class="conversation-item">
+                <div class="conversation-header">
+                    <span class="conversation-name">{{ conv.name[:100] }}</span>
+                    <span class="conversation-date">{{ conv.date_display }}</span>
+                </div>
+                {% if conv.project %}
+                <span class="conversation-project">{{ conv.project }}</span>
+                {% endif %}
+                {% if conv.excerpt %}
+                <div class="conversation-excerpt">{{ conv.excerpt[:200] }}</div>
+                {% endif %}
+                {% if conv.message_count %}
+                <span class="conversation-meta">{{ conv.message_count }} messages</span>
+                {% endif %}
+            </div>
+            {% endfor %}
+            {% if conversations|length > 10 %}
+            <div class="conversation-more">+ {{ conversations|length - 10 }} more conversations</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{# --- Spec file contents (cleaned) --- #}
 <div class="spec-panels">
     {% if specs.BUSINESS_SPEC %}
     <div class="spec-panel">
@@ -79,7 +127,7 @@
     {% if not specs.BUSINESS_SPEC and not specs.PRODUCT_SPEC and not specs.PROJECT_STATUS and not specs.SESSION_NOTES %}
     <div class="empty-state">
         <h3>No spec files found</h3>
-        <p>This repo doesn't have any of the expected spec files (BUSINESS_SPEC, PRODUCT_SPEC, PROJECT_STATUS, SESSION_NOTES) in its root directory.</p>
+        <p>This repo doesn't have any of the expected spec files in its root directory.</p>
     </div>
     {% endif %}
 </div>
