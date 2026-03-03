@@ -331,24 +331,19 @@ class TestFlaskApp(unittest.TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertIn("/login", resp.headers["Location"])
 
-    def test_unauthenticated_setup_guide(self):
-        """Unauthenticated access to setup guide redirects."""
-        resp = self.client.get("/setup-guide")
+    def test_unauthenticated_projects(self):
+        """Unauthenticated access to projects redirects."""
+        resp = self.client.get("/projects")
         self.assertEqual(resp.status_code, 302)
 
-    def test_unauthenticated_archive(self):
-        """Unauthenticated access to archive redirects."""
-        resp = self.client.get("/archive")
+    def test_unauthenticated_mac_setup(self):
+        """Unauthenticated access to mac setup redirects."""
+        resp = self.client.get("/mac-setup")
         self.assertEqual(resp.status_code, 302)
 
     def test_unauthenticated_settings(self):
         """Unauthenticated access to settings redirects."""
         resp = self.client.get("/settings")
-        self.assertEqual(resp.status_code, 302)
-
-    def test_unauthenticated_action_log(self):
-        """Unauthenticated access to action log redirects."""
-        resp = self.client.get("/action-log")
         self.assertEqual(resp.status_code, 302)
 
     def test_dashboard_when_authenticated(self):
@@ -358,26 +353,25 @@ class TestFlaskApp(unittest.TestCase):
             sess["github_user"] = "testuser"
         resp = self.client.get("/")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn(b"Dashboard", resp.data)
+        self.assertIn(b"My Repositories", resp.data)
 
-    def test_setup_guide_when_authenticated(self):
-        """Authenticated user can access setup guide."""
+    def test_projects_when_authenticated(self):
+        """Authenticated user can access projects page."""
         with self.client.session_transaction() as sess:
             sess["authenticated"] = True
             sess["github_user"] = "testuser"
-        resp = self.client.get("/setup-guide")
+        resp = self.client.get("/projects")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn(b"Setup Guide", resp.data)
-        self.assertIn(b"CLAUDE.md", resp.data)
+        self.assertIn(b"Project Summaries", resp.data)
 
-    def test_archive_when_authenticated(self):
-        """Authenticated user can access archive."""
+    def test_mac_setup_when_authenticated(self):
+        """Authenticated user can access mac setup page."""
         with self.client.session_transaction() as sess:
             sess["authenticated"] = True
             sess["github_user"] = "testuser"
-        resp = self.client.get("/archive")
+        resp = self.client.get("/mac-setup")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn(b"Archive", resp.data)
+        self.assertIn(b"Mac Setup", resp.data)
 
     def test_settings_when_authenticated(self):
         """Authenticated user can access settings."""
@@ -388,14 +382,17 @@ class TestFlaskApp(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn(b"Settings", resp.data)
 
-    def test_action_log_when_authenticated(self):
-        """Authenticated user can access action log."""
-        with self.client.session_transaction() as sess:
-            sess["authenticated"] = True
-            sess["github_user"] = "testuser"
-        resp = self.client.get("/action-log")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn(b"Action Log", resp.data)
+    def test_project_summaries_model(self):
+        """Project summaries can be saved and retrieved."""
+        import models
+        models.save_project_summary("test-repo", {
+            "what_it_does": "Test project",
+            "how_finished": "50% done",
+            "next_steps": ["Step 1", "Step 2"],
+        })
+        summaries = models.get_project_summaries()
+        self.assertIn("test-repo", summaries)
+        self.assertEqual(summaries["test-repo"]["what_it_does"], "Test project")
 
     def test_logout(self):
         """Logout clears session and redirects."""

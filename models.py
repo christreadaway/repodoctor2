@@ -161,6 +161,26 @@ def list_specs() -> list[str]:
     ]
 
 
+# --- Project Summaries ---
+
+SUMMARIES_PATH = os.path.join(DATA_DIR, "project_summaries.json")
+
+
+def get_project_summaries() -> dict:
+    return _load_json(SUMMARIES_PATH) or {}
+
+
+def save_project_summary(repo_name: str, summary: dict):
+    summaries = get_project_summaries()
+    summary["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    summaries[repo_name] = summary
+    _save_json(SUMMARIES_PATH, summaries)
+
+
+def save_project_summaries(summaries: dict):
+    _save_json(SUMMARIES_PATH, summaries)
+
+
 # --- Session Cost Tracking ---
 
 class SessionCost:
