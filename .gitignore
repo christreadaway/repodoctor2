@@ -17,6 +17,7 @@ config/credentials.enc
 data/scan_history.json
 data/analysis_cache.json
 data/action_log.json
+data/project_summaries.json
 data/specs/
 
 # IDE

@@ -2493,3 +2493,280 @@ tbody tr:hover {
   padding: var(--space-sm) 0;
   text-align: center;
 }
+
+
+/* ================================================================
+   Projects Page
+   ================================================================ */
+
+.projects-hint {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md) var(--space-lg);
+  margin-bottom: var(--space-xl);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.projects-hint strong {
+  color: var(--green-100);
+}
+
+.projects-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: var(--space-lg);
+}
+
+.project-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  transition: border-color var(--transition-normal);
+}
+
+.project-card:hover {
+  border-color: var(--green-80);
+}
+
+.project-card.has-summary {
+  border-left: 3px solid var(--green-80);
+}
+
+.project-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--border);
+}
+
+.project-name {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--green-100);
+  text-decoration: none;
+}
+
+.project-name:hover {
+  text-decoration: underline;
+}
+
+.project-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.project-section {
+  margin-bottom: var(--space-md);
+}
+
+.project-section:last-child {
+  margin-bottom: 0;
+}
+
+.project-section-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: var(--space-xs);
+}
+
+.project-section-text {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.project-next-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.project-next-steps li {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+  padding: 2px 0 2px var(--space-md);
+  border-left: 2px solid var(--green-80);
+  margin-bottom: 3px;
+}
+
+.project-no-summary {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-style: italic;
+  margin: 0;
+}
+
+.project-generated {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin-top: var(--space-sm);
+  text-align: right;
+}
+
+@media (max-width: 860px) {
+  .projects-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* ================================================================
+   Mac Setup Guide Page
+   ================================================================ */
+
+.setup-guide {
+  max-width: 800px;
+}
+
+.setup-section {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg) var(--space-xl);
+  margin-bottom: var(--space-lg);
+}
+
+.setup-section.setup-highlight {
+  border-color: var(--green-80);
+  background: linear-gradient(135deg, rgba(51, 255, 51, 0.03) 0%, rgba(64, 255, 208, 0.02) 100%);
+}
+
+.setup-section-title {
+  color: var(--green-100);
+  font-size: 1.1rem;
+  margin: 0 0 var(--space-md) 0;
+}
+
+.setup-section p {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  margin-bottom: var(--space-sm);
+}
+
+.setup-section code {
+  background: var(--bg-deep);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  color: var(--green-100);
+}
+
+.setup-code {
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md) var(--space-lg);
+  margin: var(--space-sm) 0 var(--space-md) 0;
+  position: relative;
+}
+
+.setup-code pre {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.7;
+  color: var(--green-100);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  padding-right: 4rem;
+}
+
+.setup-code .btn-copy {
+  position: absolute;
+  top: var(--space-sm);
+  right: var(--space-sm);
+  font-size: 0.65rem;
+  padding: 3px 8px;
+}
+
+.setup-hint {
+  font-size: 0.78rem !important;
+  color: var(--text-secondary) !important;
+}
+
+.setup-link {
+  color: var(--cyan-100);
+}
+
+.setup-subsection {
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  margin: var(--space-lg) 0 var(--space-sm) 0;
+}
+
+.setup-keys {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.setup-key-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+}
+
+.setup-key-item strong {
+  color: var(--green-100);
+  font-size: 0.9rem;
+}
+
+.setup-key-item p {
+  margin: var(--space-xs) 0 0 0;
+}
+
+.setup-steps-list {
+  margin: var(--space-sm) 0 var(--space-md) var(--space-lg);
+  font-size: 0.85rem;
+  line-height: 1.8;
+}
+
+.setup-steps-list li {
+  padding-left: var(--space-xs);
+}
+
+kbd {
+  background: var(--bg-card);
+  border: 1px solid var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--green-100);
+}
+
+.setup-trouble-items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.setup-trouble {
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.setup-trouble:last-child {
+  border-bottom: none;
+}
+
+.setup-trouble strong {
+  color: var(--amber-100);
+  font-size: 0.85rem;
+}
+
+.setup-trouble p {
+  margin-top: var(--space-xs);
+}

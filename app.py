@@ -16,6 +16,7 @@ from flask import (
 import security
 import github_client as gh
 # import ai_analyzer as ai  # Commented out — not needed in simplified mode
+import anthropic
 import models
 import spec_cleaner
 import project_mapper
@@ -310,6 +311,136 @@ def settings():
 @_require_auth
 def session_cost():
     return jsonify(_session_cost.to_dict())
+
+
+# --- Projects Summary ---
+
+@app.route("/projects")
+@_require_auth
+def projects():
+    summaries = models.get_project_summaries()
+    repos = []
+    if _scan_results:
+        repos = _scan_results.get("repos", [])
+    return render_template(
+        "projects.html",
+        repos=repos,
+        summaries=summaries,
+        scan_results=_scan_results,
+    )
+
+
+@app.route("/projects/generate", methods=["POST"])
+@_require_auth
+def generate_project_summaries():
+    global _scan_results
+    client = _get_github_client()
+    creds = _get_credentials()
+    if not client or not creds:
+        flash("Not authenticated.", "error")
+        return redirect(url_for("projects"))
+
+    if not _scan_results:
+        flash("Run a scan first from the Dashboard.", "error")
+        return redirect(url_for("projects"))
+
+    repos = _scan_results.get("repos", [])
+    generated = 0
+    skipped = 0
+
+    for repo in repos:
+        owner = repo["owner"]
+        name = repo["name"]
+        ref = repo.get("default_branch", "main")
+
+        # Fetch spec files for context
+        root_files = client.get_root_files(owner, name, ref=ref)
+        file_map = {}
+        for f in root_files:
+            stem = f.lower()
+            dot = stem.rfind(".")
+            if dot > 0:
+                stem = stem[:dot]
+            file_map[stem] = f
+
+        spec_content = {}
+        for key in ["product_spec", "business_spec", "project_status", "session_notes"]:
+            actual_name = file_map.get(key)
+            if actual_name:
+                content = client.get_file_content(owner, name, actual_name, ref=ref)
+                if content:
+                    # Truncate to keep prompt small
+                    spec_content[key] = content[:5000]
+
+        # Build context for AI
+        context_parts = []
+        if repo.get("description"):
+            context_parts.append(f"GitHub description: {repo['description']}")
+        for key, content in spec_content.items():
+            context_parts.append(f"--- {key.upper()} ---\n{content}")
+
+        if not context_parts:
+            # No specs or description — generate a minimal summary
+            models.save_project_summary(name, {
+                "what_it_does": f"{name} — no spec files or description available.",
+                "how_finished": "Unknown — no PROJECT_STATUS or spec files found.",
+                "next_steps": ["Add PRODUCT_SPEC.md with project description", "Add PROJECT_STATUS.md with progress tracking"],
+            })
+            skipped += 1
+            continue
+
+        context_text = "\n\n".join(context_parts)
+
+        # Call Claude Haiku for a concise summary
+        try:
+            ai_client = anthropic.Anthropic(api_key=creds["anthropic_key"])
+            response = ai_client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=500,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"Project: {name}\n\n{context_text}\n\n"
+                        "Based on the above, return ONLY valid JSON with:\n"
+                        '1. "what_it_does": 1-2 sentence description of what this project does\n'
+                        '2. "how_finished": 1-2 sentence assessment of how complete/finished the project is\n'
+                        '3. "next_steps": array of up to 5 short bullet strings for what needs to be built or tested next\n'
+                        "Return raw JSON only, no markdown fencing."
+                    ),
+                }],
+            )
+            import json
+            raw = response.content[0].text.strip()
+            # Handle markdown fencing if present
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+                if raw.endswith("```"):
+                    raw = raw[:-3].strip()
+            summary = json.loads(raw)
+            # Ensure next_steps is capped at 5
+            if "next_steps" in summary and len(summary["next_steps"]) > 5:
+                summary["next_steps"] = summary["next_steps"][:5]
+            models.save_project_summary(name, summary)
+            generated += 1
+        except Exception as e:
+            models.save_project_summary(name, {
+                "what_it_does": repo.get("description") or f"{name} — summary generation failed.",
+                "how_finished": "Unknown — AI summary could not be generated.",
+                "next_steps": [f"Error: {str(e)[:100]}"],
+            })
+            skipped += 1
+
+    flash(f"Generated summaries for {generated} projects ({skipped} skipped/fallback).", "success")
+    models.log_action("generate_summaries", "all", "all", f"Generated {generated}, skipped {skipped}")
+    return redirect(url_for("projects"))
+
+
+# --- Mac Setup ---
+
+@app.route("/mac-setup")
+@_require_auth
+def mac_setup():
+    return render_template("mac_setup.html")
 
 
 # =====================================================================

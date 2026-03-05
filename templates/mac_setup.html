@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}RepDoctor2 — Mac Setup{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Mac Setup Guide</h1>
+</div>
+
+<div class="setup-guide">
+
+    <div class="setup-section">
+        <h2 class="setup-section-title">Prerequisites</h2>
+        <p>You need Python 3.12+ and git installed. Most Macs have git pre-installed. To check:</p>
+        <div class="setup-code">
+            <pre>python3 --version    # Need 3.12+
+git --version        # Need any version
+pip3 --version       # Comes with Python</pre>
+            <button class="btn btn-secondary btn-copy" onclick="copyToClipboard('python3 --version\ngit --version\npip3 --version', this)">COPY</button>
+        </div>
+        <p class="setup-hint">If Python is missing, install it from <span class="setup-link">python.org</span> or via Homebrew: <code>brew install python@3.12</code></p>
+    </div>
+
+    <div class="setup-section">
+        <h2 class="setup-section-title">1. Clone the Repo</h2>
+        <div class="setup-code">
+            <pre>cd ~
+git clone https://github.com/christreadaway/repodoctor2.git
+cd ~/repodoctor2</pre>
+            <button class="btn btn-secondary btn-copy" onclick="copyToClipboard('cd ~ && git clone https://github.com/christreadaway/repodoctor2.git && cd ~/repodoctor2', this)">COPY</button>
+        </div>
+    </div>
+
+    <div class="setup-section">
+        <h2 class="setup-section-title">2. Create Virtual Environment</h2>
+        <div class="setup-code">
+            <pre>cd ~/repodoctor2
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt</pre>
+            <button class="btn btn-secondary btn-copy" onclick="copyToClipboard('cd ~/repodoctor2 && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt', this)">COPY</button>
+        </div>
+    </div>
+
+    <div class="setup-section">
+        <h2 class="setup-section-title">3. Get Your API Keys</h2>
+        <div class="setup-keys">
+            <div class="setup-key-item">
+                <strong>GitHub Personal Access Token</strong>
+                <p>Go to GitHub &rarr; Settings &rarr; Developer settings &rarr; Personal access tokens &rarr; Tokens (classic)</p>
+                <p>Create a token with the <code>repo</code> scope (full control of private repos).</p>
+            </div>
+            <div class="setup-key-item">
+                <strong>Anthropic API Key</strong>
+                <p>Go to console.anthropic.com &rarr; API Keys &rarr; Create Key</p>
+                <p>This powers the AI project summaries. Costs ~$0.001 per summary using Haiku.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="setup-section">
+        <h2 class="setup-section-title">4. Launch the App</h2>
+        <div class="setup-code">
+            <pre>cd ~/repodoctor2
+source venv/bin/activate
+python app.py</pre>
+            <button class="btn btn-secondary btn-copy" onclick="copyToClipboard('cd ~/repodoctor2 && source venv/bin/activate && python app.py', this)">COPY</button>
+        </div>
+        <p>The app starts at <code>http://127.0.0.1:5001</code>. On first launch, you'll enter your API keys and set a password.</p>
+    </div>
+
+    <div class="setup-section setup-highlight">
+        <h2 class="setup-section-title">5. Create a Mac Shortcut (Double-Click to Launch)</h2>
+        <p>A <code>start.command</code> file is included in the repo. Double-click it to launch RepDoctor2 and auto-open the browser.</p>
+
+        <h3 class="setup-subsection">First-time setup:</h3>
+        <div class="setup-code">
+            <pre>chmod +x ~/repodoctor2/start.command</pre>
+            <button class="btn btn-secondary btn-copy" onclick="copyToClipboard('chmod +x ~/repodoctor2/start.command', this)">COPY</button>
+        </div>
+        <p class="setup-hint">This makes the file executable. You only need to do this once.</p>
+
+        <h3 class="setup-subsection">Add to your Dock:</h3>
+        <ol class="setup-steps-list">
+            <li>Open Finder and go to <code>~/repodoctor2/</code></li>
+            <li>Find <code>start.command</code></li>
+            <li>Drag it to the right side of your Dock (past the divider line)</li>
+            <li>Now you can click it anytime to launch RepDoctor2</li>
+        </ol>
+
+        <h3 class="setup-subsection">Or create a Desktop alias:</h3>
+        <div class="setup-code">
+            <pre>ln -s ~/repodoctor2/start.command ~/Desktop/RepDoctor2</pre>
+            <button class="btn btn-secondary btn-copy" onclick="copyToClipboard('ln -s ~/repodoctor2/start.command ~/Desktop/RepDoctor2', this)">COPY</button>
+        </div>
+    </div>
+
+    <div class="setup-section setup-highlight">
+        <h2 class="setup-section-title">6. Keyboard Shortcut (Optional)</h2>
+        <p>To launch RepDoctor2 with a keyboard shortcut like <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>:</p>
+        <ol class="setup-steps-list">
+            <li>Open <strong>Automator</strong> (search in Spotlight)</li>
+            <li>Choose <strong>Quick Action</strong></li>
+            <li>Set "Workflow receives" to <strong>no input</strong> in <strong>any application</strong></li>
+            <li>Add a <strong>Run Shell Script</strong> action</li>
+            <li>Paste this script:
+                <div class="setup-code" style="margin-top: 0.5rem;">
+                    <pre>~/repodoctor2/start.command</pre>
+                    <button class="btn btn-secondary btn-copy" onclick="copyToClipboard('~/repodoctor2/start.command', this)">COPY</button>
+                </div>
+            </li>
+            <li>Save as "Launch RepDoctor2"</li>
+            <li>Go to <strong>System Settings &rarr; Keyboard &rarr; Keyboard Shortcuts &rarr; Services</strong></li>
+            <li>Find "Launch RepDoctor2" and assign <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></li>
+        </ol>
+    </div>
+
+    <div class="setup-section">
+        <h2 class="setup-section-title">Troubleshooting</h2>
+        <div class="setup-trouble-items">
+            <div class="setup-trouble">
+                <strong>"Permission denied" when double-clicking start.command</strong>
+                <p>Run <code>chmod +x ~/repodoctor2/start.command</code> in Terminal.</p>
+            </div>
+            <div class="setup-trouble">
+                <strong>"python3: command not found"</strong>
+                <p>Install Python: <code>brew install python@3.12</code> or download from python.org.</p>
+            </div>
+            <div class="setup-trouble">
+                <strong>Port 5001 already in use</strong>
+                <p>Another app is using port 5001. Kill it: <code>lsof -ti:5001 | xargs kill</code></p>
+            </div>
+            <div class="setup-trouble">
+                <strong>App opens but can't connect to GitHub</strong>
+                <p>Check your GitHub PAT hasn't expired. Go to Settings in RepDoctor2 and reset credentials.</p>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
