@@ -1,11 +1,47 @@
 # REPODOCTOR2 - Session History
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 2
-**Date Range:** 2025-02-14 to 2026-03-02
-**Last Updated:** 2026-03-02
+**Total Sessions Logged:** 3
+**Date Range:** 2025-02-14 to 2026-03-07
+**Last Updated:** 2026-03-07
 
 This file contains a complete history of Claude Code sessions for this repository, automatically generated from transcript files. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+
+## 2026-03-07 — "Updated?" Column for Doc Freshness Detection
+
+### What Was Accomplished
+- Added a new "Updated?" column to the main dashboard table
+- The column intelligently detects whether PRODUCT_SPEC.md and SESSION_NOTES.md were committed within 24 hours of the most recent repo commit
+- Shows YES (green) if docs are fresh, NO (red) if stale, or — if the doc files don't exist
+- Helps Chris catch when he forgets to update session docs at the end of a Claude Code chat
+
+### Technical Details
+**Files Modified:**
+- `github_client.py` — Added `get_last_commit_for_path()` method (fetches last commit timestamp for a specific file path) and `get_last_commit_date()` method (fetches last commit timestamp on a branch). Added freshness comparison logic to `scan_repo_lite()` with a 24-hour threshold.
+- `templates/dashboard.html` — Added "Updated?" column header (sortable, with tooltip), added cell rendering with YES/NO/— display, updated colspan values from 12 to 13.
+
+**Key Decisions:**
+- 24-hour threshold chosen as the window for "close enough" — if docs were updated within 24h of the last code commit, they're considered fresh
+- Uses `abs()` on the time difference so it works regardless of commit order (docs could be committed slightly before or after code)
+- Reuses existing `file-ok` and `file-missing` CSS classes for consistent green/red styling
+- Only makes the extra API calls if at least one of the two doc files exists in the repo (avoids wasting API calls)
+
+### Current Status
+- ✅ "Updated?" column working end-to-end
+- ✅ Committed and pushed to `claude/mac-shortcut-projects-page-wA27C`
+- 🚧 Needs merge to main
+
+### Branch Info
+- Working branch: `claude/mac-shortcut-projects-page-wA27C`
+- Ready to merge to main: Yes
+
+### Next Steps
+1. Merge PR to main and test with a full repo scan
+2. Consider adding a tooltip or hover detail showing the actual timestamps
+3. Consider automating the session-end doc update process so the "Updated?" column is always YES
 
 ---
 

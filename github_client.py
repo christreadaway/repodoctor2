@@ -210,6 +210,37 @@ class GitHubClient:
 
         return {"tag_name": tag_name, "sha": commit_sha, "date": today}
 
+    def get_last_commit_for_path(self, owner: str, repo: str, path: str, ref: str | None = None) -> str | None:
+        """Get the ISO timestamp of the most recent commit that touched the given file path.
+        Returns None if the file has no commits or doesn't exist."""
+        params = {"path": path, "per_page": 1}
+        if ref:
+            params["sha"] = ref
+        resp = self.session.get(
+            f"{GITHUB_API}/repos/{owner}/{repo}/commits",
+            params=params,
+        )
+        if resp.status_code == 200:
+            commits = resp.json()
+            if commits:
+                return commits[0]["commit"]["committer"]["date"]
+        return None
+
+    def get_last_commit_date(self, owner: str, repo: str, ref: str | None = None) -> str | None:
+        """Get the ISO timestamp of the most recent commit on the given branch."""
+        params = {"per_page": 1}
+        if ref:
+            params["sha"] = ref
+        resp = self.session.get(
+            f"{GITHUB_API}/repos/{owner}/{repo}/commits",
+            params=params,
+        )
+        if resp.status_code == 200:
+            commits = resp.json()
+            if commits:
+                return commits[0]["commit"]["committer"]["date"]
+        return None
+
     def get_default_branch_commits(self, owner: str, repo: str, default_branch: str, count: int = 10) -> list[dict]:
         """Get recent commits on the default branch."""
         resp = self.session.get(
@@ -262,6 +293,32 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
 
     required_files = client.check_required_files(owner, name, ref=default_branch)
 
+    # Check if PRODUCT_SPEC.md and SESSION_NOTES.md were updated close to the last commit
+    docs_updated = None  # None = can't determine, True = yes, False = no
+    has_product_spec = required_files.get("PRODUCT_SPEC.md", False)
+    has_session_notes = required_files.get("SESSION_NOTES.md", False)
+
+    if has_product_spec or has_session_notes:
+        last_commit_ts = client.get_last_commit_date(owner, name, ref=default_branch)
+        if last_commit_ts:
+            last_commit_dt = datetime.datetime.fromisoformat(last_commit_ts.replace("Z", "+00:00"))
+            threshold = datetime.timedelta(hours=24)
+            all_fresh = True
+
+            for doc_file, present in [("PRODUCT_SPEC.md", has_product_spec), ("SESSION_NOTES.md", has_session_notes)]:
+                if not present:
+                    all_fresh = False
+                    continue
+                doc_ts = client.get_last_commit_for_path(owner, name, doc_file, ref=default_branch)
+                if doc_ts:
+                    doc_dt = datetime.datetime.fromisoformat(doc_ts.replace("Z", "+00:00"))
+                    if abs(last_commit_dt - doc_dt) > threshold:
+                        all_fresh = False
+                else:
+                    all_fresh = False
+
+            docs_updated = all_fresh
+
     return {
         "owner": owner,
         "name": name,
@@ -278,6 +335,7 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
         "required_files": required_files,
         "files_present": sum(1 for v in required_files.values() if v),
         "files_total": len(required_files),
+        "docs_updated": docs_updated,
     }
 
 
