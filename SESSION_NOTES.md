@@ -10,17 +10,18 @@ This file contains a complete history of Claude Code sessions for this repositor
 ---
 
 
-## 2026-03-07 — "Updated?" Column for Doc Freshness Detection
+## 2026-03-07 — "Updated?" Column + Case-Sensitivity Fix
 
 ### What Was Accomplished
 - Added a new "Updated?" column to the main dashboard table
 - The column intelligently detects whether PRODUCT_SPEC.md and SESSION_NOTES.md were committed within 24 hours of the most recent repo commit
 - Shows YES (green) if docs are fresh, NO (red) if stale, or — if the doc files don't exist
 - Helps Chris catch when he forgets to update session docs at the end of a Claude Code chat
+- Fixed case-sensitivity bug: `check_required_files` now returns actual filenames from disk so that commit lookups and file detection work regardless of casing (e.g. `product_spec.md` vs `PRODUCT_SPEC.md`)
 
 ### Technical Details
 **Files Modified:**
-- `github_client.py` — Added `get_last_commit_for_path()` method (fetches last commit timestamp for a specific file path) and `get_last_commit_date()` method (fetches last commit timestamp on a branch). Added freshness comparison logic to `scan_repo_lite()` with a 24-hour threshold.
+- `github_client.py` — Added `get_last_commit_for_path()` and `get_last_commit_date()` methods. Refactored `check_required_files()` to return a tuple of `(results, actual_names)` — the `actual_names` dict maps display names to real filenames on disk, enabling case-insensitive commit timestamp lookups. Updated `scan_repo_lite()` to use actual filenames when querying the GitHub commits API.
 - `templates/dashboard.html` — Added "Updated?" column header (sortable, with tooltip), added cell rendering with YES/NO/— display, updated colspan values from 12 to 13.
 
 **Key Decisions:**
@@ -28,9 +29,11 @@ This file contains a complete history of Claude Code sessions for this repositor
 - Uses `abs()` on the time difference so it works regardless of commit order (docs could be committed slightly before or after code)
 - Reuses existing `file-ok` and `file-missing` CSS classes for consistent green/red styling
 - Only makes the extra API calls if at least one of the two doc files exists in the repo (avoids wasting API calls)
+- `check_required_files` builds a `stem_to_actual` map preserving the real filename for each stem match, so downstream code can reference files by their actual name on GitHub
 
 ### Current Status
 - ✅ "Updated?" column working end-to-end
+- ✅ Case-insensitive file matching for both detection and commit lookups
 - ✅ Committed and pushed to `claude/mac-shortcut-projects-page-wA27C`
 - 🚧 Needs merge to main
 

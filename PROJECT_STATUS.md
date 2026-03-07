@@ -44,4 +44,4 @@
 ## Last Session
 - **Date:** 2026-03-07
 - **Branch:** `claude/mac-shortcut-projects-page-wA27C`
-- **Summary:** Added "Updated?" dashboard column that checks if PRODUCT_SPEC.md and SESSION_NOTES.md were committed within 24h of the last repo commit. Shows YES/NO/— to flag forgotten session-end updates.
+- **Summary:** Added "Updated?" dashboard column that checks if PRODUCT_SPEC.md and SESSION_NOTES.md were committed within 24h of the last repo commit. Shows YES/NO/— to flag forgotten session-end updates. Fixed case-sensitivity bug in file matching so repos with lowercase filenames (e.g. `product_spec.md`) are detected correctly.

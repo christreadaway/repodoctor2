@@ -1,6 +1,6 @@
 # RepoDoctor2 — Product Specification
 
-**Version:** 5.0 | **Date:** 2026-03-02 | **Repo:** github.com/christreadaway/repodoctor2
+**Version:** 6.0 | **Date:** 2026-03-07 | **Repo:** github.com/christreadaway/repodoctor2
 
 ---
 
@@ -46,7 +46,8 @@ RepoDoctor v1 proved the concept but was tightly coupled and hard to extend. Rep
 **Files:** `app.py` (dashboard route), `templates/dashboard.html`
 
 - Sortable table of all user-owned and collaborator repos
-- Columns: repo name, visibility (public/private), created date, updated date, branch count, 6 required file indicators, file score
+- Columns: repo name, visibility (public/private), created date, updated date, branch count, 6 required file indicators, "Updated?" indicator, file score
+- "Updated?" column: checks if PRODUCT_SPEC.md and SESSION_NOTES.md were committed within 24 hours of the most recent repo commit — YES (green), NO (red), or — (files don't exist)
 - Summary stats bar: total repos, total branches, repos missing required files
 - Expandable branch name lists (click branch count to toggle)
 - Color-coded rows: complete repos (all files present) vs. incomplete
@@ -68,7 +69,7 @@ Six files are checked per repo, with flexible matching (case-insensitive, any ex
 | `PROJECT_STATUS.md` | Current state snapshot |
 | `SESSION_NOTES.md` | Session-by-session development log |
 
-Matching is stem-based: `business_spec.pdf`, `BUSINESS_SPEC.md`, `Business_Spec.txt` all count. A single API call fetches the root directory listing, replacing 6 individual file checks (~83% fewer API requests).
+Matching is stem-based: `business_spec.pdf`, `BUSINESS_SPEC.md`, `Business_Spec.txt` all count. A single API call fetches the root directory listing, replacing 6 individual file checks (~83% fewer API requests). The matcher also returns the actual filenames found on disk, so downstream features (like the "Updated?" freshness check) can reference files by their real name.
 
 ### 4.4 Repository Detail View
 
@@ -342,6 +343,7 @@ Coverage areas:
 |---|---|
 | Credential encryption | Working |
 | Dashboard (repo table + file checks) | Working |
+| "Updated?" doc freshness column | Working |
 | Repo detail (spec viewer + branch list) | Working |
 | Settings | Working |
 | Cost tracking | Working |
