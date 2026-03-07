@@ -1,5 +1,5 @@
 """
-AI Analysis Engine for RepDoctor2.
+AI Analysis Engine for RepoDoctor.
 Uses the Anthropic API (Claude) to analyze branch content.
 """
 

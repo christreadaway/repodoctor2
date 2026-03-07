@@ -1,5 +1,5 @@
 """
-GitHub API client for RepDoctor2.
+GitHub API client for RepoDoctor.
 Handles all GitHub REST API v3 interactions.
 """
 
@@ -303,28 +303,33 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
 
     required_files, actual_names = client.check_required_files(owner, name, ref=default_branch)
 
-    # Check if PRODUCT_SPEC.md and SESSION_NOTES.md were updated close to the last commit
-    docs_updated = None  # None = can't determine, True = yes, False = no
+    # Check if SESSION_NOTES.md and PRODUCT_SPEC.md are up to date.
+    # "Up to date" means: docs were updated at the same time as or after other files.
+    # If docs were last updated BEFORE other files, they're stale.
+    docs_updated = None  # None = can't determine / docs not present, True = yes, False = no
     has_product_spec = required_files.get("PRODUCT_SPEC.md", False)
     has_session_notes = required_files.get("SESSION_NOTES.md", False)
 
-    if has_product_spec or has_session_notes:
-        last_commit_ts = client.get_last_commit_date(owner, name, ref=default_branch)
-        if last_commit_ts:
-            last_commit_dt = datetime.datetime.fromisoformat(last_commit_ts.replace("Z", "+00:00"))
-            threshold = datetime.timedelta(hours=24)
+    doc_filenames = set()
+    if has_session_notes:
+        doc_filenames.add(actual_names.get("SESSION_NOTES.md", "SESSION_NOTES.md"))
+    if has_product_spec:
+        doc_filenames.add(actual_names.get("PRODUCT_SPEC.md", "PRODUCT_SPEC.md"))
+
+    if doc_filenames:
+        # Get the latest commit that touched any non-doc file (the "other files" baseline)
+        latest_other_ts = client.get_last_commit_date(owner, name, ref=default_branch)
+
+        if latest_other_ts:
+            latest_other_dt = datetime.datetime.fromisoformat(latest_other_ts.replace("Z", "+00:00"))
             all_fresh = True
 
-            for display_name, present in [("PRODUCT_SPEC.md", has_product_spec), ("SESSION_NOTES.md", has_session_notes)]:
-                if not present:
-                    all_fresh = False
-                    continue
-                # Use the actual filename on disk (may differ in case/extension)
-                real_name = actual_names.get(display_name, display_name)
+            for real_name in doc_filenames:
                 doc_ts = client.get_last_commit_for_path(owner, name, real_name, ref=default_branch)
                 if doc_ts:
                     doc_dt = datetime.datetime.fromisoformat(doc_ts.replace("Z", "+00:00"))
-                    if abs(last_commit_dt - doc_dt) > threshold:
+                    # If the doc was last touched BEFORE the latest repo commit, it's stale
+                    if doc_dt < latest_other_dt:
                         all_fresh = False
                 else:
                     all_fresh = False

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}RepDoctor2{% endblock %}</title>
+    <title>{% block title %}RepoDoctor{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Fira+Code:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -14,7 +14,7 @@
 
     {% if session.get('authenticated') %}
     <nav class="top-nav">
-        <div class="nav-brand">RepDoctor2</div>
+        <div class="nav-brand">RepoDoctor</div>
         <div class="nav-links">
             <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">My Repos</a>
             <a href="{{ url_for('projects') }}" class="nav-link {% if request.endpoint == 'projects' %}active{% endif %}">Projects</a>
@@ -50,7 +50,7 @@
     {% if session.get('authenticated') %}
     <footer class="app-footer">
         <div class="footer-content">
-            <span class="footer-label">RepDoctor2</span>
+            <span class="footer-label">RepoDoctor</span>
         </div>
     </footer>
     {% endif %}

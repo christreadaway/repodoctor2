@@ -1,5 +1,5 @@
 /* ================================================================
-   RepDoctor2 — Retro Terminal Stylesheet
+   RepoDoctor — Retro Terminal Stylesheet
    1980s phosphor-green terminal aesthetic with world-class usability.
    ================================================================ */
 
@@ -2076,6 +2076,11 @@ tbody tr:hover {
   opacity: 0.6;
 }
 
+.file-stale {
+  color: var(--amber-100);
+  font-weight: 700;
+}
+
 .file-score {
   font-weight: 700;
   font-size: 0.85rem;
@@ -2114,7 +2119,7 @@ tbody tr:hover {
 
 .date-value {
   font-size: 0.8rem;
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 /* Sortable column headers */
