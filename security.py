@@ -1,5 +1,5 @@
 """
-Security module for RepDoctor2.
+Security module for RepoDoctor.
 Handles credential encryption/decryption using Fernet + PBKDF2.
 """
 

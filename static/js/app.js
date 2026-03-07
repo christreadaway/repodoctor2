@@ -1,5 +1,5 @@
 /**
- * RepDoctor2 -- Frontend JavaScript
+ * RepoDoctor -- Frontend JavaScript
  * Vanilla JS, no frameworks. Retro terminal aesthetic.
  */
 

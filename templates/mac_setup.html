@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}RepDoctor2 — Mac Setup{% endblock %}
+{% block title %}RepoDoctor — Mac Setup{% endblock %}
 {% block content %}
 <div class="page-header">
     <h1>Mac Setup Guide</h1>
@@ -69,7 +69,7 @@ python app.py</pre>
 
     <div class="setup-section setup-highlight">
         <h2 class="setup-section-title">5. Create a Mac Shortcut (Double-Click to Launch)</h2>
-        <p>A <code>start.command</code> file is included in the repo. Double-click it to launch RepDoctor2 and auto-open the browser.</p>
+        <p>A <code>start.command</code> file is included in the repo. Double-click it to launch RepoDoctor and auto-open the browser.</p>
 
         <h3 class="setup-subsection">First-time setup:</h3>
         <div class="setup-code">
@@ -83,19 +83,19 @@ python app.py</pre>
             <li>Open Finder and go to <code>~/repodoctor2/</code></li>
             <li>Find <code>start.command</code></li>
             <li>Drag it to the right side of your Dock (past the divider line)</li>
-            <li>Now you can click it anytime to launch RepDoctor2</li>
+            <li>Now you can click it anytime to launch RepoDoctor</li>
         </ol>
 
         <h3 class="setup-subsection">Or create a Desktop alias:</h3>
         <div class="setup-code">
-            <pre>ln -s ~/repodoctor2/start.command ~/Desktop/RepDoctor2</pre>
-            <button class="btn btn-secondary btn-copy" onclick="copyToClipboard('ln -s ~/repodoctor2/start.command ~/Desktop/RepDoctor2', this)">COPY</button>
+            <pre>ln -s ~/repodoctor2/start.command ~/Desktop/RepoDoctor</pre>
+            <button class="btn btn-secondary btn-copy" onclick="copyToClipboard('ln -s ~/repodoctor2/start.command ~/Desktop/RepoDoctor', this)">COPY</button>
         </div>
     </div>
 
     <div class="setup-section setup-highlight">
         <h2 class="setup-section-title">6. Keyboard Shortcut (Optional)</h2>
-        <p>To launch RepDoctor2 with a keyboard shortcut like <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>:</p>
+        <p>To launch RepoDoctor with a keyboard shortcut like <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>:</p>
         <ol class="setup-steps-list">
             <li>Open <strong>Automator</strong> (search in Spotlight)</li>
             <li>Choose <strong>Quick Action</strong></li>
@@ -107,9 +107,9 @@ python app.py</pre>
                     <button class="btn btn-secondary btn-copy" onclick="copyToClipboard('~/repodoctor2/start.command', this)">COPY</button>
                 </div>
             </li>
-            <li>Save as "Launch RepDoctor2"</li>
+            <li>Save as "Launch RepoDoctor"</li>
             <li>Go to <strong>System Settings &rarr; Keyboard &rarr; Keyboard Shortcuts &rarr; Services</strong></li>
-            <li>Find "Launch RepDoctor2" and assign <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></li>
+            <li>Find "Launch RepoDoctor" and assign <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></li>
         </ol>
     </div>
 
@@ -130,7 +130,7 @@ python app.py</pre>
             </div>
             <div class="setup-trouble">
                 <strong>App opens but can't connect to GitHub</strong>
-                <p>Check your GitHub PAT hasn't expired. Go to Settings in RepDoctor2 and reset credentials.</p>
+                <p>Check your GitHub PAT hasn't expired. Go to Settings in RepoDoctor and reset credentials.</p>
             </div>
         </div>
     </div>

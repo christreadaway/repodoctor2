@@ -1,5 +1,5 @@
 """
-Tests for RepDoctor2.
+Tests for RepoDoctor.
 Covers security, models, github client classification, AI analyzer prompt building, and Flask routes.
 """
 
@@ -323,7 +323,7 @@ class TestFlaskApp(unittest.TestCase):
         """Login page returns 200."""
         resp = self.client.get("/login")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn(b"RepDoctor2", resp.data)
+        self.assertIn(b"RepoDoctor", resp.data)
 
     def test_unauthenticated_redirect(self):
         """Unauthenticated access to dashboard redirects to login."""

@@ -1,12 +1,12 @@
 #!/bin/bash
-# RepDoctor2 — Mac Launcher
-# Double-click this file to start RepDoctor2 and open the browser.
+# RepoDoctor — Mac Launcher
+# Double-click this file to start RepoDoctor and open the browser.
 
 # Navigate to the project directory
-cd "$(dirname "$0")" || { echo "ERROR: Could not find RepDoctor2 directory."; read -p "Press Enter to close..."; exit 1; }
+cd "$(dirname "$0")" || { echo "ERROR: Could not find RepoDoctor directory."; read -p "Press Enter to close..."; exit 1; }
 
 echo "========================================"
-echo "  RepDoctor2 — Starting up..."
+echo "  RepoDoctor — Starting up..."
 echo "========================================"
 echo ""
 
@@ -24,12 +24,12 @@ fi
 
 # Kill any existing instance on port 5001
 if lsof -ti:5001 > /dev/null 2>&1; then
-    echo "Stopping existing RepDoctor2 instance..."
+    echo "Stopping existing RepoDoctor instance..."
     lsof -ti:5001 | xargs kill 2>/dev/null
     sleep 1
 fi
 
-echo "Starting RepDoctor2 on http://127.0.0.1:5001"
+echo "Starting RepoDoctor on http://127.0.0.1:5001"
 echo "Press Ctrl+C to stop the server."
 echo ""
 

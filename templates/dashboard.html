@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}RepDoctor2 — My Repos{% endblock %}
+{% block title %}RepoDoctor — My Repos{% endblock %}
 {% block content %}
 <div class="page-header">
     <h1>My Repositories</h1>
@@ -63,14 +63,14 @@
                 <th class="col-vis sortable" data-sort="text" data-col="1">Visibility</th>
                 <th class="col-date sortable" data-sort="text" data-col="2">Created</th>
                 <th class="col-date sortable" data-sort="text" data-col="3">Updated</th>
-                <th class="col-branches sortable" data-sort="num" data-col="4">Branches</th>
-                <th class="col-file sortable" data-sort="text" data-col="5">CLAUDE</th>
-                <th class="col-file sortable" data-sort="text" data-col="6">LICENSE</th>
-                <th class="col-file sortable" data-sort="text" data-col="7">BIZ</th>
-                <th class="col-file sortable" data-sort="text" data-col="8">PROD</th>
-                <th class="col-file sortable" data-sort="text" data-col="9">STATUS</th>
-                <th class="col-file sortable" data-sort="text" data-col="10">NOTES</th>
-                <th class="col-file sortable" data-sort="text" data-col="11" title="Were PRODUCT_SPEC.md and SESSION_NOTES.md updated within 24h of the last commit?">Updated?</th>
+                <th class="col-file sortable" data-sort="text" data-col="4" title="Are SESSION_NOTES.md and PRODUCT_SPEC.md up to date with the latest changes?">Current?</th>
+                <th class="col-branches sortable" data-sort="num" data-col="5">Branches</th>
+                <th class="col-file sortable" data-sort="text" data-col="6">CLAUDE</th>
+                <th class="col-file sortable" data-sort="text" data-col="7">LICENSE</th>
+                <th class="col-file sortable" data-sort="text" data-col="8">BIZ</th>
+                <th class="col-file sortable" data-sort="text" data-col="9">PROD</th>
+                <th class="col-file sortable" data-sort="text" data-col="10">STATUS</th>
+                <th class="col-file sortable" data-sort="text" data-col="11">NOTES</th>
                 <th class="col-score sortable" data-sort="text" data-col="12">Score</th>
             </tr>
         </thead>
@@ -95,6 +95,15 @@
                 </td>
                 <td class="col-date">
                     <span class="date-value">{{ repo.updated_at[:10] if repo.updated_at else '—' }}</span>
+                </td>
+                <td class="col-file">
+                    {% if repo.docs_updated is none %}
+                    <span class="file-missing" title="Doc files not present">—</span>
+                    {% elif repo.docs_updated %}
+                    <span class="file-ok" title="Docs are up to date">Yes</span>
+                    {% else %}
+                    <span class="file-stale" title="Docs were last updated before other files">No</span>
+                    {% endif %}
                 </td>
                 <td class="col-branches">
                     {% if repo.total_branch_count > 1 %}
@@ -121,15 +130,6 @@
                 </td>
                 <td class="col-file">
                     {% if files.get('SESSION_NOTES.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
-                </td>
-                <td class="col-file">
-                    {% if repo.docs_updated is none %}
-                    <span class="file-missing" title="Doc files not present">—</span>
-                    {% elif repo.docs_updated %}
-                    <span class="file-ok" title="Docs updated within 24h of last commit">YES</span>
-                    {% else %}
-                    <span class="file-missing" title="Docs NOT updated with last commit">NO</span>
-                    {% endif %}
                 </td>
                 <td class="col-score">
                     <span class="file-score {% if repo.files_present == repo.files_total %}score-perfect{% elif repo.files_present >= 4 %}score-good{% elif repo.files_present >= 2 %}score-fair{% else %}score-poor{% endif %}">{{ repo.files_present }}/{{ repo.files_total }}</span>

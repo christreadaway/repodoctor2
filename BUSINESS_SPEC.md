@@ -1,4 +1,4 @@
-# RepDoctor2 — Business Product Spec
+# RepoDoctor — Business Product Spec
 **Version:** 4.0 | **Date:** 2026-02-16 | **Repo:** github.com/christreadaway/repodoctor2
 
 ---
@@ -16,7 +16,7 @@ A ground-up rebuild of RepoDoctor with a modular Flask architecture, user-select
 ## 4. Core Features
 
 ### Guided Onboarding (4-Step Walkthrough)
-1. **Welcome** — Explains what RepDoctor2 does in plain language
+1. **Welcome** — Explains what RepoDoctor does in plain language
 2. **Connect GitHub** — Paste Personal Access Token with clear instructions
 3. **Connect AI** — Paste Anthropic API key with model selection
 4. **Set Password** — Create encryption password for credential storage
@@ -87,7 +87,7 @@ A ground-up rebuild of RepoDoctor with a modular Flask architecture, user-select
 - Display mode preference split
 
 ## 10. Open Questions / Next Steps
-- Consolidate RepoDoctor and RepDoctor2 into a single product
+- Consolidate RepoDoctor and RepoDoctor into a single product
 - Docker deployment option
 - Claude conversation import (port from RepoDoctor v1)
 - Branch cleanup automation with scheduling

@@ -1,5 +1,5 @@
 """
-RepDoctor2 — AI-Powered Repository Management Tool
+RepoDoctor — AI-Powered Repository Management Tool
 Main Flask application.
 
 Simplified mode: repo overview with branch counts + required file checks.

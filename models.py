@@ -1,5 +1,5 @@
 """
-Data models and local storage for RepDoctor2.
+Data models and local storage for RepoDoctor.
 Handles scan history, analysis cache, action log, and preferences.
 """
 
