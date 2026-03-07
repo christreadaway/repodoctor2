@@ -148,19 +148,26 @@ class GitHubClient:
             return []
         return [item["name"] for item in resp.json() if isinstance(item, dict)]
 
-    def check_required_files(self, owner: str, repo: str, ref: str | None = None) -> dict[str, bool]:
-        """Check which required project files exist (flexible: case-insensitive, any extension)."""
+    def check_required_files(self, owner: str, repo: str, ref: str | None = None) -> tuple[dict[str, bool], dict[str, str]]:
+        """Check which required project files exist (flexible: case-insensitive, any extension).
+
+        Returns:
+            (results, actual_names) where results maps display_name -> bool,
+            and actual_names maps display_name -> real filename on disk (only for found files).
+        """
         root_files = self.get_root_files(owner, repo, ref=ref)
-        # Lowercase all root filenames for case-insensitive matching
-        root_lower = [f.lower() for f in root_files]
-        # Strip extensions for stem matching
-        root_stems = set()
-        for f in root_lower:
-            # Keep the full name and also the stem (without extension)
-            root_stems.add(f)
-            dot = f.rfind(".")
+
+        # Build a map from lowercase stem -> actual filename
+        stem_to_actual = {}
+        name_lower_to_actual = {}
+        for f in root_files:
+            fl = f.lower()
+            name_lower_to_actual[fl] = f
+            dot = fl.rfind(".")
             if dot > 0:
-                root_stems.add(f[:dot])
+                stem_to_actual[fl[:dot]] = f
+            else:
+                stem_to_actual[fl] = f
 
         required = {
             "BUSINESS_SPEC.md": "business_spec",
@@ -171,10 +178,13 @@ class GitHubClient:
             "SESSION_NOTES.md": "session_notes",
         }
         results = {}
+        actual_names = {}
         for display_name, stem in required.items():
-            # Match if the stem exists (with any extension) or exact lowercase match
-            results[display_name] = stem in root_stems
-        return results
+            found = stem in stem_to_actual
+            results[display_name] = found
+            if found:
+                actual_names[display_name] = stem_to_actual[stem]
+        return results, actual_names
 
     def create_archive_tag(
         self, owner: str, repo: str, branch_name: str, commit_sha: str, message: str
@@ -291,7 +301,7 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
     total_branch_count = len(branches)
     non_default_count = total_branch_count - 1 if total_branch_count > 0 else 0
 
-    required_files = client.check_required_files(owner, name, ref=default_branch)
+    required_files, actual_names = client.check_required_files(owner, name, ref=default_branch)
 
     # Check if PRODUCT_SPEC.md and SESSION_NOTES.md were updated close to the last commit
     docs_updated = None  # None = can't determine, True = yes, False = no
@@ -305,11 +315,13 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
             threshold = datetime.timedelta(hours=24)
             all_fresh = True
 
-            for doc_file, present in [("PRODUCT_SPEC.md", has_product_spec), ("SESSION_NOTES.md", has_session_notes)]:
+            for display_name, present in [("PRODUCT_SPEC.md", has_product_spec), ("SESSION_NOTES.md", has_session_notes)]:
                 if not present:
                     all_fresh = False
                     continue
-                doc_ts = client.get_last_commit_for_path(owner, name, doc_file, ref=default_branch)
+                # Use the actual filename on disk (may differ in case/extension)
+                real_name = actual_names.get(display_name, display_name)
+                doc_ts = client.get_last_commit_for_path(owner, name, real_name, ref=default_branch)
                 if doc_ts:
                     doc_dt = datetime.datetime.fromisoformat(doc_ts.replace("Z", "+00:00"))
                     if abs(last_commit_dt - doc_dt) > threshold:
