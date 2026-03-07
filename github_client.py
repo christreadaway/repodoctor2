@@ -304,8 +304,8 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
     required_files, actual_names = client.check_required_files(owner, name, ref=default_branch)
 
     # Check if SESSION_NOTES.md and PRODUCT_SPEC.md are up to date.
-    # "Up to date" means: docs were updated at the same time as or after other files.
-    # If docs were last updated BEFORE other files, they're stale.
+    # "Up to date" = docs updated around the same time as (within 24h) or after other files.
+    # "Stale" = docs last updated more than 24h before the latest repo activity.
     docs_updated = None  # None = can't determine / docs not present, True = yes, False = no
     has_product_spec = required_files.get("PRODUCT_SPEC.md", False)
     has_session_notes = required_files.get("SESSION_NOTES.md", False)
@@ -317,19 +317,22 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
         doc_filenames.add(actual_names.get("PRODUCT_SPEC.md", "PRODUCT_SPEC.md"))
 
     if doc_filenames:
-        # Get the latest commit that touched any non-doc file (the "other files" baseline)
-        latest_other_ts = client.get_last_commit_date(owner, name, ref=default_branch)
+        # Get the latest commit on the default branch (any file)
+        latest_commit_ts = client.get_last_commit_date(owner, name, ref=default_branch)
 
-        if latest_other_ts:
-            latest_other_dt = datetime.datetime.fromisoformat(latest_other_ts.replace("Z", "+00:00"))
+        if latest_commit_ts:
+            latest_commit_dt = datetime.datetime.fromisoformat(latest_commit_ts.replace("Z", "+00:00"))
+            staleness_threshold = datetime.timedelta(hours=4)
             all_fresh = True
 
             for real_name in doc_filenames:
                 doc_ts = client.get_last_commit_for_path(owner, name, real_name, ref=default_branch)
                 if doc_ts:
                     doc_dt = datetime.datetime.fromisoformat(doc_ts.replace("Z", "+00:00"))
-                    # If the doc was last touched BEFORE the latest repo commit, it's stale
-                    if doc_dt < latest_other_dt:
+                    # Stale only if doc was updated more than 24h before the latest commit.
+                    # This accounts for merge commits, CI, etc. that happen shortly after
+                    # a session where docs were properly updated.
+                    if doc_dt < (latest_commit_dt - staleness_threshold):
                         all_fresh = False
                 else:
                     all_fresh = False
