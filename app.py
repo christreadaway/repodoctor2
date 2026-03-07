@@ -313,6 +313,48 @@ def session_cost():
     return jsonify(_session_cost.to_dict())
 
 
+# --- API: Debug file detection for a repo ---
+
+@app.route("/api/debug-files/<owner>/<name>")
+@_require_auth
+def debug_files(owner, name):
+    """Show exactly what files the GitHub API returns for a repo root, and how they match."""
+    client = _get_github_client()
+    if not client:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    # Find default branch from scan results or fall back to 'main'
+    default_branch = "main"
+    if _scan_results:
+        for r in _scan_results.get("repos", []):
+            if r["owner"] == owner and r["name"] == name:
+                default_branch = r.get("default_branch", "main")
+                break
+
+    root_files = client.get_root_files(owner, name, ref=default_branch)
+    required_files, actual_names = client.check_required_files(owner, name, ref=default_branch)
+
+    # Build stem map for debugging
+    stem_map = {}
+    for f in root_files:
+        fl = f.lower()
+        dot = fl.rfind(".")
+        stem = fl[:dot] if dot > 0 else fl
+        stem_map[stem] = f
+
+    return jsonify({
+        "repo": f"{owner}/{name}",
+        "default_branch": default_branch,
+        "root_files_from_api": root_files,
+        "root_file_count": len(root_files),
+        "stem_map": stem_map,
+        "required_files_result": required_files,
+        "actual_names": actual_names,
+        "files_present": sum(1 for v in required_files.values() if v),
+        "files_total": len(required_files),
+    })
+
+
 # --- Projects Summary ---
 
 @app.route("/projects")
@@ -791,5 +833,7 @@ def mac_setup():
 
 
 if __name__ == "__main__":
+    import logging
+    logging.basicConfig(level=logging.DEBUG)
     models._ensure_dirs()
     app.run(host="127.0.0.1", port=5001, debug=True)

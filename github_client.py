@@ -4,9 +4,12 @@ Handles all GitHub REST API v3 interactions.
 """
 
 import datetime
+import logging
+import time
 import requests
 
 GITHUB_API = "https://api.github.com"
+logger = logging.getLogger(__name__)
 
 
 class GitHubClient:
@@ -17,9 +20,25 @@ class GitHubClient:
             "Accept": "application/vnd.github.v3+json",
         })
 
+    def _get(self, url: str, **kwargs) -> requests.Response:
+        """Make a GET request with rate-limit retry."""
+        resp = self.session.get(url, **kwargs)
+        # If rate-limited, wait and retry once
+        if resp.status_code == 403 and "rate limit" in resp.text.lower():
+            reset_at = resp.headers.get("X-RateLimit-Reset")
+            if reset_at:
+                wait = max(1, int(reset_at) - int(time.time()) + 1)
+                wait = min(wait, 60)  # Cap at 60s
+            else:
+                wait = 5
+            logger.warning("GitHub rate limit hit, waiting %ds", wait)
+            time.sleep(wait)
+            resp = self.session.get(url, **kwargs)
+        return resp
+
     def verify_token(self) -> dict | None:
         """Verify the PAT and return user info, or None if invalid."""
-        resp = self.session.get(f"{GITHUB_API}/user")
+        resp = self._get(f"{GITHUB_API}/user")
         if resp.status_code == 200:
             data = resp.json()
             scopes = resp.headers.get("X-OAuth-Scopes", "")
@@ -32,7 +51,7 @@ class GitHubClient:
         repos = []
         page = 1
         while True:
-            resp = self.session.get(
+            resp = self._get(
                 f"{GITHUB_API}/user/repos",
                 params={
                     "per_page": 100,
@@ -56,7 +75,7 @@ class GitHubClient:
         branches = []
         page = 1
         while True:
-            resp = self.session.get(
+            resp = self._get(
                 f"{GITHUB_API}/repos/{owner}/{repo}/branches",
                 params={"per_page": 100, "page": page},
             )
@@ -71,7 +90,7 @@ class GitHubClient:
 
     def compare_branches(self, owner: str, repo: str, base: str, head: str) -> dict | None:
         """Compare two branches. Returns comparison data or None on error."""
-        resp = self.session.get(
+        resp = self._get(
             f"{GITHUB_API}/repos/{owner}/{repo}/compare/{base}...{head}",
         )
         if resp.status_code == 200:
@@ -80,7 +99,7 @@ class GitHubClient:
 
     def get_pulls(self, owner: str, repo: str, state: str = "open") -> list[dict]:
         """Fetch pull requests for a repo."""
-        resp = self.session.get(
+        resp = self._get(
             f"{GITHUB_API}/repos/{owner}/{repo}/pulls",
             params={"state": state, "per_page": 100},
         )
@@ -93,7 +112,7 @@ class GitHubClient:
         tags = []
         page = 1
         while True:
-            resp = self.session.get(
+            resp = self._get(
                 f"{GITHUB_API}/repos/{owner}/{repo}/tags",
                 params={"per_page": 100, "page": page},
             )
@@ -108,7 +127,7 @@ class GitHubClient:
 
     def check_claude_md(self, owner: str, repo: str) -> bool:
         """Check if CLAUDE.md exists in the repo root."""
-        resp = self.session.get(
+        resp = self._get(
             f"{GITHUB_API}/repos/{owner}/{repo}/contents/CLAUDE.md",
         )
         return resp.status_code == 200
@@ -119,10 +138,9 @@ class GitHubClient:
         params = {}
         if ref:
             params["ref"] = ref
-        resp = self.session.get(
+        resp = self._get(
             f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}",
             params=params,
-            headers={"If-None-Match": "", "Accept": "application/vnd.github.v3+json"},
         )
         if resp.status_code != 200:
             return None
@@ -139,14 +157,20 @@ class GitHubClient:
         params = {}
         if ref:
             params["ref"] = ref
-        resp = self.session.get(
+        resp = self._get(
             f"{GITHUB_API}/repos/{owner}/{repo}/contents",
             params=params,
-            headers={"If-None-Match": ""},
         )
         if resp.status_code != 200:
+            logger.warning("get_root_files failed for %s/%s (ref=%s): HTTP %d", owner, repo, ref, resp.status_code)
             return []
-        return [item["name"] for item in resp.json() if isinstance(item, dict)]
+        data = resp.json()
+        if not isinstance(data, list):
+            logger.warning("get_root_files for %s/%s returned non-list: %s", owner, repo, type(data).__name__)
+            return []
+        names = [item["name"] for item in data if isinstance(item, dict)]
+        logger.debug("get_root_files %s/%s: found %d items: %s", owner, repo, len(names), names)
+        return names
 
     def check_required_files(self, owner: str, repo: str, ref: str | None = None) -> tuple[dict[str, bool], dict[str, str]]:
         """Check which required project files exist (flexible: case-insensitive, any extension).
@@ -184,6 +208,10 @@ class GitHubClient:
             results[display_name] = found
             if found:
                 actual_names[display_name] = stem_to_actual[stem]
+
+        found_count = sum(1 for v in results.values() if v)
+        logger.debug("check_required_files %s/%s: %d/%d found. stems=%s, results=%s",
+                      owner, repo, found_count, len(required), list(stem_to_actual.keys()), results)
         return results, actual_names
 
     def create_archive_tag(
@@ -226,7 +254,7 @@ class GitHubClient:
         params = {"path": path, "per_page": 1}
         if ref:
             params["sha"] = ref
-        resp = self.session.get(
+        resp = self._get(
             f"{GITHUB_API}/repos/{owner}/{repo}/commits",
             params=params,
         )
@@ -241,7 +269,7 @@ class GitHubClient:
         params = {"per_page": 1}
         if ref:
             params["sha"] = ref
-        resp = self.session.get(
+        resp = self._get(
             f"{GITHUB_API}/repos/{owner}/{repo}/commits",
             params=params,
         )
@@ -253,7 +281,7 @@ class GitHubClient:
 
     def get_default_branch_commits(self, owner: str, repo: str, default_branch: str, count: int = 10) -> list[dict]:
         """Get recent commits on the default branch."""
-        resp = self.session.get(
+        resp = self._get(
             f"{GITHUB_API}/repos/{owner}/{repo}/commits",
             params={"sha": default_branch, "per_page": count},
         )
