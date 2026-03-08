@@ -1,11 +1,45 @@
 # REPODOCTOR2 - Session History
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 3
-**Date Range:** 2025-02-14 to 2026-03-07
-**Last Updated:** 2026-03-07
+**Total Sessions Logged:** 4
+**Date Range:** 2025-02-14 to 2026-03-08
+**Last Updated:** 2026-03-08
 
 This file contains a complete history of Claude Code sessions for this repository, automatically generated from transcript files. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+
+## 2026-03-08 — Sticky Headers + Staleness Threshold Fix
+
+### What Was Accomplished
+- Made dashboard table headers persistent/sticky so column labels stay visible when scrolling down through repos
+- Fixed the "Current?" column staleness logic — was using a 4-hour threshold which was far too aggressive. A single commit hours after doc updates would mark docs as stale. Changed to 7-day threshold so docs are only flagged stale if they haven't been touched within a week of the latest repo activity
+- This directly addresses the "longwayhome" repo incorrectly showing as not updated
+
+### Technical Details
+**Files Modified:**
+- `static/css/style.css` — Added `position: sticky; top: 0; z-index: 10;` to `.repo-table thead`, set background opacity to 1 (was 0.8, which caused content to bleed through). Added `max-height: 75vh` and `overflow-y: auto` to `.repo-table-wrap` so sticky works within the scrollable container.
+- `github_client.py` — Changed `staleness_threshold` from `timedelta(hours=4)` to `timedelta(days=7)`. Updated comments to match.
+
+**Key Decisions:**
+- 7-day threshold balances catching genuinely stale docs vs false positives from normal development cadence
+- Used `max-height: 75vh` so the table scrolls within the viewport rather than the whole page
+- Set thead background to fully opaque so table rows don't show through the sticky header
+
+### Current Status
+- ✅ Sticky headers working
+- ✅ Staleness threshold relaxed to 7 days
+- ✅ Committed and pushed to `claude/fix-updated-status-6y3UR`
+
+### Branch Info
+- Working branch: `claude/fix-updated-status-6y3UR`
+- Ready to merge to main: Yes
+
+### Next Steps
+1. Merge to main and re-scan to verify longwayhome shows correct status
+2. Consider making the staleness threshold configurable in settings
+3. Test sticky headers on mobile/small screens
 
 ---
 
