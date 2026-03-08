@@ -332,8 +332,8 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
     required_files, actual_names = client.check_required_files(owner, name, ref=default_branch)
 
     # Check if SESSION_NOTES.md and PRODUCT_SPEC.md are up to date.
-    # "Up to date" = docs updated around the same time as (within 24h) or after other files.
-    # "Stale" = docs last updated more than 24h before the latest repo activity.
+    # "Up to date" = docs updated within 7 days of latest repo activity.
+    # "Stale" = docs last updated more than 7 days before the latest commit.
     docs_updated = None  # None = can't determine / docs not present, True = yes, False = no
     has_product_spec = required_files.get("PRODUCT_SPEC.md", False)
     has_session_notes = required_files.get("SESSION_NOTES.md", False)
@@ -350,16 +350,14 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
 
         if latest_commit_ts:
             latest_commit_dt = datetime.datetime.fromisoformat(latest_commit_ts.replace("Z", "+00:00"))
-            staleness_threshold = datetime.timedelta(hours=4)
+            staleness_threshold = datetime.timedelta(days=7)
             all_fresh = True
 
             for real_name in doc_filenames:
                 doc_ts = client.get_last_commit_for_path(owner, name, real_name, ref=default_branch)
                 if doc_ts:
                     doc_dt = datetime.datetime.fromisoformat(doc_ts.replace("Z", "+00:00"))
-                    # Stale only if doc was updated more than 24h before the latest commit.
-                    # This accounts for merge commits, CI, etc. that happen shortly after
-                    # a session where docs were properly updated.
+                    # Stale only if doc was updated more than 7 days before the latest commit.
                     if doc_dt < (latest_commit_dt - staleness_threshold):
                         all_fresh = False
                 else:

@@ -1965,6 +1965,8 @@ tbody tr:hover {
 
 .repo-table-wrap {
   overflow-x: auto;
+  max-height: 75vh;
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-card);
@@ -1977,7 +1979,10 @@ tbody tr:hover {
 }
 
 .repo-table thead {
-  background: rgba(26, 42, 26, 0.8);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(26, 42, 26, 1);
   border-bottom: 2px solid var(--green-100);
 }
 
