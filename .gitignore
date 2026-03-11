@@ -30,6 +30,9 @@ data/specs/
 .DS_Store
 Thumbs.db
 
+# Netlify build artifacts
+netlify_functions/
+
 # Test
 .pytest_cache/
 htmlcov/

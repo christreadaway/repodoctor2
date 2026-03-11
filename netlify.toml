@@ -1,0 +1,20 @@
+[build]
+  command = "bash netlify_build.sh"
+  publish = "dist"
+  functions = "netlify_functions"
+
+[build.environment]
+  PYTHON_VERSION = "3.11"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Netlify serves files from publish dir before redirects,
+# so static files in dist/ are served directly by the CDN.
+
+# Catch-all: route everything else to the Flask function
+[[redirects]]
+  from = "/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = false
