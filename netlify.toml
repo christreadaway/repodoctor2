@@ -1,6 +1,6 @@
 [build]
-  command = "npm install"
-  publish = "static"
+  command = "npm install && mkdir -p dist/static && cp -r static/css dist/static/ && cp -r static/js dist/static/"
+  publish = "dist"
 
 [build.environment]
   NODE_VERSION = "18"
@@ -10,15 +10,8 @@
   node_bundler = "nft"
   included_files = ["netlify/functions/api/views/**"]
 
-# Static assets served directly from CDN
-[[redirects]]
-  from = "/static/*"
-  to = "/static/:splat"
-  status = 200
-
-# All other requests route to the Express serverless function
+# All non-static requests route to the Express serverless function
 [[redirects]]
   from = "/*"
   to = "/.netlify/functions/api/:splat"
   status = 200
-  force = true

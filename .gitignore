@@ -36,6 +36,7 @@ node_modules/
 # Netlify build artifacts
 netlify_functions/
 .netlify/
+dist/
 
 # Test
 .pytest_cache/
