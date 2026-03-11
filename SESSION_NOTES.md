@@ -57,7 +57,8 @@ This file contains a complete history of Claude Code sessions for this repositor
 - ✅ GitHub client ported with all methods
 - ✅ Spec cleaner ported with markdown cleaning + What's Next extraction
 - ✅ Committed and pushed to `claude/deploy-netlify-F7VHx`
-- 🚧 Needs Netlify rebuild to verify live deployment
+- ✅ Fixed static asset serving — CSS/JS now served from CDN via dist/static/ build step
+- 🚧 Needs Netlify rebuild to verify live deployment with CSS fix
 
 ### Branch Info
 - Working branch: `claude/deploy-netlify-F7VHx`

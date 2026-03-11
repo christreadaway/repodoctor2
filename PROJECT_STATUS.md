@@ -25,7 +25,7 @@
 - Nothing currently broken
 
 ## What's In Progress
-- Branch `claude/deploy-netlify-F7VHx` — Netlify deployment with full Node.js refactor (needs live verification)
+- Branch `claude/deploy-netlify-F7VHx` — Netlify deployment with full Node.js refactor (fixed CSS/JS serving, awaiting live verification)
 
 ## Tech Stack
 - **Local dev:** Python + Flask backend
@@ -37,7 +37,7 @@
 - **Frontend:** Single-page app with retro terminal CSS (IBM Plex Mono)
 
 ## Next Steps
-1. Verify Netlify deployment at repodoctor2.netlify.app
+1. Verify Netlify deployment with retro terminal UI loading correctly
 2. Set env vars in Netlify dashboard (GITHUB_PAT, ANTHROPIC_API_KEY, SITE_PASSWORD, FLASK_SECRET_KEY)
 3. Test full scan + repo detail on live site
 4. Merge `claude/deploy-netlify-F7VHx` to main
@@ -49,4 +49,4 @@
 ## Last Session
 - **Date:** 2026-03-11
 - **Branch:** `claude/deploy-netlify-F7VHx`
-- **Summary:** Rewrote Flask backend to Express.js for Netlify deployment. Netlify doesn't support Python functions, so all backend code was ported to Node.js while preserving the UI exactly. All templates, routes, and modules ported and tested locally.
+- **Summary:** Rewrote Flask backend to Express.js for Netlify deployment. Fixed static asset serving — CSS/JS weren't loading because publish directory structure didn't match template URLs. Build now copies static files into dist/static/ and removes force=true from catch-all redirect so CDN serves assets directly.
