@@ -1,11 +1,55 @@
 # REPODOCTOR2 - Session History
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 5
+**Total Sessions Logged:** 6
 **Date Range:** 2025-02-14 to 2026-03-11
 **Last Updated:** 2026-03-11
 
 This file contains a complete history of Claude Code sessions for this repository, automatically generated from transcript files. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+
+## 2026-03-11 — Serverless Cold Start & Timeout Fixes
+
+### What Was Accomplished
+- Fixed "Not authenticated with GitHub" error after serverless cold starts
+- Fixed "Inactivity Timeout" error when scanning repos or generating summaries
+- Parallelized repo scanning (batches of 10) and summary generation (batches of 5)
+- Set max function timeout (26s) in netlify.toml
+
+### Technical Details
+**Files Modified:**
+- `netlify/functions/api/api.js` — Added `tryEnvCredentials()` call in `requireAuth` middleware to restore GitHub client from env vars after cold starts. Refactored `/scan` route to process repos in parallel batches of 10 using `Promise.all`. Refactored `/projects/generate` route to process repos in parallel batches of 5 using `Promise.all` (extracted `generateOneSummary` helper).
+- `netlify.toml` — Added `[functions."api"]` section with `timeout = 26` (max allowed on Netlify paid plans).
+
+**Key Decisions:**
+- Batch size of 10 for scan (lightweight GitHub API calls) vs 5 for generate (heavier — GitHub + Anthropic API calls per repo)
+- Restore credentials from env vars on every authenticated request, not just at login — essential for serverless where in-memory state is ephemeral
+
+### Current Status
+- ✅ Cold start auth loss fixed
+- ✅ Scan route parallelized
+- ✅ Summary generation parallelized
+- ✅ Max timeout configured
+- ✅ Module loads without errors
+- 🚧 Needs live verification on Netlify
+
+### Branch Info
+- Working branch: `claude/deploy-netlify-F7VHx`
+- Ready to merge to main: After live verification
+
+### Decisions Made
+- Parallel batching over streaming/background functions (simpler, stays within serverless model)
+- 26s timeout is max allowed — if repos still time out, would need Netlify Background Functions (15min limit but no response to client)
+
+### Next Steps
+1. Deploy and verify scan + summary generation work on live Netlify site
+2. If timeouts persist with many repos, consider Netlify Background Functions
+3. Merge to main once verified
+
+### Questions/Blockers
+- Free tier has 10s timeout (26s only on paid). May need paid plan for large GitHub accounts.
 
 ---
 

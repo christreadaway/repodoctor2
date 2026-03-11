@@ -4,7 +4,7 @@
 > **Category:** Infrastructure
 > **Local Path:** `~/repodoctor2/`
 
-## Overall Progress: 82%
+## Overall Progress: 85%
 
 ## What's Working
 - Secure credential storage (Fernet + PBKDF2 encryption) — local dev
@@ -20,12 +20,14 @@
 - Netlify deployment — Node.js Express app as serverless function
 - Site password gate for deployed version (SITE_PASSWORD env var)
 - AI project summaries via Claude Haiku
+- Cold start credential restoration (env vars re-read on each authenticated request)
+- Parallelized scan (batches of 10) and summary generation (batches of 5)
 
 ## What's Broken
 - Nothing currently broken
 
 ## What's In Progress
-- Branch `claude/deploy-netlify-F7VHx` — Netlify deployment with full Node.js refactor (fixed CSS/JS serving, awaiting live verification)
+- Branch `claude/deploy-netlify-F7VHx` — Netlify deployment fixes (cold start auth, timeout parallelization), awaiting live verification
 
 ## Tech Stack
 - **Local dev:** Python + Flask backend
@@ -37,16 +39,16 @@
 - **Frontend:** Single-page app with retro terminal CSS (IBM Plex Mono)
 
 ## Next Steps
-1. Verify Netlify deployment with retro terminal UI loading correctly
-2. Set env vars in Netlify dashboard (GITHUB_PAT, ANTHROPIC_API_KEY, SITE_PASSWORD, FLASK_SECRET_KEY)
-3. Test full scan + repo detail on live site
-4. Merge `claude/deploy-netlify-F7VHx` to main
-5. Consider Netlify Blobs for persistent data (scan results survive cold starts)
+1. Deploy and verify scan + summary generation on live Netlify site
+2. Ensure env vars are set in Netlify dashboard (GITHUB_PAT, ANTHROPIC_API_KEY, SITE_PASSWORD, FLASK_SECRET_KEY)
+3. Merge `claude/deploy-netlify-F7VHx` to main once verified
+4. Consider Netlify Blobs for persistent data (scan results survive cold starts)
+5. If timeouts persist with many repos, evaluate Netlify Background Functions or paid plan
 
 ## Blockers
-- Netlify Functions 10-second timeout may affect repos with 50+ repositories during scan
+- Free tier has 10s function timeout (26s on paid). Large GitHub accounts may still time out.
 
 ## Last Session
 - **Date:** 2026-03-11
 - **Branch:** `claude/deploy-netlify-F7VHx`
-- **Summary:** Rewrote Flask backend to Express.js for Netlify deployment. Fixed static asset serving — CSS/JS weren't loading because publish directory structure didn't match template URLs. Build now copies static files into dist/static/ and removes force=true from catch-all redirect so CDN serves assets directly.
+- **Summary:** Fixed two serverless deployment bugs: (1) cold start losing GitHub credentials (added env var restoration in auth middleware), (2) inactivity timeout during scan/generate (parallelized repo processing with Promise.all batching, set max 26s timeout).

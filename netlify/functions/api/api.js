@@ -183,32 +183,38 @@ app.post('/scan', requireAuth, async (req, res) => {
     return res.redirect('/');
   }
 
+  const filteredRepos = repos.filter(r => !excluded.has(r.full_name) && !excluded.has(r.name));
+
+  // Process repos in parallel batches to stay within timeout
+  const BATCH_SIZE = 10;
   const results = [];
-  for (const repo of repos) {
-    if (excluded.has(repo.full_name) || excluded.has(repo.name)) continue;
-    try {
-      const repoData = await scanRepoLite(githubClient, repo);
-      results.push(repoData);
-    } catch (e) {
-      results.push({
-        owner: repo.owner.login,
-        name: repo.name,
-        full_name: repo.full_name,
-        default_branch: repo.default_branch || 'main',
-        private: repo.private || false,
-        html_url: repo.html_url || '',
-        description: repo.description || '',
-        created_at: repo.created_at || '',
-        updated_at: repo.updated_at || '',
-        total_branch_count: 0,
-        non_default_branch_count: 0,
-        branch_names: [],
-        required_files: {},
-        files_present: 0,
-        files_total: 6,
-        error: e.message,
-      });
-    }
+  for (let i = 0; i < filteredRepos.length; i += BATCH_SIZE) {
+    const batch = filteredRepos.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.all(batch.map(async (repo) => {
+      try {
+        return await scanRepoLite(githubClient, repo);
+      } catch (e) {
+        return {
+          owner: repo.owner.login,
+          name: repo.name,
+          full_name: repo.full_name,
+          default_branch: repo.default_branch || 'main',
+          private: repo.private || false,
+          html_url: repo.html_url || '',
+          description: repo.description || '',
+          created_at: repo.created_at || '',
+          updated_at: repo.updated_at || '',
+          total_branch_count: 0,
+          non_default_branch_count: 0,
+          branch_names: [],
+          required_files: {},
+          files_present: 0,
+          files_total: 6,
+          error: e.message,
+        };
+      }
+    }));
+    results.push(...batchResults);
   }
 
   results.sort((a, b) => (b.total_branch_count || 0) - (a.total_branch_count || 0));
@@ -345,10 +351,9 @@ app.post('/projects/generate', requireAuth, async (req, res) => {
   }
 
   const repos = scanResults.repos || [];
-  let generated = 0;
-  let skipped = 0;
 
-  for (const repo of repos) {
+  // Helper to generate summary for a single repo
+  async function generateOneSummary(repo) {
     const { owner, name } = repo;
     const ref = repo.default_branch || 'main';
 
@@ -382,8 +387,7 @@ app.post('/projects/generate', requireAuth, async (req, res) => {
         how_finished: 'Unknown — no PROJECT_STATUS or spec files found.',
         next_steps: ['Add PRODUCT_SPEC.md with project description', 'Add PROJECT_STATUS.md with progress tracking'],
       });
-      skipped++;
-      continue;
+      return 'skipped';
     }
 
     const contextText = contextParts.join('\n\n');
@@ -421,14 +425,28 @@ app.post('/projects/generate', requireAuth, async (req, res) => {
         summary.next_steps = summary.next_steps.slice(0, 5);
       }
       models.saveProjectSummary(name, summary);
-      generated++;
+      return 'generated';
     } catch (e) {
       models.saveProjectSummary(name, {
         what_it_does: repo.description || `${name} — summary generation failed.`,
         how_finished: 'Unknown — AI summary could not be generated.',
         next_steps: [`Error: ${String(e.message || e).substring(0, 100)}`],
       });
-      skipped++;
+      return 'skipped';
+    }
+  }
+
+  // Process repos in parallel batches of 5 (each makes GitHub + AI calls)
+  const BATCH_SIZE = 5;
+  let generated = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < repos.length; i += BATCH_SIZE) {
+    const batch = repos.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(batch.map(generateOneSummary));
+    for (const r of results) {
+      if (r === 'generated') generated++;
+      else skipped++;
     }
   }
 

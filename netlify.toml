@@ -10,6 +10,12 @@
   node_bundler = "nft"
   included_files = ["netlify/functions/api/views/**"]
 
+[functions."api"]
+  external_node_modules = []
+  # Max timeout for Netlify functions (26s on paid plans, 10s on free)
+  # This ensures we use the maximum allowed time
+  timeout = 26
+
 # Static assets served directly from CDN (matched first, no force needed)
 [[redirects]]
   from = "/static/*"
