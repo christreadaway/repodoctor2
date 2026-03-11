@@ -1,0 +1,11 @@
+{
+  "name": "repodoctor2",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "express": "^4.21.0",
+    "serverless-http": "^3.2.0",
+    "nunjucks": "^3.2.4",
+    "cookie-session": "^2.1.0"
+  }
+}

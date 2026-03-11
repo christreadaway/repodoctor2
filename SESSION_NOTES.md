@@ -1,11 +1,82 @@
 # REPODOCTOR2 - Session History
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 4
-**Date Range:** 2025-02-14 to 2026-03-08
-**Last Updated:** 2026-03-08
+**Total Sessions Logged:** 5
+**Date Range:** 2025-02-14 to 2026-03-11
+**Last Updated:** 2026-03-11
 
 This file contains a complete history of Claude Code sessions for this repository, automatically generated from transcript files. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+
+## 2026-03-11 — Netlify Deployment (Node.js Refactor)
+
+### What Was Accomplished
+- Deployed RepoDoctor to Netlify as a serverless app
+- Discovered Netlify Functions only support JS/TS/Go — NOT Python
+- Rewrote the entire Flask backend to Express.js (Node.js) for Netlify Functions
+- Ported all active routes: login, dashboard, scan, repo detail, settings, projects, mac setup
+- Ported all backend modules: GitHub client, models (in-memory), spec cleaner
+- Adapted all Jinja2 templates to Nunjucks (Jinja2-compatible JS engine)
+- UI is 100% preserved — same retro terminal CSS, same vanilla JS, same layout
+- Added site password gate via SITE_PASSWORD env var for deployed version
+- All credentials handled via Netlify environment variables (GITHUB_PAT, ANTHROPIC_API_KEY, SITE_PASSWORD, FLASK_SECRET_KEY)
+
+### Technical Details
+**Files Created:**
+- `package.json` — Node.js dependencies (express, serverless-http, nunjucks, cookie-session)
+- `netlify.toml` — Build config, function directory, redirects
+- `netlify/functions/api/api.js` — Express app with all routes, wrapped in serverless-http
+- `netlify/functions/api/lib/github-client.js` — GitHub REST API client using native fetch
+- `netlify/functions/api/lib/models.js` — In-memory data storage (ephemeral in serverless)
+- `netlify/functions/api/lib/spec-cleaner.js` — Markdown cleaning + What's Next extraction
+- `netlify/functions/api/views/*.html` — All 7 templates adapted from Jinja2 to Nunjucks
+
+**Files Modified:**
+- `.gitignore` — Added node_modules/, .netlify/
+- `app.py` — Reverted serverless env var changes (Python app is for local dev only)
+- `requirements.txt` — Removed awsgi dependency
+
+**Files Removed:**
+- `netlify_handler.py` — Old Python serverless wrapper (doesn't work on Netlify)
+- `netlify_build.sh` — Old Python build script
+
+**Key Decisions:**
+- Used Nunjucks template engine (nearly 1:1 compatible with Jinja2) to minimize template changes
+- Used native fetch (Node 18+) for GitHub and Anthropic API calls to keep bundle small
+- In-memory data storage — scan results, preferences, specs reset on cold starts (acceptable for serverless)
+- Used cookie-session for auth state (persists across requests via signed cookies)
+- Used node_bundler = "nft" (Node File Trace) for better template file inclusion in function bundle
+- Anthropic API called directly via fetch (no SDK) to minimize function bundle size
+
+### Current Status
+- ✅ All templates render correctly (tested locally)
+- ✅ Express handler returns 200 for /login and 302 redirect for unauthenticated /
+- ✅ All 7 templates adapted and tested
+- ✅ GitHub client ported with all methods
+- ✅ Spec cleaner ported with markdown cleaning + What's Next extraction
+- ✅ Committed and pushed to `claude/deploy-netlify-F7VHx`
+- 🚧 Needs Netlify rebuild to verify live deployment
+
+### Branch Info
+- Working branch: `claude/deploy-netlify-F7VHx`
+- Ready to merge to main: After verifying Netlify deployment works
+
+### Decisions Made
+- Netlify over Render/Railway/Fly.io (user preference)
+- Node.js refactor over Python workarounds (Netlify doesn't support Python functions)
+- Preserved 100% of the UI — no CSS/JS changes
+
+### Next Steps
+1. Verify the Netlify deployment works at repodoctor2.netlify.app
+2. Set environment variables in Netlify dashboard (GITHUB_PAT, ANTHROPIC_API_KEY, SITE_PASSWORD, FLASK_SECRET_KEY)
+3. Test scan + repo detail on live site
+4. Merge to main once verified
+
+### Questions/Blockers
+- Netlify Functions have a 10-second timeout (26s on paid plans). Scanning many repos may time out.
+- Data is ephemeral in serverless — scan results reset on cold starts. Consider Netlify Blobs for persistence if needed.
 
 ---
 

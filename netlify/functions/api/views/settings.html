@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}RepoDoctor — Settings{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Settings</h1>
+</div>
+
+<div class="settings-grid">
+    <!-- Preferences -->
+    <div class="settings-card">
+        <h2>Preferences</h2>
+        <form method="POST" action="/settings">
+            <input type="hidden" name="action" value="save_preferences">
+            <div class="form-group">
+                <label for="local_root">Local Repo Root Folder</label>
+                <input type="text" id="local_root" name="local_root"
+                       value="{{ preferences.local_root }}"
+                       placeholder="~/claudesync2">
+                <span class="form-hint">Used for CLAUDE.md detection and personalized commands.</span>
+            </div>
+            <div class="form-group">
+                <label for="ai_model">AI Model</label>
+                <select id="ai_model" name="ai_model">
+                    <option value="claude-haiku-4-5-20251001" {% if preferences.ai_model == 'claude-haiku-4-5-20251001' %}selected{% endif %}>
+                        Haiku 4.5 — Fastest, cheapest (~$0.80/M input) — Recommended
+                    </option>
+                    <option value="claude-sonnet-4-5-20250929" {% if preferences.ai_model == 'claude-sonnet-4-5-20250929' %}selected{% endif %}>
+                        Sonnet 4.5 — Balanced quality &amp; cost (~$3/M input)
+                    </option>
+                    <option value="claude-opus-4-6" {% if preferences.ai_model == 'claude-opus-4-6' %}selected{% endif %}>
+                        Opus 4.6 — Most capable, highest cost (~$15/M input)
+                    </option>
+                </select>
+                <span class="form-hint">Haiku is great for branch analysis. Use Sonnet or Opus for complex repos with many conflicts.</span>
+            </div>
+            <div class="form-group">
+                <label for="display_mode">Display Mode</label>
+                <select id="display_mode" name="display_mode">
+                    <option value="plain_english" {% if preferences.display_mode == 'plain_english' %}selected{% endif %}>
+                        Plain English — Full descriptions and recommendations
+                    </option>
+                    <option value="shorthand" {% if preferences.display_mode == 'shorthand' %}selected{% endif %}>
+                        Shorthand — Compact labels (AHEAD, DIVERGED, STALE)
+                    </option>
+                </select>
+                <span class="form-hint">Plain English is great if you're new to Git. Shorthand is denser for experienced users.</span>
+            </div>
+            <div class="form-group">
+                <label for="excluded_repos">Excluded Repositories</label>
+                <input type="text" id="excluded_repos" name="excluded_repos"
+                       value="{{ preferences.excluded_repos | join(', ') }}"
+                       placeholder="repo1, repo2">
+                <span class="form-hint">Comma-separated. These repos will be skipped during scans.</span>
+            </div>
+            <button type="submit" class="btn btn-primary">SAVE PREFERENCES</button>
+        </form>
+    </div>
+
+    <!-- Product Specs -->
+    <div class="settings-card">
+        <h2>Product Specs</h2>
+        <p class="text-secondary">Upload a product specification for a repo so AI can map branch changes to planned features.</p>
+        {% if specs.length %}
+        <div class="specs-list">
+            <h3>Loaded Specs:</h3>
+            {% for spec in specs %}
+            <div class="spec-item">
+                <span class="status-ok">&#10003;</span>
+                <span>{{ spec }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        <form method="POST" action="/settings">
+            <input type="hidden" name="action" value="save_spec">
+            <div class="form-group">
+                <label for="spec_repo">Repository Name</label>
+                <input type="text" id="spec_repo" name="spec_repo" placeholder="my-repo-name">
+            </div>
+            <div class="form-group">
+                <label for="spec_content">Spec Content</label>
+                <textarea id="spec_content" name="spec_content" rows="8"
+                          placeholder="Paste your product specification here..."></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">SAVE SPEC</button>
+        </form>
+    </div>
+
+    <!-- Credentials -->
+    <div class="settings-card">
+        <h2>Credentials</h2>
+        <p class="text-secondary">Your GitHub PAT and Anthropic API key are encrypted locally.</p>
+        <div class="credential-status">
+            <div class="cred-item">
+                <span class="status-ok">&#10003;</span>
+                <span>GitHub PAT: Encrypted &amp; loaded</span>
+            </div>
+            <div class="cred-item">
+                <span class="status-ok">&#10003;</span>
+                <span>Anthropic Key: Encrypted &amp; loaded</span>
+            </div>
+        </div>
+        <form method="POST" action="/settings" onsubmit="return confirm('This will delete your encrypted credentials. You will need to re-enter both API keys. Continue?')">
+            <input type="hidden" name="action" value="reset_credentials">
+            <button type="submit" class="btn btn-danger">RESET CREDENTIALS</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

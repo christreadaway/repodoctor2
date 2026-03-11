@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}RepoDoctor — Projects{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Project Summaries</h1>
+    <div class="page-actions">
+        {% if scan_results %}
+        <form method="POST" action="/projects/generate" class="inline-form">
+            <button type="submit" class="btn btn-primary" id="generate-btn">
+                {% if summaries and summaries | length %}REGENERATE SUMMARIES{% else %}GENERATE SUMMARIES{% endif %}
+            </button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="/">My Repos</a> and run a scan first, then come back here to generate project summaries.</p>
+    </div>
+</div>
+{% elif not repos.length %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No repositories found.</h2>
+        <p>Your last scan didn't find any repositories. Check your settings and try scanning again.</p>
+    </div>
+</div>
+{% else %}
+
+{% if not summaries or not (summaries | length) %}
+<div class="projects-hint">
+    <p>Click <strong>GENERATE SUMMARIES</strong> to use AI to analyze your project specs and create concise summaries for each repo. Uses Claude Haiku (~$0.001 per project).</p>
+</div>
+{% endif %}
+
+<div class="projects-grid">
+    {% for repo in repos %}
+    {% set summary = summaries[repo.name] %}
+    <div class="project-card {% if summary %}has-summary{% endif %}">
+        <div class="project-card-header">
+            <a href="/repo/{{ repo.owner }}/{{ repo.name }}" class="project-name">{{ repo.name }}</a>
+            <div class="project-meta">
+                {% if repo.private %}
+                <span class="badge badge-dim">PRIVATE</span>
+                {% else %}
+                <span class="badge badge-public">PUBLIC</span>
+                {% endif %}
+                <span class="file-score {% if repo.files_present == repo.files_total %}score-perfect{% elif repo.files_present >= 4 %}score-good{% elif repo.files_present >= 2 %}score-fair{% else %}score-poor{% endif %}">{{ repo.files_present }}/{{ repo.files_total }}</span>
+            </div>
+        </div>
+
+        {% if summary %}
+        <div class="project-section">
+            <div class="project-section-label">What it does</div>
+            <p class="project-section-text">{{ summary.what_it_does }}</p>
+        </div>
+
+        <div class="project-section">
+            <div class="project-section-label">How finished</div>
+            <p class="project-section-text">{{ summary.how_finished }}</p>
+        </div>
+
+        {% if summary.next_steps %}
+        <div class="project-section">
+            <div class="project-section-label">What's next</div>
+            <ul class="project-next-steps">
+                {% for step in summary.next_steps %}
+                {% if loop.index0 < 5 %}
+                <li>{{ step }}</li>
+                {% endif %}
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if summary._generated_at %}
+        <div class="project-generated">Generated {{ summary._generated_at | dateonly }}</div>
+        {% endif %}
+
+        {% else %}
+        <div class="project-section">
+            <p class="project-no-summary">
+                {% if repo.description %}
+                {{ repo.description }}
+                {% else %}
+                No summary yet — click Generate Summaries above.
+                {% endif %}
+            </p>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

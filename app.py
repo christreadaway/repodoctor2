@@ -59,46 +59,10 @@ def _get_credentials() -> dict | None:
     return _credentials
 
 
-def _try_env_credentials() -> bool:
-    """Auto-login using environment variables (for serverless deployments)."""
-    global _github_client, _credentials
-    if _github_client is not None:
-        return True
-    pat = os.environ.get("GITHUB_PAT", "")
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if pat and anthropic_key:
-        _credentials = {"github_pat": pat, "anthropic_key": anthropic_key}
-        _github_client = gh.GitHubClient(pat)
-        return True
-    return False
-
-
 # --- Auth Routes ---
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    site_password = os.environ.get("SITE_PASSWORD", "")
-    env_mode = bool(os.environ.get("GITHUB_PAT")) and bool(os.environ.get("ANTHROPIC_API_KEY"))
-
-    # Serverless mode: credentials from env vars, gate with site password
-    if env_mode:
-        if session.get("authenticated"):
-            return redirect(url_for("dashboard"))
-
-        if request.method == "POST":
-            entered = request.form.get("password", "")
-            if site_password and entered != site_password:
-                flash("Wrong password. Try again.", "error")
-                return render_template("login.html", has_credentials=True)
-            _try_env_credentials()
-            session["authenticated"] = True
-            user_info = _github_client.verify_token()
-            if user_info:
-                session["github_user"] = user_info.get("login", "")
-            return redirect(url_for("dashboard"))
-
-        return render_template("login.html", has_credentials=True)
-
     has_creds = security.credentials_exist()
     if request.method == "POST":
         password = request.form.get("password", "")
