@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}RepoDoctor{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Fira+Code:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="scanlines"></div>
+
+    {% if authenticated %}
+    <nav class="top-nav">
+        <div class="nav-brand">RepoDoctor</div>
+        <div class="nav-links">
+            <a href="/" class="nav-link {% if endpoint == '/' %}active{% endif %}">My Repos</a>
+            <a href="/projects" class="nav-link {% if '/projects' in endpoint %}active{% endif %}">Projects</a>
+            <a href="/mac-setup" class="nav-link {% if endpoint == '/mac-setup' %}active{% endif %}">Mac Setup</a>
+            <a href="/settings" class="nav-link {% if endpoint == '/settings' %}active{% endif %}">Settings</a>
+        </div>
+        <div class="nav-user">
+            <span class="user-name">{{ github_user }}</span>
+            <a href="/logout" class="nav-link nav-logout">Logout</a>
+        </div>
+    </nav>
+    {% endif %}
+
+    <main class="container">
+        {% if messages.length %}
+        <div class="flash-messages">
+            {% for msg in messages %}
+            <div class="flash flash-{{ msg[0] }}">{{ msg[1] }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    {% if authenticated %}
+    <footer class="app-footer">
+        <div class="footer-content">
+            <span class="footer-label">RepoDoctor</span>
+        </div>
+    </footer>
+    {% endif %}
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

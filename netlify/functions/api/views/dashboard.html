@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block title %}RepoDoctor — My Repos{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>My Repositories</h1>
+    <form method="POST" action="/scan" class="inline-form">
+        <button type="submit" class="btn btn-primary" id="scan-btn">
+            {% if scan_results %}RE-SCAN{% else %}SCAN REPOS{% endif %}
+        </button>
+    </form>
+</div>
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>Welcome, {{ github_user }}.</h2>
+        <p>Click SCAN REPOS to pull all your GitHub repositories and check their branch counts and required files.</p>
+    </div>
+
+    <div class="onboarding-action">
+        <form method="POST" action="/scan" class="inline-form">
+            <button type="submit" class="btn btn-primary btn-large">SCAN MY REPOS</button>
+        </form>
+        <p class="text-secondary">This reads your GitHub repos. It does not modify anything.</p>
+    </div>
+</div>
+{% else %}
+
+{# --- Summary stats --- #}
+<div class="scan-summary">
+    <div class="summary-stat">
+        <span class="stat-value">{{ scan_results.total_repos }}</span>
+        <span class="stat-label">Repositories</span>
+    </div>
+    <div class="summary-stat">
+        <span class="stat-value">{{ scan_results.total_branches }}</span>
+        <span class="stat-label">Total Branches</span>
+    </div>
+    <div class="summary-stat">
+        <span class="stat-value {% if scan_results.repos_missing_files > 0 %}stat-warning{% endif %}">{{ scan_results.repos_missing_files }}</span>
+        <span class="stat-label">Missing Required Files</span>
+    </div>
+</div>
+
+{# --- Required files legend --- #}
+<div class="file-legend">
+    <span class="legend-label">Required files:</span>
+    <span class="legend-item">CLAUDE.md</span>
+    <span class="legend-item">LICENSE</span>
+    <span class="legend-item">BUSINESS_SPEC.md</span>
+    <span class="legend-item">PRODUCT_SPEC.md</span>
+    <span class="legend-item">PROJECT_STATUS.md</span>
+    <span class="legend-item">SESSION_NOTES.md</span>
+</div>
+
+{# --- Repo table --- #}
+<div class="repo-table-wrap">
+    <table class="repo-table">
+        <thead>
+            <tr>
+                <th class="col-repo sortable" data-sort="text" data-col="0">Repository</th>
+                <th class="col-vis sortable" data-sort="text" data-col="1">Visibility</th>
+                <th class="col-date sortable" data-sort="text" data-col="2">Created</th>
+                <th class="col-date sortable" data-sort="text" data-col="3">Updated</th>
+                <th class="col-file sortable" data-sort="text" data-col="4" title="Are SESSION_NOTES.md and PRODUCT_SPEC.md up to date with the latest changes?">Current?</th>
+                <th class="col-branches sortable" data-sort="num" data-col="5">Branches</th>
+                <th class="col-file sortable" data-sort="text" data-col="6">CLAUDE</th>
+                <th class="col-file sortable" data-sort="text" data-col="7">LICENSE</th>
+                <th class="col-file sortable" data-sort="text" data-col="8">BIZ</th>
+                <th class="col-file sortable" data-sort="text" data-col="9">PROD</th>
+                <th class="col-file sortable" data-sort="text" data-col="10">STATUS</th>
+                <th class="col-file sortable" data-sort="text" data-col="11">NOTES</th>
+                <th class="col-score sortable" data-sort="text" data-col="12">Score</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for repo in scan_results.repos %}
+            <tr class="repo-row {% if repo.files_present == repo.files_total %}row-complete{% endif %}">
+                <td class="col-repo">
+                    <a href="/repo/{{ repo.owner }}/{{ repo.name }}" class="repo-link">{{ repo.name }}</a>
+                    {% if repo.description %}
+                    <span class="repo-desc" title="{{ repo.description }}">{{ repo.description | truncate(50) }}</span>
+                    {% endif %}
+                </td>
+                <td class="col-vis">
+                    {% if repo.private %}
+                    <span class="badge badge-dim">PRIVATE</span>
+                    {% else %}
+                    <span class="badge badge-public">PUBLIC</span>
+                    {% endif %}
+                </td>
+                <td class="col-date">
+                    <span class="date-value">{{ repo.created_at | dateonly }}</span>
+                </td>
+                <td class="col-date">
+                    <span class="date-value">{{ repo.updated_at | dateonly }}</span>
+                </td>
+                <td class="col-file">
+                    {% if repo.docs_updated == null %}
+                    <span class="file-missing" title="Doc files not present">—</span>
+                    {% elif repo.docs_updated %}
+                    <span class="file-ok" title="Docs are up to date">Yes</span>
+                    {% else %}
+                    <span class="file-stale" title="Docs were last updated before other files">No</span>
+                    {% endif %}
+                </td>
+                <td class="col-branches">
+                    {% if repo.total_branch_count > 1 %}
+                    <span class="branch-count branch-toggle {% if repo.total_branch_count > 3 %}count-warn{% elif repo.total_branch_count > 1 %}count-note{% endif %}" onclick="event.preventDefault(); this.closest('tr').nextElementSibling.classList.toggle('branch-hidden')" title="Click to show branches">{{ repo.total_branch_count }}</span>
+                    {% else %}
+                    <span class="branch-count">{{ repo.total_branch_count }}</span>
+                    {% endif %}
+                </td>
+                {% set files = repo.required_files %}
+                <td class="col-file">
+                    {% if files['CLAUDE.md'] %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-file">
+                    {% if files['LICENSE'] %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-file">
+                    {% if files['BUSINESS_SPEC.md'] %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-file">
+                    {% if files['PRODUCT_SPEC.md'] %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-file">
+                    {% if files['PROJECT_STATUS.md'] %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-file">
+                    {% if files['SESSION_NOTES.md'] %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-score">
+                    <span class="file-score {% if repo.files_present == repo.files_total %}score-perfect{% elif repo.files_present >= 4 %}score-good{% elif repo.files_present >= 2 %}score-fair{% else %}score-poor{% endif %}">{{ repo.files_present }}/{{ repo.files_total }}</span>
+                </td>
+            </tr>
+            {% if repo.total_branch_count > 1 %}
+            <tr class="branch-detail-row branch-hidden">
+                <td colspan="13">
+                    <div class="branch-names">
+                        {% for bname in repo.branch_names %}
+                        <span class="branch-tag {% if bname == repo.default_branch %}branch-default{% endif %}">{{ bname }}{% if bname == repo.default_branch %} *{% endif %}</span>
+                        {% endfor %}
+                    </div>
+                </td>
+            </tr>
+            {% endif %}
+            {% if repo.error %}
+            <tr class="error-row">
+                <td colspan="13">
+                    <span class="repo-error">Error scanning: {{ repo.error }}</span>
+                </td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.sortable').forEach(function(th) {
+        th.addEventListener('click', function() {
+            var table = th.closest('table');
+            var tbody = table.querySelector('tbody');
+            var col = parseInt(th.dataset.col);
+            var sortType = th.dataset.sort;
+            var asc = th.classList.contains('sort-asc');
+
+            table.querySelectorAll('.sortable').forEach(function(h) {
+                h.classList.remove('sort-asc', 'sort-desc');
+            });
+            th.classList.add(asc ? 'sort-desc' : 'sort-asc');
+
+            var groups = [];
+            var rows = Array.from(tbody.children);
+            var i = 0;
+            while (i < rows.length) {
+                var group = [rows[i]];
+                i++;
+                while (i < rows.length && !rows[i].classList.contains('repo-row')) {
+                    group.push(rows[i]);
+                    i++;
+                }
+                groups.push(group);
+            }
+
+            groups.sort(function(a, b) {
+                var cellA = a[0].children[col];
+                var cellB = b[0].children[col];
+                var valA = (cellA ? cellA.textContent : '').trim();
+                var valB = (cellB ? cellB.textContent : '').trim();
+                if (sortType === 'num') {
+                    valA = parseFloat(valA) || 0;
+                    valB = parseFloat(valB) || 0;
+                    return asc ? valB - valA : valA - valB;
+                }
+                return asc ? valB.localeCompare(valA) : valA.localeCompare(valB);
+            });
+
+            groups.forEach(function(group) {
+                group.forEach(function(row) {
+                    tbody.appendChild(row);
+                });
+            });
+        });
+    });
+});
+</script>
+{% endblock %}

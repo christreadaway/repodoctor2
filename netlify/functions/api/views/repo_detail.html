@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}RepoDoctor — {{ repo.name }}{% endblock %}
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="breadcrumb">
+            <a href="/" class="breadcrumb-link">&larr; Dashboard</a>
+            <span class="breadcrumb-sep">/</span>
+            <span class="breadcrumb-current">{{ repo.name }}</span>
+        </div>
+    </div>
+    <div class="page-actions">
+        <a href="{{ repo.html_url }}" target="_blank" rel="noopener" class="btn btn-secondary">VIEW ON GITHUB</a>
+    </div>
+</div>
+
+{# --- Repo info bar --- #}
+<div class="repo-info-bar">
+    <span class="info-item">
+        <strong>{{ repo.full_name }}</strong>
+        {% if repo.private %}<span class="badge badge-dim">PRIVATE</span>{% else %}<span class="badge badge-public">PUBLIC</span>{% endif %}
+    </span>
+    <span class="info-item">Default branch: <strong>{{ repo.default_branch }}</strong></span>
+    <span class="info-item">Branches: <strong>{{ repo.total_branch_count }}</strong></span>
+    {% if repo.description %}
+    <span class="info-item repo-full-desc">{{ repo.description }}</span>
+    {% endif %}
+</div>
+
+{# --- WHAT'S NEXT — hero section at the top --- #}
+{% if whats_next.length %}
+<div class="whats-next-hero">
+    <div class="whats-next-header">
+        <h2 class="whats-next-title">What's Next</h2>
+        <span class="whats-next-count">{{ whats_next.length }} item{{ 's' if whats_next.length != 1 else '' }}</span>
+    </div>
+    <ul class="whats-next-list">
+        {% for item in whats_next %}
+        <li class="whats-next-item {% if 'Discussed:' in item %}whats-next-from-chat{% endif %}">
+            {{ item }}
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+{# --- Required files status --- #}
+<div class="file-status-grid">
+    {% set files = repo.required_files %}
+    {% for fname, present in files %}
+    <div class="file-status-item {% if present %}file-present{% else %}file-absent{% endif %}">
+        <span class="file-status-icon">{% if present %}Y{% else %}-{% endif %}</span>
+        <span class="file-status-name">{{ fname }}</span>
+    </div>
+    {% endfor %}
+</div>
+
+{# --- Claude Conversations for this repo --- #}
+{% if conversations.length %}
+<div class="spec-panel conversations-panel">
+    <h3 class="spec-panel-title">Claude Conversations ({{ conversations.length }})</h3>
+    <div class="spec-panel-content">
+        <div class="conversation-list">
+            {% for conv in conversations %}
+            {% if loop.index0 < 10 %}
+            <div class="conversation-item">
+                <div class="conversation-header">
+                    <span class="conversation-name">{{ conv.name | truncate(100) }}</span>
+                    <span class="conversation-date">{{ conv.date_display }}</span>
+                </div>
+                {% if conv.project %}
+                <span class="conversation-project">{{ conv.project }}</span>
+                {% endif %}
+                {% if conv.excerpt %}
+                <div class="conversation-excerpt">{{ conv.excerpt | truncate(200) }}</div>
+                {% endif %}
+                {% if conv.message_count %}
+                <span class="conversation-meta">{{ conv.message_count }} messages</span>
+                {% endif %}
+            </div>
+            {% endif %}
+            {% endfor %}
+            {% if conversations.length > 10 %}
+            <div class="conversation-more">+ {{ conversations.length - 10 }} more conversations</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{# --- Spec file contents (cleaned) --- #}
+<div class="spec-panels">
+    {% if specs.BUSINESS_SPEC %}
+    <div class="spec-panel">
+        <h3 class="spec-panel-title">Business Spec</h3>
+        <div class="spec-panel-content">
+            <pre class="spec-text">{{ specs.BUSINESS_SPEC }}</pre>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if specs.PRODUCT_SPEC %}
+    <div class="spec-panel">
+        <h3 class="spec-panel-title">Product Spec</h3>
+        <div class="spec-panel-content">
+            <pre class="spec-text">{{ specs.PRODUCT_SPEC }}</pre>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if specs.PROJECT_STATUS %}
+    <div class="spec-panel">
+        <h3 class="spec-panel-title">Project Status</h3>
+        <div class="spec-panel-content">
+            <pre class="spec-text">{{ specs.PROJECT_STATUS }}</pre>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if specs.SESSION_NOTES %}
+    <div class="spec-panel">
+        <h3 class="spec-panel-title">Session Notes</h3>
+        <div class="spec-panel-content">
+            <pre class="spec-text">{{ specs.SESSION_NOTES }}</pre>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if not specs.BUSINESS_SPEC and not specs.PRODUCT_SPEC and not specs.PROJECT_STATUS and not specs.SESSION_NOTES %}
+    <div class="empty-state">
+        <h3>No spec files found</h3>
+        <p>This repo doesn't have any of the expected spec files in its root directory.</p>
+    </div>
+    {% endif %}
+</div>
+
+{# --- Branch list --- #}
+{% if repo.total_branch_count > 1 %}
+<div class="spec-panel" style="margin-top: var(--space-lg);">
+    <h3 class="spec-panel-title">Branches ({{ repo.total_branch_count }})</h3>
+    <div class="spec-panel-content">
+        <div class="branch-names">
+            {% for bname in repo.branch_names %}
+            <span class="branch-tag {% if bname == repo.default_branch %}branch-default{% endif %}">{{ bname }}{% if bname == repo.default_branch %} *{% endif %}</span>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

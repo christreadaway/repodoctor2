@@ -30,8 +30,12 @@ data/specs/
 .DS_Store
 Thumbs.db
 
+# Node.js
+node_modules/
+
 # Netlify build artifacts
 netlify_functions/
+.netlify/
 
 # Test
 .pytest_cache/

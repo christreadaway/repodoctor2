@@ -4,44 +4,49 @@
 > **Category:** Infrastructure
 > **Local Path:** `~/repodoctor2/`
 
-## Overall Progress: 78%
+## Overall Progress: 82%
 
 ## What's Working
-- Secure credential storage (Fernet + PBKDF2 encryption)
+- Secure credential storage (Fernet + PBKDF2 encryption) — local dev
 - GitHub PAT authentication with scope verification
 - Full repo scanning — branch counts, required file checks
 - Dashboard table with sortable columns, retro terminal UI
 - Sticky table headers — column labels stay visible when scrolling
 - Required files detection: CLAUDE.md, LICENSE, BUSINESS_SPEC.md, PRODUCT_SPEC.md, PROJECT_STATUS.md, SESSION_NOTES.md (case-insensitive, any extension)
 - Clickable repo detail pages with spec file content display
-- "Current?" column — detects if PRODUCT_SPEC.md and SESSION_NOTES.md are fresh (within 7 days of last commit)
+- "Current?" column — detects if docs are fresh (within 7 days of last commit)
 - 30-minute session auto-lock
 - Activity log with color-coded messages
+- Netlify deployment — Node.js Express app as serverless function
+- Site password gate for deployed version (SITE_PASSWORD env var)
+- AI project summaries via Claude Haiku
 
 ## What's Broken
 - Nothing currently broken
 
 ## What's In Progress
-- Branch `claude/fix-updated-status-6y3UR` — sticky headers + staleness fix (ready to merge)
+- Branch `claude/deploy-netlify-F7VHx` — Netlify deployment with full Node.js refactor (needs live verification)
 
 ## Tech Stack
-- Python + Flask backend
-- Anthropic Claude API (Sonnet 3.5) for AI branch summaries
-- GitHub REST API v3 with Personal Access Token
-- Fernet + PBKDF2 credential encryption
-- Single-page app with retro terminal CSS
-- IBM Plex Mono typography
+- **Local dev:** Python + Flask backend
+- **Deployed (Netlify):** Node.js + Express + serverless-http
+- **Templates:** Nunjucks (Jinja2-compatible)
+- **AI:** Anthropic Claude API (Haiku for summaries)
+- **GitHub:** REST API v3 with Personal Access Token
+- **Security:** Fernet + PBKDF2 (local) / Env vars (Netlify)
+- **Frontend:** Single-page app with retro terminal CSS (IBM Plex Mono)
 
 ## Next Steps
-1. Merge `claude/fix-updated-status-6y3UR` to main
-2. Re-scan repos to verify longwayhome and others show correct "Current?" status
-3. Consider making staleness threshold configurable
-4. Test sticky headers on mobile/small screens
+1. Verify Netlify deployment at repodoctor2.netlify.app
+2. Set env vars in Netlify dashboard (GITHUB_PAT, ANTHROPIC_API_KEY, SITE_PASSWORD, FLASK_SECRET_KEY)
+3. Test full scan + repo detail on live site
+4. Merge `claude/deploy-netlify-F7VHx` to main
+5. Consider Netlify Blobs for persistent data (scan results survive cold starts)
 
 ## Blockers
-- None identified
+- Netlify Functions 10-second timeout may affect repos with 50+ repositories during scan
 
 ## Last Session
-- **Date:** 2026-03-08
-- **Branch:** `claude/fix-updated-status-6y3UR`
-- **Summary:** Made table headers sticky so column context is never lost when scrolling. Fixed "Current?" staleness threshold from 4 hours to 7 days — the old threshold was too aggressive and incorrectly flagging repos like longwayhome as stale when their docs were actually current.
+- **Date:** 2026-03-11
+- **Branch:** `claude/deploy-netlify-F7VHx`
+- **Summary:** Rewrote Flask backend to Express.js for Netlify deployment. Netlify doesn't support Python functions, so all backend code was ported to Node.js while preserving the UI exactly. All templates, routes, and modules ported and tested locally.
