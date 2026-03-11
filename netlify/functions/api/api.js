@@ -327,6 +327,11 @@ app.get('/projects', requireAuth, (req, res) => {
   });
 });
 
+// Redirect GET requests to /projects (form is POST-only)
+app.get('/projects/generate', requireAuth, (req, res) => {
+  res.redirect('/projects');
+});
+
 app.post('/projects/generate', requireAuth, async (req, res) => {
   if (!githubClient || !credentials) {
     req.flash('error', 'Not authenticated.');
