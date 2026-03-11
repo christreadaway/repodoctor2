@@ -6,15 +6,15 @@
 [build.environment]
   PYTHON_VERSION = "3.11"
 
-[functions]
-  node_bundler = "esbuild"
+# Serve static assets directly from CDN (files in dist/static/)
+[[redirects]]
+  from = "/static/*"
+  to = "/static/:splat"
+  status = 200
 
-# Netlify serves files from publish dir before redirects,
-# so static files in dist/ are served directly by the CDN.
-
-# Catch-all: route everything else to the Flask function
+# Route all other requests to the Flask serverless function
 [[redirects]]
   from = "/*"
   to = "/.netlify/functions/api/:splat"
   status = 200
-  force = false
+  force = true
