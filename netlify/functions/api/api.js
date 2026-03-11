@@ -85,6 +85,8 @@ function tryEnvCredentials() {
 
 function requireAuth(req, res, next) {
   if (!req.session.authenticated) return res.redirect('/login');
+  // Restore credentials from env vars after cold start
+  if (!githubClient) tryEnvCredentials();
   next();
 }
 
