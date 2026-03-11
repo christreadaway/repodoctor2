@@ -10,8 +10,15 @@
   node_bundler = "nft"
   included_files = ["netlify/functions/api/views/**"]
 
-# All non-static requests route to the Express serverless function
+# Static assets served directly from CDN (matched first, no force needed)
+[[redirects]]
+  from = "/static/*"
+  to = "/static/:splat"
+  status = 200
+
+# All other requests (GET + POST) route to the Express serverless function
 [[redirects]]
   from = "/*"
   to = "/.netlify/functions/api/:splat"
   status = 200
+  force = true
