@@ -90,29 +90,11 @@
 
 {# --- Spec file contents (cleaned) --- #}
 <div class="spec-panels">
-    {% if specs.BUSINESS_SPEC %}
-    <div class="spec-panel">
-        <h3 class="spec-panel-title">Business Spec</h3>
-        <div class="spec-panel-content">
-            <pre class="spec-text">{{ specs.BUSINESS_SPEC }}</pre>
-        </div>
-    </div>
-    {% endif %}
-
     {% if specs.PRODUCT_SPEC %}
     <div class="spec-panel">
         <h3 class="spec-panel-title">Product Spec</h3>
         <div class="spec-panel-content">
             <pre class="spec-text">{{ specs.PRODUCT_SPEC }}</pre>
-        </div>
-    </div>
-    {% endif %}
-
-    {% if specs.PROJECT_STATUS %}
-    <div class="spec-panel">
-        <h3 class="spec-panel-title">Project Status</h3>
-        <div class="spec-panel-content">
-            <pre class="spec-text">{{ specs.PROJECT_STATUS }}</pre>
         </div>
     </div>
     {% endif %}
@@ -126,7 +108,7 @@
     </div>
     {% endif %}
 
-    {% if not specs.BUSINESS_SPEC and not specs.PRODUCT_SPEC and not specs.PROJECT_STATUS and not specs.SESSION_NOTES %}
+    {% if not specs.PRODUCT_SPEC and not specs.SESSION_NOTES %}
     <div class="empty-state">
         <h3>No spec files found</h3>
         <p>This repo doesn't have any of the expected spec files in its root directory.</p>

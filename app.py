@@ -221,9 +221,7 @@ def repo_detail(owner, name):
 
     # Fetch file contents for the spec files
     spec_files = {
-        "BUSINESS_SPEC": None,
         "PRODUCT_SPEC": None,
-        "PROJECT_STATUS": None,
         "SESSION_NOTES": None,
     }
 
@@ -406,7 +404,7 @@ def generate_project_summaries():
             file_map[stem] = f
 
         spec_content = {}
-        for key in ["product_spec", "business_spec", "project_status", "session_notes"]:
+        for key in ["product_spec", "session_notes"]:
             actual_name = file_map.get(key)
             if actual_name:
                 content = client.get_file_content(owner, name, actual_name, ref=ref)
@@ -425,8 +423,8 @@ def generate_project_summaries():
             # No specs or description — generate a minimal summary
             models.save_project_summary(name, {
                 "what_it_does": f"{name} — no spec files or description available.",
-                "how_finished": "Unknown — no PROJECT_STATUS or spec files found.",
-                "next_steps": ["Add PRODUCT_SPEC.md with project description", "Add PROJECT_STATUS.md with progress tracking"],
+                "how_finished": "Unknown — no spec files found.",
+                "next_steps": ["Add PRODUCT_SPEC.md with project description", "Add SESSION_NOTES.md with session tracking"],
             })
             skipped += 1
             continue

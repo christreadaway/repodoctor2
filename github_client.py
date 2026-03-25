@@ -194,11 +194,9 @@ class GitHubClient:
                 stem_to_actual[fl] = f
 
         required = {
-            "BUSINESS_SPEC.md": "business_spec",
             "CLAUDE.md": "claude",
             "LICENSE": "license",
             "PRODUCT_SPEC.md": "product_spec",
-            "PROJECT_STATUS.md": "project_status",
             "SESSION_NOTES.md": "session_notes",
         }
         results = {}

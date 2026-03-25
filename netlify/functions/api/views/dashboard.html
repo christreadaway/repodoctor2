@@ -47,9 +47,7 @@
     <span class="legend-label">Required files:</span>
     <span class="legend-item">CLAUDE.md</span>
     <span class="legend-item">LICENSE</span>
-    <span class="legend-item">BUSINESS_SPEC.md</span>
     <span class="legend-item">PRODUCT_SPEC.md</span>
-    <span class="legend-item">PROJECT_STATUS.md</span>
     <span class="legend-item">SESSION_NOTES.md</span>
 </div>
 
@@ -66,11 +64,9 @@
                 <th class="col-branches sortable" data-sort="num" data-col="5">Branches</th>
                 <th class="col-file sortable" data-sort="text" data-col="6">CLAUDE</th>
                 <th class="col-file sortable" data-sort="text" data-col="7">LICENSE</th>
-                <th class="col-file sortable" data-sort="text" data-col="8">BIZ</th>
-                <th class="col-file sortable" data-sort="text" data-col="9">PROD</th>
-                <th class="col-file sortable" data-sort="text" data-col="10">STATUS</th>
-                <th class="col-file sortable" data-sort="text" data-col="11">NOTES</th>
-                <th class="col-score sortable" data-sort="text" data-col="12">Score</th>
+                <th class="col-file sortable" data-sort="text" data-col="8">SPEC</th>
+                <th class="col-file sortable" data-sort="text" data-col="9">NOTES</th>
+                <th class="col-score sortable" data-sort="text" data-col="10">Score</th>
             </tr>
         </thead>
         <tbody>
@@ -119,13 +115,7 @@
                     {% if files['LICENSE'] %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
                 </td>
                 <td class="col-file">
-                    {% if files['BUSINESS_SPEC.md'] %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
-                </td>
-                <td class="col-file">
                     {% if files['PRODUCT_SPEC.md'] %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
-                </td>
-                <td class="col-file">
-                    {% if files['PROJECT_STATUS.md'] %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
                 </td>
                 <td class="col-file">
                     {% if files['SESSION_NOTES.md'] %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
@@ -136,7 +126,7 @@
             </tr>
             {% if repo.total_branch_count > 1 %}
             <tr class="branch-detail-row branch-hidden">
-                <td colspan="13">
+                <td colspan="11">
                     <div class="branch-names">
                         {% for bname in repo.branch_names %}
                         <span class="branch-tag {% if bname == repo.default_branch %}branch-default{% endif %}">{{ bname }}{% if bname == repo.default_branch %} *{% endif %}</span>
@@ -147,7 +137,7 @@
             {% endif %}
             {% if repo.error %}
             <tr class="error-row">
-                <td colspan="13">
+                <td colspan="11">
                     <span class="repo-error">Error scanning: {{ repo.error }}</span>
                 </td>
             </tr>
