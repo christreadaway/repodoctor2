@@ -1,11 +1,96 @@
-# REPODOCTOR2 - Session History
+# REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 6
-**Date Range:** 2025-02-14 to 2026-03-11
-**Last Updated:** 2026-03-11
+**Total Sessions Logged:** 7
+**Date Range:** 2025-02-14 to 2026-03-25
+**Last Updated:** 2026-03-25
 
-This file contains a complete history of Claude Code sessions for this repository, automatically generated from transcript files. Sessions are listed in reverse chronological order (most recent first).
+This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Current Project Status
+
+**Overall Progress:** 85%
+
+**What's Working:**
+- Secure credential storage (Fernet + PBKDF2 encryption)
+- GitHub PAT authentication with scope verification
+- Full repo scanning — branch counts, required file checks
+- Dashboard table with sortable columns, retro terminal UI
+- Sticky table headers
+- Required files detection: CLAUDE.md, LICENSE, PRODUCT_SPEC.md, SESSION_NOTES.md (case-insensitive, any extension)
+- Clickable repo detail pages with spec file content display
+- "Current?" column — detects if docs are fresh (within 7 days of last commit)
+- 30-minute session auto-lock
+- Activity log with color-coded messages
+- Netlify deployment — Node.js Express app as serverless function
+- AI project summaries via Claude Haiku
+- Parallelized scan (batches of 10) and summary generation (batches of 5)
+- 47/47 tests passing
+
+**What's Broken:** Nothing currently broken
+
+**Tech Stack:**
+- **Local dev:** Python + Flask
+- **Deployed (Netlify):** Node.js + Express + serverless-http
+- **AI:** Anthropic Claude API (Haiku for summaries)
+- **GitHub:** REST API v3 with Personal Access Token
+
+**Next Steps:**
+1. Deploy and verify scan + summary generation on live Netlify site
+2. Merge open branches to main once verified
+3. Consider Netlify Blobs for persistent data (scan results survive cold starts)
+
+**Blockers:**
+- Free tier has 10s function timeout (26s on paid). Large GitHub accounts may still time out.
+
+---
+
+
+## 2026-03-25 — Dashboard File Requirements Update
+
+### What Was Accomplished
+- Reduced required files from 6 to 4: CLAUDE.md, LICENSE, PRODUCT_SPEC.md, SESSION_NOTES.md
+- Removed BUSINESS_SPEC.md and PROJECT_STATUS.md from all checks (content consolidated into PRODUCT_SPEC.md and SESSION_NOTES.md)
+- Renamed "PROD" column heading to "SPEC" on the dashboard
+- Fixed 2 pre-existing test failures (stale hardcoded dates)
+- Added 5 new tests for the required files configuration
+- Updated both Flask and Netlify versions consistently
+- Consolidated .md files: merged business spec into PRODUCT_SPEC.md, merged project status into SESSION_NOTES.md
+- Deleted BUSINESS_SPEC.md and PROJECT_STATUS.md
+
+### Technical Details
+**Files Modified:**
+- `github_client.py` — Removed business_spec and project_status from required files dict
+- `app.py` — Removed BUSINESS_SPEC and PROJECT_STATUS from spec_files and summary generation
+- `templates/dashboard.html` — Removed BIZ/STATUS columns, renamed PROD→SPEC, updated colspan 13→11
+- `templates/repo_detail.html` — Removed Business Spec and Project Status panels
+- `netlify/functions/api/lib/github-client.js` — Same required files update
+- `netlify/functions/api/api.js` — Same spec_files and threshold update
+- `netlify/functions/api/views/dashboard.html` — Same column changes
+- `netlify/functions/api/views/repo_detail.html` — Same panel removal
+- `tests/test_app.py` — Fixed stale test dates, added TestRequiredFiles class
+- `PRODUCT_SPEC.md` — Incorporated business context, updated to version 7.0
+- `SESSION_NOTES.md` — Incorporated project status section
+
+**Files Deleted:**
+- `BUSINESS_SPEC.md` — Content merged into PRODUCT_SPEC.md section 2.1
+- `PROJECT_STATUS.md` — Content merged into SESSION_NOTES.md header
+
+### Current Status
+- ✅ Dashboard shows 4 required files (CLAUDE, LICENSE, SPEC, NOTES)
+- ✅ All 47 tests passing
+- ✅ Both Flask and Netlify versions updated consistently
+
+### Branch Info
+- Working branch: `claude/update-dashboard-requirements-3qOHK`
+- Ready to merge to main: Yes
+
+### Next Steps
+1. Merge to main
+2. Re-scan repos to verify scores show X/4
+3. Update other repos to drop BUSINESS_SPEC.md and PROJECT_STATUS.md
 
 ---
 

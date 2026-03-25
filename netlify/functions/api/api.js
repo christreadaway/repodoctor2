@@ -223,7 +223,7 @@ app.post('/scan', requireAuth, async (req, res) => {
     repos: results,
     total_repos: results.length,
     total_branches: results.reduce((sum, r) => sum + (r.total_branch_count || 0), 0),
-    repos_missing_files: results.filter(r => (r.files_present || 0) < 6).length,
+    repos_missing_files: results.filter(r => (r.files_present || 0) < 4).length,
   };
 
   models.saveScan(scanResults);
@@ -260,7 +260,7 @@ app.get('/repo/:owner/:name', requireAuth, async (req, res) => {
     fileMap[stem] = f;
   }
 
-  const specFiles = { BUSINESS_SPEC: null, PRODUCT_SPEC: null, PROJECT_STATUS: null, SESSION_NOTES: null };
+  const specFiles = { PRODUCT_SPEC: null, SESSION_NOTES: null };
   const rawSpecs = {};
 
   for (const key of Object.keys(specFiles)) {
@@ -384,8 +384,8 @@ app.post('/projects/generate', requireAuth, async (req, res) => {
     if (!contextParts.length) {
       models.saveProjectSummary(name, {
         what_it_does: `${name} — no spec files or description available.`,
-        how_finished: 'Unknown — no PROJECT_STATUS or spec files found.',
-        next_steps: ['Add PRODUCT_SPEC.md with project description', 'Add PROJECT_STATUS.md with progress tracking'],
+        how_finished: 'Unknown — no spec files found.',
+        next_steps: ['Add PRODUCT_SPEC.md with project description', 'Add SESSION_NOTES.md with session tracking'],
       });
       return 'skipped';
     }

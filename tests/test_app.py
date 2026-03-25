@@ -180,6 +180,56 @@ class TestModels(unittest.TestCase):
         self.assertIn("repo-b", specs)
 
 
+class TestRequiredFiles(unittest.TestCase):
+    """Test required files configuration."""
+
+    def setUp(self):
+        self.client = gh.GitHubClient.__new__(gh.GitHubClient)
+
+    def test_required_files_count(self):
+        """Only 4 files should be required."""
+        # Mock get_root_files to return all possible files
+        all_files = [
+            "CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md", "SESSION_NOTES.md",
+            "BUSINESS_SPEC.md", "PROJECT_STATUS.md",
+        ]
+        with patch.object(self.client, "get_root_files", return_value=all_files):
+            results, actual_names = self.client.check_required_files("owner", "repo")
+        self.assertEqual(len(results), 4)
+
+    def test_required_files_names(self):
+        """Required files are CLAUDE.md, LICENSE, PRODUCT_SPEC.md, SESSION_NOTES.md."""
+        all_files = ["CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md", "SESSION_NOTES.md"]
+        with patch.object(self.client, "get_root_files", return_value=all_files):
+            results, actual_names = self.client.check_required_files("owner", "repo")
+        self.assertIn("CLAUDE.md", results)
+        self.assertIn("LICENSE", results)
+        self.assertIn("PRODUCT_SPEC.md", results)
+        self.assertIn("SESSION_NOTES.md", results)
+
+    def test_business_spec_not_required(self):
+        """BUSINESS_SPEC.md should NOT be in required files."""
+        all_files = ["CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md", "SESSION_NOTES.md", "BUSINESS_SPEC.md"]
+        with patch.object(self.client, "get_root_files", return_value=all_files):
+            results, actual_names = self.client.check_required_files("owner", "repo")
+        self.assertNotIn("BUSINESS_SPEC.md", results)
+
+    def test_project_status_not_required(self):
+        """PROJECT_STATUS.md should NOT be in required files."""
+        all_files = ["CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md", "SESSION_NOTES.md", "PROJECT_STATUS.md"]
+        with patch.object(self.client, "get_root_files", return_value=all_files):
+            results, actual_names = self.client.check_required_files("owner", "repo")
+        self.assertNotIn("PROJECT_STATUS.md", results)
+
+    def test_all_present_score(self):
+        """All 4 files present gives 4/4."""
+        all_files = ["CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md", "SESSION_NOTES.md"]
+        with patch.object(self.client, "get_root_files", return_value=all_files):
+            results, actual_names = self.client.check_required_files("owner", "repo")
+        present = sum(1 for v in results.values() if v)
+        self.assertEqual(present, 4)
+
+
 class TestGitHubClassification(unittest.TestCase):
     """Test branch classification logic."""
 
@@ -195,13 +245,15 @@ class TestGitHubClassification(unittest.TestCase):
     def test_ahead_only(self):
         """Branch ahead only is AHEAD ONLY."""
         comparison = {"ahead_by": 3, "behind_by": 0}
-        result = self.client.classify_branch(comparison, "2026-02-13T00:00:00Z", False)
+        recent = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        result = self.client.classify_branch(comparison, recent, False)
         self.assertEqual(result, "AHEAD ONLY")
 
     def test_diverged(self):
         """Branch both ahead and behind is DIVERGED."""
         comparison = {"ahead_by": 3, "behind_by": 2}
-        result = self.client.classify_branch(comparison, "2026-02-13T00:00:00Z", False)
+        recent = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        result = self.client.classify_branch(comparison, recent, False)
         self.assertEqual(result, "DIVERGED")
 
     def test_stale(self):

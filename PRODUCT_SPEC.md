@@ -1,6 +1,6 @@
 # RepoDoctor2 — Product Specification
 
-**Version:** 6.0 | **Date:** 2026-03-07 | **Repo:** github.com/christreadaway/repodoctor2
+**Version:** 7.0 | **Date:** 2026-03-25 | **Repo:** github.com/christreadaway/repodoctor2
 
 ---
 
@@ -17,6 +17,15 @@ The retro 1980s terminal aesthetic is intentional — it signals "developer tool
 Developers working across many repos lose track of branch hygiene and project documentation. Stale branches pile up, required files go missing, and there's no single view that answers "which of my repos need attention?" Meanwhile, Claude conversation history lives in a separate export with no connection to the repos those conversations were about.
 
 RepoDoctor v1 proved the concept but was tightly coupled and hard to extend. RepoDoctor2 is a ground-up rebuild with modular architecture, better onboarding, model selection, and a conversation-to-repo mapping engine.
+
+---
+
+## 2.1 Business Context
+
+- **Target Users:** Claude Code developers, vibe coders, solo developers, non-technical product builders who need guided onboarding
+- **Business Model:** Free / Open Source developer tool
+- **Cost-Conscious Design:** Haiku default keeps per-analysis cost at ~$0.003
+- **Success Metrics:** Onboarding completion rate, model tier distribution, display mode preference split
 
 ---
 
@@ -46,7 +55,7 @@ RepoDoctor v1 proved the concept but was tightly coupled and hard to extend. Rep
 **Files:** `app.py` (dashboard route), `templates/dashboard.html`
 
 - Sortable table of all user-owned and collaborator repos
-- Columns: repo name, visibility (public/private), created date, updated date, branch count, 6 required file indicators, "Updated?" indicator, file score
+- Columns: repo name, visibility (public/private), created date, updated date, branch count, 4 required file indicators (CLAUDE, LICENSE, SPEC, NOTES), "Updated?" indicator, file score
 - "Updated?" column: checks if PRODUCT_SPEC.md and SESSION_NOTES.md were committed within 24 hours of the most recent repo commit — YES (green), NO (red), or — (files don't exist)
 - Summary stats bar: total repos, total branches, repos missing required files
 - Expandable branch name lists (click branch count to toggle)
@@ -58,18 +67,16 @@ RepoDoctor v1 proved the concept but was tightly coupled and hard to extend. Rep
 
 **Files:** `github_client.py` (`check_required_files`, `get_root_files`)
 
-Six files are checked per repo, with flexible matching (case-insensitive, any extension):
+Four files are checked per repo, with flexible matching (case-insensitive, any extension):
 
 | Required File | Purpose |
 |---|---|
 | `CLAUDE.md` | Claude Code project instructions |
 | `LICENSE` | Open source license |
-| `BUSINESS_SPEC.md` | Business context and problem statement |
-| `PRODUCT_SPEC.md` | Feature inventory and technical spec |
-| `PROJECT_STATUS.md` | Current state snapshot |
-| `SESSION_NOTES.md` | Session-by-session development log |
+| `PRODUCT_SPEC.md` | Product specification and business context |
+| `SESSION_NOTES.md` | Session-by-session development log and project status |
 
-Matching is stem-based: `business_spec.pdf`, `BUSINESS_SPEC.md`, `Business_Spec.txt` all count. A single API call fetches the root directory listing, replacing 6 individual file checks (~83% fewer API requests). The matcher also returns the actual filenames found on disk, so downstream features (like the "Updated?" freshness check) can reference files by their real name.
+Matching is stem-based: `product_spec.pdf`, `PRODUCT_SPEC.md`, `Product_Spec.txt` all count. A single API call fetches the root directory listing, replacing individual file checks. The matcher also returns the actual filenames found on disk, so downstream features (like the "Updated?" freshness check) can reference files by their real name.
 
 ### 4.4 Repository Detail View
 
@@ -77,7 +84,7 @@ Matching is stem-based: `business_spec.pdf`, `BUSINESS_SPEC.md`, `Business_Spec.
 
 - Repo header: full name, visibility badge, default branch, branch count, description
 - Required files status grid with Y/- indicators per file
-- Spec file content panels: displays the actual contents of BUSINESS_SPEC, PRODUCT_SPEC, PROJECT_STATUS, and SESSION_NOTES pulled from the repo (truncated at 10,000 chars)
+- Spec file content panels: displays the actual contents of PRODUCT_SPEC and SESSION_NOTES pulled from the repo (truncated at 10,000 chars)
 - Branch list with default branch marker
 - Link to view on GitHub
 
@@ -307,7 +314,7 @@ Flask Application (app.py)
 | Security | Fernet symmetric encryption + PBKDF2-HMAC-SHA256 |
 | Frontend | Jinja2 templates + vanilla JS + retro terminal CSS |
 | Storage | Local JSON files (no database) |
-| Tests | pytest (43 tests) |
+| Tests | pytest (47 tests) |
 | Server | localhost:5001 |
 
 **Dependencies:** flask, requests, anthropic, cryptography, python-dotenv
@@ -326,7 +333,7 @@ Flask Application (app.py)
 
 ## 10. Testing
 
-**Files:** `tests/test_app.py` (437 lines, 43 tests)
+**Files:** `tests/test_app.py` (47 tests)
 
 Coverage areas:
 - Security: encryption/decryption roundtrips, wrong password rejection, credential file management
@@ -343,11 +350,14 @@ Coverage areas:
 |---|---|
 | Credential encryption | Working |
 | Dashboard (repo table + file checks) | Working |
+| Required files (4: CLAUDE.md, LICENSE, PRODUCT_SPEC.md, SESSION_NOTES.md) | Working |
 | "Updated?" doc freshness column | Working |
 | Repo detail (spec viewer + branch list) | Working |
 | Settings | Working |
 | Cost tracking | Working |
-| Tests (43/43) | Passing |
+| Tests (47/47) | Passing |
+| Netlify deployment (Node.js) | Working |
+| AI project summaries via Claude Haiku | Working |
 | AI branch analysis | Built, inactive |
 | Archive management | Built, inactive |
 | Action log | Built, inactive |
