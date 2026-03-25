@@ -16,13 +16,13 @@ git branch --show-current
 
 3. Check for critical tracking files:
 ```bash
-ls -la PROJECT_STATUS.md SESSION_NOTES.md 2>/dev/null || echo "WARNING: One or more tracking files missing"
+ls -la SESSION_NOTES.md PRODUCT_SPEC.md 2>/dev/null || echo "WARNING: One or more tracking files missing"
 ```
 
 4. If files are missing, recover from main:
 ```bash
-git checkout origin/main -- PROJECT_STATUS.md 2>/dev/null; echo "Recovered PROJECT_STATUS.md" || echo "PROJECT_STATUS.md not on main"
 git checkout origin/main -- SESSION_NOTES.md 2>/dev/null; echo "Recovered SESSION_NOTES.md" || echo "SESSION_NOTES.md not on main"
+git checkout origin/main -- PRODUCT_SPEC.md 2>/dev/null; echo "Recovered PRODUCT_SPEC.md" || echo "PRODUCT_SPEC.md not on main"
 ```
 
 5. Show the last session entry from SESSION_NOTES.md so we know where we left off:
