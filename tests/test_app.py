@@ -588,5 +588,240 @@ class TestFlaskApp(unittest.TestCase):
                 self.assertEqual(resp.status_code, 200)
 
 
+class TestDefaultGroupSeeding(unittest.TestCase):
+    """Covers seed_default_groups_if_missing (temporary login-time recovery)."""
+
+    def setUp(self):
+        self._orig_groups = models.GROUPS_PATH
+        self._orig_legacy = models._LEGACY_GROUPS_PATH
+        self._orig_prefs = models.PREFS_PATH
+        self._orig_log = models.ACTION_LOG_PATH
+        self.tmp = tempfile.mkdtemp()
+        models.GROUPS_PATH = os.path.join(self.tmp, "groups.json")
+        models._LEGACY_GROUPS_PATH = os.path.join(self.tmp, "legacy_groups.json")
+        models.PREFS_PATH = os.path.join(self.tmp, "prefs.json")
+        models.ACTION_LOG_PATH = os.path.join(self.tmp, "action_log.json")
+
+    def tearDown(self):
+        models.GROUPS_PATH = self._orig_groups
+        models._LEGACY_GROUPS_PATH = self._orig_legacy
+        models.PREFS_PATH = self._orig_prefs
+        models.ACTION_LOG_PATH = self._orig_log
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_seeds_all_five_when_empty(self):
+        added = models.seed_default_groups_if_missing()
+        self.assertEqual(
+            set(added),
+            {"School", "Church", "Catholic Games", "Infrastructure", "Fun"},
+        )
+        groups = models.get_groups()
+        self.assertIn("parentpoint", groups["School"])
+        self.assertIn("sacramentalrecords", groups["Church"])
+        self.assertIn("RCC_longwayhome", groups["Catholic Games"])
+        self.assertIn("repodoctor2", groups["Infrastructure"])
+        self.assertIn("polygraph", groups["Fun"])
+
+    def test_idempotent_after_first_seed(self):
+        models.seed_default_groups_if_missing()
+        self.assertEqual(models.seed_default_groups_if_missing(), [])
+
+    def test_preserves_user_edits(self):
+        """Hand-edited group with same name is never overwritten."""
+        models.set_group("School", ["only-this-one"])
+        added = models.seed_default_groups_if_missing()
+        self.assertNotIn("School", added)
+        self.assertEqual(models.get_groups()["School"], ["only-this-one"])
+
+    def test_seeded_groups_are_sorted_and_deduped(self):
+        models.seed_default_groups_if_missing()
+        for name, repos in models.get_groups().items():
+            self.assertEqual(repos, sorted(set(repos)),
+                             f"Group {name} not sorted/deduped")
+
+
+class TestLegacyGroupsMigration(unittest.TestCase):
+    """Covers one-shot migration from config/groups.json to ~/.repodoctor/groups.json."""
+
+    def setUp(self):
+        self._orig_groups = models.GROUPS_PATH
+        self._orig_legacy = models._LEGACY_GROUPS_PATH
+        self.tmp = tempfile.mkdtemp()
+        self.legacy_path = os.path.join(self.tmp, "legacy", "groups.json")
+        self.new_path = os.path.join(self.tmp, "new", "groups.json")
+        os.makedirs(os.path.dirname(self.legacy_path), exist_ok=True)
+        models.GROUPS_PATH = self.new_path
+        models._LEGACY_GROUPS_PATH = self.legacy_path
+
+    def tearDown(self):
+        models.GROUPS_PATH = self._orig_groups
+        models._LEGACY_GROUPS_PATH = self._orig_legacy
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_migrates_when_new_missing(self):
+        with open(self.legacy_path, "w") as f:
+            json.dump({"legacy": ["r1"]}, f)
+        groups = models.get_groups()
+        self.assertEqual(groups, {"legacy": ["r1"]})
+        self.assertTrue(os.path.exists(self.new_path))
+
+    def test_does_not_clobber_existing_new_file(self):
+        with open(self.legacy_path, "w") as f:
+            json.dump({"legacy": ["r1"]}, f)
+        os.makedirs(os.path.dirname(self.new_path), exist_ok=True)
+        with open(self.new_path, "w") as f:
+            json.dump({"current": ["r2"]}, f)
+        self.assertEqual(models.get_groups(), {"current": ["r2"]})
+
+    def test_corrupt_legacy_returns_empty(self):
+        with open(self.legacy_path, "w") as f:
+            f.write('["not", "a", "dict"]')
+        self.assertEqual(models.get_groups(), {})
+
+
+class TestProjectsSortAndStatsFilter(unittest.TestCase):
+    """Covers /projects most-recent sort and /stats group filter."""
+
+    def setUp(self):
+        from app import app
+        import app as app_mod
+        app.config["TESTING"] = True
+        self.app = app
+        self.app_mod = app_mod
+        self.client = app.test_client()
+        # Authenticated session
+        with self.client.session_transaction() as sess:
+            sess["authenticated"] = True
+            sess["github_user"] = "tester"
+        # Swap storage paths
+        self._orig_groups = models.GROUPS_PATH
+        self._orig_legacy = models._LEGACY_GROUPS_PATH
+        self._orig_prefs = models.PREFS_PATH
+        self._orig_log = models.ACTION_LOG_PATH
+        self.tmp = tempfile.mkdtemp()
+        models.GROUPS_PATH = os.path.join(self.tmp, "groups.json")
+        models._LEGACY_GROUPS_PATH = os.path.join(self.tmp, "legacy.json")
+        models.PREFS_PATH = os.path.join(self.tmp, "prefs.json")
+        models.ACTION_LOG_PATH = os.path.join(self.tmp, "log.json")
+        # Stub scan results
+        self._orig_scan = app_mod._scan_results
+        app_mod._scan_results = {
+            "repos": [
+                {"owner": "o", "name": "repo-newest", "full_name": "o/repo-newest",
+                 "default_branch": "main", "private": False, "html_url": "",
+                 "description": "", "updated_at": "2026-04-20T00:00:00Z",
+                 "files_present": 5, "files_total": 5, "code_size_bytes": 100,
+                 "total_branch_count": 1, "non_default_branch_count": 0,
+                 "branch_names": [], "required_files": {}, "languages": {}},
+                {"owner": "o", "name": "repo-mid", "full_name": "o/repo-mid",
+                 "default_branch": "main", "private": False, "html_url": "",
+                 "description": "", "updated_at": "2026-03-15T00:00:00Z",
+                 "files_present": 3, "files_total": 5, "code_size_bytes": 200,
+                 "total_branch_count": 1, "non_default_branch_count": 0,
+                 "branch_names": [], "required_files": {}, "languages": {}},
+                {"owner": "o", "name": "repo-none", "full_name": "o/repo-none",
+                 "default_branch": "main", "private": False, "html_url": "",
+                 "description": "", "updated_at": None,
+                 "files_present": 1, "files_total": 5, "code_size_bytes": 0,
+                 "total_branch_count": 0, "non_default_branch_count": 0,
+                 "branch_names": [], "required_files": {}, "languages": {}},
+            ],
+            "total_repos": 3, "total_branches": 2,
+        }
+
+    def tearDown(self):
+        self.app_mod._scan_results = self._orig_scan
+        self.app_mod._stats_cache = None
+        models.GROUPS_PATH = self._orig_groups
+        models._LEGACY_GROUPS_PATH = self._orig_legacy
+        models.PREFS_PATH = self._orig_prefs
+        models.ACTION_LOG_PATH = self._orig_log
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_projects_sort_by_updated_at_desc(self):
+        resp = self.client.get("/projects")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.data.decode()
+        self.assertLess(body.index("repo-newest"), body.index("repo-mid"))
+        self.assertLess(body.index("repo-mid"), body.rindex("repo-none"))
+
+    def test_projects_no_updated_at_does_not_crash(self):
+        # repo-none has updated_at=None
+        resp = self.client.get("/projects")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"repo-none", resp.data)
+
+    def test_stats_page_has_group_bar_when_groups_exist(self):
+        models.set_group("Core", ["repo-newest"])
+        # Stub out the API-backed activity collector
+        def fake_collect(c, r, since, now):
+            return {
+                "name": r["name"], "owner": r["owner"],
+                "full_name": r["full_name"], "html_url": "",
+                "commits_by_period": {k: 1 for k in self.app_mod.PERIOD_DAYS},
+                "code_size_bytes": r.get("code_size_bytes", 0),
+            }
+        self._orig_collect = self.app_mod._collect_repo_activity
+        self._orig_client = self.app_mod._github_client
+        self.app_mod._collect_repo_activity = fake_collect
+        class FakeClient: pass
+        self.app_mod._github_client = FakeClient()
+        try:
+            resp = self.client.get("/stats")
+            self.assertEqual(resp.status_code, 200)
+            body = resp.data.decode()
+            self.assertIn("Core", body, "Group tab should render")
+            self.assertNotIn("Lines Added", body, "LOC tab must be gone")
+            self.assertIn("By group", body, "Group-rollup mode toggle missing")
+        finally:
+            self.app_mod._collect_repo_activity = self._orig_collect
+            self.app_mod._github_client = self._orig_client
+
+    def test_stats_nonexistent_group_falls_back_to_all(self):
+        models.set_group("Real", ["repo-newest"])
+        def fake_collect(c, r, since, now):
+            return {
+                "name": r["name"], "owner": r["owner"],
+                "full_name": r["full_name"], "html_url": "",
+                "commits_by_period": {k: 0 for k in self.app_mod.PERIOD_DAYS},
+                "code_size_bytes": 0,
+            }
+        self._orig_collect = self.app_mod._collect_repo_activity
+        self._orig_client = self.app_mod._github_client
+        self.app_mod._collect_repo_activity = fake_collect
+        class FakeClient: pass
+        self.app_mod._github_client = FakeClient()
+        try:
+            resp = self.client.get("/stats?group=DoesNotExist")
+            self.assertEqual(resp.status_code, 200)
+        finally:
+            self.app_mod._collect_repo_activity = self._orig_collect
+            self.app_mod._github_client = self._orig_client
+
+    def test_stats_mode_toggle_hidden_when_group_selected(self):
+        """Per-group view is degenerate for a single group — toggle hides."""
+        models.set_group("Real", ["repo-newest"])
+        def fake_collect(c, r, since, now):
+            return {
+                "name": r["name"], "owner": r["owner"],
+                "full_name": r["full_name"], "html_url": "",
+                "commits_by_period": {k: 0 for k in self.app_mod.PERIOD_DAYS},
+                "code_size_bytes": 0,
+            }
+        self._orig_collect = self.app_mod._collect_repo_activity
+        self._orig_client = self.app_mod._github_client
+        self.app_mod._collect_repo_activity = fake_collect
+        class FakeClient: pass
+        self.app_mod._github_client = FakeClient()
+        try:
+            resp = self.client.get("/stats?group=Real")
+            self.assertEqual(resp.status_code, 200)
+            # Mode toggle absent when a specific group is active
+            self.assertNotIn(b'data-mode="groups"', resp.data)
+        finally:
+            self.app_mod._collect_repo_activity = self._orig_collect
+            self.app_mod._github_client = self._orig_client
+
+
 if __name__ == "__main__":
     unittest.main()

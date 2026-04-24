@@ -1,11 +1,60 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 9
+**Total Sessions Logged:** 10
 **Date Range:** 2025-02-14 to 2026-04-24
 **Last Updated:** 2026-04-24
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 10 — 2026-04-24 (Projects sort, Stats groups, persistence, bug audit)
+
+### What We Built
+Chris surfaced five UX/stability issues with the April 24 feature drop; I addressed all of them, hardened the group-storage layer, added 12 new tests, and did a comprehensive bug audit that caught one real migration bug.
+
+1. **Projects list sorts by most recently updated (desc)** — `app.py` `projects()` now sorts the repo list by `updated_at` desc before group filtering. Repos with missing or null `updated_at` sink to the bottom deterministically.
+2. **Stats: filter by group + "By group" rollup** — new group tab bar on `/stats` (same UX as Projects) plus a "By repo / By group" toggle that aggregates commits or code‑size across each group. Repos in no group roll up under "Ungrouped" so nothing disappears. The mode toggle is hidden server-side when no groups exist or when a single group is already selected (the rollup would be a one-row degenerate view).
+3. **Groups persist across codebase wipes** — storage moved from `config/groups.json` (inside the repo) to `~/.repodoctor/groups.json`. A one-shot migration copies any existing legacy file the first time `get_groups()` runs. The old path stays gitignored.
+4. **"Lines Added" removed** — was broken (always showed 0 on cold repos because `/stats/code_frequency` is async). Removed the tab, the LOC pro-rating logic, and the now-unused `get_code_frequency` client helper.
+5. **200-commit cap lifted** — `_collect_repo_activity` now pages through up to 5000 commits per repo (was capped at 200); the truncation flag is gone so the bar scales with the real count.
+6. **Default group seeding on login (temporary)** — `models.seed_default_groups_if_missing()` hard-codes Chris's 5 groups (School, Church, Catholic Games, Infrastructure, Fun) as a one-shot recovery after a codebase wipe. Called from `_init_session` after password verification. Only adds groups that don't already exist, so hand-edits are preserved and re-runs are no-ops.
+
+### Technical Details
+
+- **Sort key**: `lambda r: r.get("updated_at") or ""` — coerces None and missing to empty string so the `reverse=True` sort pushes them last.
+- **Stats group filter**: tab bar is server-rendered with the active tab highlighted via `active_group` query param; rollup is client-side in `stats.html` (`rollupByGroup`), so switching views doesn't re-hit GitHub.
+- **Groups persistence**: `GROUPS_PATH = os.path.join(os.path.expanduser("~"), ".repodoctor", "groups.json")`. `_save_json` now creates `os.path.dirname(path)` rather than relying on a hard-coded `_ensure_dirs()`, so any storage path just works.
+- **Migration bug caught by tests**: `_migrate_legacy_groups` originally called `os.makedirs(USER_DATA_DIR)` — but `USER_DATA_DIR` is fixed to `~/.repodoctor`, so if `GROUPS_PATH` is ever moved (or monkey-patched in tests), migration silently failed. Fixed to `os.makedirs(os.path.dirname(GROUPS_PATH), exist_ok=True)`.
+- **Seeding**: `DEFAULT_USER_GROUPS` is a flat dict of group name → sorted repo-name list. `seed_default_groups_if_missing()` returns the list of groups added, which `_init_session` logs via `log_action` so the activity log shows the recovery event.
+
+### Current Status
+- ✅ All 5 reported issues fixed (projects sort, stats groups, groups persistence, LOC removed, commit cap lifted)
+- ✅ Chris's 5 default groups seeded on login (temporary; flagged in CLAUDE.md for removal)
+- ✅ 72/72 tests passing (12 new tests across `TestDefaultGroupSeeding`, `TestLegacyGroupsMigration`, `TestProjectsSortAndStatsFilter`)
+- ✅ 1 real bug caught + fixed (legacy-groups migration path mismatch)
+- ✅ Test suite doesn't pollute real `~/.repodoctor/` or `config/groups.json`
+
+### Branch Info
+- Branch: `claude/sort-projects-group-stats-yXxvE`
+- 3 commits pushed to origin
+- Not merged yet — awaiting Chris's OK and verification on his local machines
+
+### Decisions Made
+- **Seeding is setdefault-per-name**, not all-or-nothing. If Chris has already created some groups but not all, only the missing ones get added.
+- **Mode toggle hidden** (server-side) when a specific group is active — rolling up a single group is a useless one-row chart.
+- **Removed `get_code_frequency`** entirely rather than leaving it as dead code; its only caller was the deleted Lines Added view.
+- **Kept the old `config/groups.json` entry in `.gitignore`** with an updated comment — harmless belt-and-braces in case a pre-migration clone is lying around somewhere.
+
+### Next Steps
+1. Chris pulls `claude/sort-projects-group-stats-yXxvE`, logs in locally, and verifies the 5 fixes behave as expected on his real data.
+2. Merge to main once verified.
+3. Next product rebuild: remove `DEFAULT_USER_GROUPS`, `seed_default_groups_if_missing()`, and its call in `_init_session` — see "Tech Debt" section in `CLAUDE.md`.
+4. Still outstanding from earlier sessions: port these features to the Netlify version, parallelize the initial scan.
+
+### Questions / Blockers
+None.
 
 ---
 

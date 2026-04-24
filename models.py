@@ -198,7 +198,7 @@ def _migrate_legacy_groups():
     if os.path.exists(GROUPS_PATH) or not os.path.exists(_LEGACY_GROUPS_PATH):
         return
     try:
-        os.makedirs(USER_DATA_DIR, exist_ok=True)
+        os.makedirs(os.path.dirname(GROUPS_PATH), exist_ok=True)
         with open(_LEGACY_GROUPS_PATH, "r") as src, open(GROUPS_PATH, "w") as dst:
             dst.write(src.read())
     except OSError:

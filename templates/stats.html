@@ -48,10 +48,12 @@
         <button type="button" class="stats-tab active" data-view="commits">Commits</button>
         <button type="button" class="stats-tab" data-view="size">Code Size</button>
     </div>
+    {% if groups and not active_group %}
     <div class="stats-modes" id="stats-modes">
         <button type="button" class="stats-mode active" data-mode="repos">By repo</button>
         <button type="button" class="stats-mode" data-mode="groups">By group</button>
     </div>
+    {% endif %}
     <div class="stats-periods" id="stats-periods">
         {% for p in periods %}
         <button type="button" class="stats-period {% if p == '1w' %}active{% endif %}" data-period="{{ p }}">{{ p }}</button>
