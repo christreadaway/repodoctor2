@@ -13,7 +13,7 @@ env/
 # Config (contains encrypted credentials)
 config/credentials.enc
 
-# User-specific project groups
+# User-specific project groups (legacy path; current location is ~/.repodoctor/groups.json)
 config/groups.json
 
 # Data (local scan/cache data)

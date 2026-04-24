@@ -9,6 +9,8 @@ import os
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
+# User-scoped storage that survives wiping/re-cloning the project directory.
+USER_DATA_DIR = os.path.join(os.path.expanduser("~"), ".repodoctor")
 
 
 def _ensure_dirs():
@@ -25,7 +27,7 @@ def _load_json(path: str) -> dict | list:
 
 
 def _save_json(path: str, data):
-    _ensure_dirs()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         json.dump(data, f, indent=2, default=str)
 
@@ -183,12 +185,29 @@ def save_project_summaries(summaries: dict):
 
 
 # --- Project Groups ---
+#
+# Groups live in the user's home dir (~/.repodoctor/groups.json) so they
+# survive deleting/re-cloning the project. We keep a one-shot migration
+# from the legacy config/groups.json location.
 
-GROUPS_PATH = os.path.join(CONFIG_DIR, "groups.json")
+GROUPS_PATH = os.path.join(USER_DATA_DIR, "groups.json")
+_LEGACY_GROUPS_PATH = os.path.join(CONFIG_DIR, "groups.json")
+
+
+def _migrate_legacy_groups():
+    if os.path.exists(GROUPS_PATH) or not os.path.exists(_LEGACY_GROUPS_PATH):
+        return
+    try:
+        os.makedirs(USER_DATA_DIR, exist_ok=True)
+        with open(_LEGACY_GROUPS_PATH, "r") as src, open(GROUPS_PATH, "w") as dst:
+            dst.write(src.read())
+    except OSError:
+        pass
 
 
 def get_groups() -> dict:
     """Return {group_name: [repo_name, ...]} mapping."""
+    _migrate_legacy_groups()
     data = _load_json(GROUPS_PATH)
     if isinstance(data, dict):
         return data

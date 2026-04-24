@@ -370,21 +370,6 @@ class GitHubClient:
             page += 1
         return commits
 
-    def get_code_frequency(self, owner: str, repo: str) -> list[list[int]] | None:
-        """Return weekly [week_ts, additions, deletions] rows for the past year.
-
-        GitHub computes these stats asynchronously — the first request on a
-        cold repo returns 202 with an empty body. We return None in that case
-        (caller should treat as "not yet available").
-        """
-        resp = self._get(f"{GITHUB_API}/repos/{owner}/{repo}/stats/code_frequency")
-        if resp.status_code == 200:
-            data = resp.json()
-            if isinstance(data, list):
-                return data
-        # 202 = still computing; 204 = empty repo
-        return None
-
     def classify_branch(self, comparison: dict, last_commit_date: str | None, has_pr: bool) -> str:
         """Classify a branch based on comparison data."""
         ahead = comparison.get("ahead_by", 0)
