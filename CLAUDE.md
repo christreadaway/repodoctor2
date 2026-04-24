@@ -71,3 +71,14 @@ Last Updated: February 16, 2026
 ## Branch Rules
 Always work on the main branch. Do not create new branches unless explicitly asked. Commit and push all changes directly to main.
 
+## Tech Debt — Remove on Next Product Rebuild
+
+**Default group seeding (added April 2026).** On login, `_init_session` calls
+`models.seed_default_groups_if_missing()` which hard-codes Chris's 5 groups
+(School, Church, Catholic Games, Infrastructure, Fun) as a one-shot recovery
+after a codebase wipe. This is temporary. When we next rebuild this product:
+
+- Delete `DEFAULT_USER_GROUPS` and `seed_default_groups_if_missing()` from `models.py`.
+- Remove the call + its `log_action` in `app._init_session`.
+- Groups now persist at `~/.repodoctor/groups.json`, so nothing else is needed — the stored file is the source of truth.
+

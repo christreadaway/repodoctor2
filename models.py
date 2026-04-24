@@ -218,6 +218,47 @@ def save_groups(groups: dict):
     _save_json(GROUPS_PATH, groups)
 
 
+# TEMPORARY (April 2026): one-shot recovery of Chris's existing groups after a
+# codebase wipe. seed_default_groups_if_missing() runs once on login and only
+# fills in groups that don't already exist — your edits are never overwritten.
+# NEXT REBUILD: delete DEFAULT_USER_GROUPS and seed_default_groups_if_missing,
+# and stop calling it from app._init_session. Groups now live in
+# ~/.repodoctor/groups.json and will simply persist there.
+DEFAULT_USER_GROUPS = {
+    "School": [
+        "audioscribe", "desmond", "grantfinder", "LA-pipeline", "lessonalign",
+        "missionIQ", "parentpoint", "parentpointmeals", "standardscollector",
+    ],
+    "Church": [
+        "catholicevents", "grantfinder", "ministryfair", "missionIQ",
+        "sacramentalrecords", "worshipaidcreator",
+    ],
+    "Catholic Games": ["RCC_letmypeoplego", "RCC_longwayhome"],
+    "Infrastructure": [
+        "audioscribe", "claudecodearchiver", "desmond", "personalcrm",
+        "personalfinance", "redmon", "repodoctor2", "vibecoach",
+    ],
+    "Fun": [
+        "C64_archon", "C64_loderunner", "C64_nflchallenge", "c64HOA-original",
+        "c64SFR-original", "c64mule-original", "nordstromshopper",
+        "personalcrm", "polygraph",
+    ],
+}
+
+
+def seed_default_groups_if_missing() -> list[str]:
+    """Add any of DEFAULT_USER_GROUPS that aren't present yet. Returns added names."""
+    groups = get_groups()
+    added: list[str] = []
+    for name, repos in DEFAULT_USER_GROUPS.items():
+        if name not in groups:
+            groups[name] = sorted(set(repos))
+            added.append(name)
+    if added:
+        save_groups(groups)
+    return added
+
+
 def set_group(name: str, repos: list[str]):
     groups = get_groups()
     groups[name] = sorted(set(repos))

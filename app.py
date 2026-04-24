@@ -123,6 +123,10 @@ def _init_session(creds: dict):
     user_info = _github_client.verify_token()
     if user_info:
         session["github_user"] = user_info.get("login", "")
+    # TEMPORARY: see DEFAULT_USER_GROUPS in models.py — remove on next rebuild.
+    seeded = models.seed_default_groups_if_missing()
+    if seeded:
+        models.log_action("seed_groups", "all", "all", f"Seeded default groups: {', '.join(seeded)}")
 
 
 # --- Dashboard ---
