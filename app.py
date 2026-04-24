@@ -143,7 +143,8 @@ def dashboard():
 @app.route("/scan", methods=["POST"])
 @_require_auth
 def scan():
-    global _scan_results
+    global _scan_results, _stats_cache
+    _stats_cache = None
     client = _get_github_client()
     if not client:
         flash("Not authenticated with GitHub.", "error")
@@ -177,6 +178,8 @@ def scan():
                 "required_files": {},
                 "files_present": 0,
                 "files_total": 5,
+                "code_size_bytes": 0,
+                "languages": {},
                 "error": str(e),
             })
 
@@ -523,6 +526,202 @@ def generate_project_summaries():
     flash(f"Generated summaries for {generated} projects ({skipped} skipped/fallback).", "success")
     models.log_action("generate_summaries", "all", "all", f"Generated {generated}, skipped {skipped}")
     return redirect(url_for("projects"))
+
+
+# --- Stats ---
+
+# Cached stats data so the page doesn't re-hit the API on every visit.
+# Keyed by scan identity (len + first repo full_name + total_branches).
+_stats_cache: dict | None = None
+
+
+def _stats_cache_key() -> str:
+    if not _scan_results:
+        return ""
+    repos = _scan_results.get("repos", [])
+    first = repos[0]["full_name"] if repos else ""
+    return f"{len(repos)}|{first}|{_scan_results.get('total_branches', 0)}"
+
+
+PERIOD_DAYS = {
+    "1d": 1, "3d": 3, "1w": 7, "2w": 14, "1m": 30, "2m": 60,
+}
+
+
+def _collect_repo_activity(client, repo, since_iso, now_utc):
+    """Fetch commits + code_frequency for one repo. Returns dict to merge."""
+    import datetime as _dt
+    owner = repo["owner"]
+    name = repo["name"]
+    ref = repo.get("default_branch", "main")
+
+    commits_by_period = {k: 0 for k in PERIOD_DAYS}
+    loc_by_period = {k: 0 for k in PERIOD_DAYS}
+    truncated = False
+
+    try:
+        commits = client.get_commits_since(owner, name, since_iso, ref=ref, max_pages=2)
+    except Exception:
+        commits = []
+    if len(commits) >= 200:
+        truncated = True
+
+    for c in commits:
+        date_str = (
+            c.get("commit", {}).get("committer", {}).get("date")
+            or c.get("commit", {}).get("author", {}).get("date")
+        )
+        if not date_str:
+            continue
+        try:
+            dt = _dt.datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        age_days = (now_utc - dt).total_seconds() / 86400.0
+        for pkey, pdays in PERIOD_DAYS.items():
+            if age_days <= pdays:
+                commits_by_period[pkey] += 1
+
+    # Lines added via weekly code_frequency ([week_start_ts, adds, dels]).
+    # Each week bucket spans [week_start, week_start + 7d]. A commit inside
+    # that bucket is somewhere between (age_days - 7) and age_days days old,
+    # where age_days is how long ago the week STARTED relative to now.
+    try:
+        freq = client.get_code_frequency(owner, name)
+    except Exception:
+        freq = None
+    if freq:
+        for row in freq:
+            if not isinstance(row, list) or len(row) < 2:
+                continue
+            try:
+                week_ts = int(row[0])
+                additions = max(0, int(row[1]))
+            except (ValueError, TypeError):
+                continue
+            if additions == 0:
+                continue
+            try:
+                week_dt = _dt.datetime.fromtimestamp(week_ts, tz=_dt.timezone.utc)
+            except (ValueError, OSError):
+                continue
+            age_days = (now_utc - week_dt).total_seconds() / 86400.0
+            # Commits in this bucket are aged between [bucket_lo, bucket_hi] days.
+            bucket_lo = max(0.0, age_days - 7.0)
+            bucket_hi = max(0.0, age_days)
+            if bucket_hi <= bucket_lo:
+                continue
+            for pkey, pdays in PERIOD_DAYS.items():
+                # Overlap of bucket range with [0, pdays]
+                overlap = max(0.0, min(pdays, bucket_hi) - bucket_lo)
+                if overlap <= 0:
+                    continue
+                frac = min(1.0, overlap / (bucket_hi - bucket_lo))
+                loc_by_period[pkey] += int(additions * frac)
+
+    return {
+        "name": name,
+        "owner": owner,
+        "full_name": repo.get("full_name", f"{owner}/{name}"),
+        "html_url": repo.get("html_url", ""),
+        "commits_by_period": commits_by_period,
+        "commits_truncated": truncated,
+        "loc_by_period": loc_by_period,
+        "code_size_bytes": repo.get("code_size_bytes", 0),
+    }
+
+
+@app.route("/stats")
+@_require_auth
+def stats():
+    global _stats_cache
+    if not _scan_results:
+        return render_template("stats.html", repos=None, scan_results=None)
+
+    force = request.args.get("refresh") == "1"
+    key = _stats_cache_key()
+    if not force and _stats_cache and _stats_cache.get("key") == key:
+        return render_template(
+            "stats.html",
+            repos=_stats_cache["repos"],
+            scan_results=_scan_results,
+            periods=list(PERIOD_DAYS.keys()),
+        )
+
+    client = _get_github_client()
+    if not client:
+        flash("Not authenticated with GitHub.", "error")
+        return redirect(url_for("dashboard"))
+
+    import datetime as _dt
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    now_utc = _dt.datetime.now(_dt.timezone.utc)
+    since = (now_utc - _dt.timedelta(days=max(PERIOD_DAYS.values()))).isoformat()
+
+    repos = _scan_results.get("repos", [])
+    results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {
+            pool.submit(_collect_repo_activity, client, r, since, now_utc): r
+            for r in repos
+        }
+        for fut in as_completed(futures):
+            try:
+                results.append(fut.result())
+            except Exception as e:
+                r = futures[fut]
+                results.append({
+                    "name": r["name"],
+                    "owner": r["owner"],
+                    "full_name": r.get("full_name", ""),
+                    "html_url": r.get("html_url", ""),
+                    "commits_by_period": {k: 0 for k in PERIOD_DAYS},
+                    "commits_truncated": False,
+                    "loc_by_period": {k: 0 for k in PERIOD_DAYS},
+                    "code_size_bytes": r.get("code_size_bytes", 0),
+                    "error": str(e),
+                })
+
+    _stats_cache = {"key": key, "repos": results}
+    return render_template(
+        "stats.html",
+        repos=results,
+        scan_results=_scan_results,
+        periods=list(PERIOD_DAYS.keys()),
+    )
+
+
+# --- What's Next (aggregated across repos) ---
+
+@app.route("/whats-next")
+@_require_auth
+def whats_next_all():
+    summaries = models.get_project_summaries()
+    repos = _scan_results.get("repos", []) if _scan_results else []
+
+    items = []
+    for repo in repos:
+        s = summaries.get(repo["name"]) or {}
+        next_steps = s.get("next_steps") or []
+        if not next_steps:
+            continue
+        items.append({
+            "repo": repo["name"],
+            "owner": repo["owner"],
+            "html_url": repo.get("html_url", ""),
+            "next_steps": next_steps[:5],
+            "generated_at": s.get("_generated_at", ""),
+        })
+
+    items.sort(key=lambda x: x["repo"].lower())
+
+    return render_template(
+        "whats_next.html",
+        items=items,
+        scan_results=_scan_results,
+        has_summaries=bool(summaries),
+    )
 
 
 # --- Mac Setup ---

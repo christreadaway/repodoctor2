@@ -329,6 +329,62 @@ class GitHubClient:
             return resp.json()
         return []
 
+    def get_language_bytes(self, owner: str, repo: str) -> dict[str, int]:
+        """Return {language: byte_count} as reported by GitHub.
+
+        We treat the sum of bytes as a proxy for "code size". It's not
+        line-count, but it's a cheap single-call metric per repo.
+        """
+        resp = self._get(f"{GITHUB_API}/repos/{owner}/{repo}/languages")
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, dict):
+                return {k: int(v) for k, v in data.items() if isinstance(v, (int, float))}
+        return {}
+
+    def get_commits_since(self, owner: str, repo: str, since_iso: str,
+                          ref: str | None = None, max_pages: int = 3) -> list[dict]:
+        """Fetch commits on `ref` since the given ISO timestamp.
+
+        Returns up to max_pages * 100 commits. Each commit dict contains at
+        minimum a `commit.author.date` / `commit.committer.date`.
+        """
+        commits: list[dict] = []
+        page = 1
+        while page <= max_pages:
+            params = {"since": since_iso, "per_page": 100, "page": page}
+            if ref:
+                params["sha"] = ref
+            resp = self._get(
+                f"{GITHUB_API}/repos/{owner}/{repo}/commits",
+                params=params,
+            )
+            if resp.status_code != 200:
+                break
+            batch = resp.json()
+            if not isinstance(batch, list) or not batch:
+                break
+            commits.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        return commits
+
+    def get_code_frequency(self, owner: str, repo: str) -> list[list[int]] | None:
+        """Return weekly [week_ts, additions, deletions] rows for the past year.
+
+        GitHub computes these stats asynchronously — the first request on a
+        cold repo returns 202 with an empty body. We return None in that case
+        (caller should treat as "not yet available").
+        """
+        resp = self._get(f"{GITHUB_API}/repos/{owner}/{repo}/stats/code_frequency")
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list):
+                return data
+        # 202 = still computing; 204 = empty repo
+        return None
+
     def classify_branch(self, comparison: dict, last_commit_date: str | None, has_pr: bool) -> str:
         """Classify a branch based on comparison data."""
         ahead = comparison.get("ahead_by", 0)
@@ -360,7 +416,7 @@ class GitHubClient:
 
 
 def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
-    """Lightweight scan: just branch count + required file checks."""
+    """Lightweight scan: branch count, required file checks, code size."""
     owner = repo["owner"]["login"]
     name = repo["name"]
     default_branch = repo.get("default_branch", "main")
@@ -370,6 +426,10 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
     non_default_count = total_branch_count - 1 if total_branch_count > 0 else 0
 
     required_files, actual_names = client.check_required_files(owner, name, ref=default_branch)
+
+    # Code size via /languages (bytes per language).
+    languages = client.get_language_bytes(owner, name)
+    code_size_bytes = sum(languages.values())
 
     # Check if SESSION_NOTES.md and PRODUCT_SPEC.md are up to date.
     # "Up to date" = docs updated within 7 days of latest repo activity.
@@ -422,6 +482,8 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
         "files_present": sum(1 for v in required_files.values() if v),
         "files_total": len(required_files),
         "docs_updated": docs_updated,
+        "code_size_bytes": code_size_bytes,
+        "languages": languages,
     }
 
 

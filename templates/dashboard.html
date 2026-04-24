@@ -75,6 +75,7 @@
                 <th class="col-file sortable" data-sort="text" data-col="9">STATUS</th>
                 <th class="col-file sortable" data-sort="text" data-col="10">NOTES</th>
                 <th class="col-score sortable" data-sort="text" data-col="11">Score</th>
+                <th class="col-size sortable" data-sort="num" data-col="12" title="Total bytes across all languages, per GitHub /languages">Size</th>
             </tr>
         </thead>
         <tbody>
@@ -134,10 +135,22 @@
                 <td class="col-score">
                     <span class="file-score {% if repo.files_present == repo.files_total %}score-perfect{% elif repo.files_present >= repo.files_total - 1 %}score-good{% elif repo.files_present >= 2 %}score-fair{% else %}score-poor{% endif %}">{{ repo.files_present }}/{{ repo.files_total }}</span>
                 </td>
+                <td class="col-size" data-sort-value="{{ repo.code_size_bytes or 0 }}">
+                    {% set bytes = repo.code_size_bytes or 0 %}
+                    {% if bytes >= 1048576 %}
+                        <span class="size-value" title="{{ bytes }} bytes">{{ '%.1f'|format(bytes / 1048576) }} MB</span>
+                    {% elif bytes >= 1024 %}
+                        <span class="size-value" title="{{ bytes }} bytes">{{ (bytes / 1024)|round|int }} KB</span>
+                    {% elif bytes > 0 %}
+                        <span class="size-value" title="{{ bytes }} bytes">{{ bytes }} B</span>
+                    {% else %}
+                        <span class="size-value size-empty">—</span>
+                    {% endif %}
+                </td>
             </tr>
             {% if repo.total_branch_count > 1 %}
             <tr class="branch-detail-row branch-hidden">
-                <td colspan="12">
+                <td colspan="13">
                     <div class="branch-names">
                         {% for bname in repo.branch_names %}
                         <span class="branch-tag {% if bname == repo.default_branch %}branch-default{% endif %}">{{ bname }}{% if bname == repo.default_branch %} *{% endif %}</span>
@@ -148,7 +161,7 @@
             {% endif %}
             {% if repo.error is defined and repo.error %}
             <tr class="error-row">
-                <td colspan="12">
+                <td colspan="13">
                     <span class="repo-error">Error scanning: {{ repo.error }}</span>
                 </td>
             </tr>
@@ -190,8 +203,15 @@ document.addEventListener('DOMContentLoaded', function() {
             groups.sort(function(a, b) {
                 var cellA = a[0].children[col];
                 var cellB = b[0].children[col];
-                var valA = (cellA ? cellA.textContent : '').trim();
-                var valB = (cellB ? cellB.textContent : '').trim();
+                // Prefer explicit data-sort-value when present (handles units like KB/MB).
+                var rawA = cellA && cellA.dataset.sortValue !== undefined
+                    ? cellA.dataset.sortValue
+                    : (cellA ? cellA.textContent : '');
+                var rawB = cellB && cellB.dataset.sortValue !== undefined
+                    ? cellB.dataset.sortValue
+                    : (cellB ? cellB.textContent : '');
+                var valA = (rawA || '').trim();
+                var valB = (rawB || '').trim();
                 if (sortType === 'num') {
                     valA = parseFloat(valA) || 0;
                     valB = parseFloat(valB) || 0;

@@ -14,21 +14,25 @@
 
     {% if session.get('authenticated') %}
     <nav class="top-nav">
-        <div class="nav-brand">RepoDoctor</div>
-        <div class="nav-links">
-            <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">My Repos</a>
-            <a href="{{ url_for('projects') }}" class="nav-link {% if request.endpoint == 'projects' %}active{% endif %}">Projects</a>
-            <a href="{{ url_for('mac_setup') }}" class="nav-link {% if request.endpoint == 'mac_setup' %}active{% endif %}">Mac Setup</a>
-            {# Commented out — will re-enable later
-            <a href="{{ url_for('setup_guide') }}" class="nav-link {% if request.endpoint == 'setup_guide' %}active{% endif %}">Setup Guide</a>
-            <a href="{{ url_for('archive') }}" class="nav-link {% if request.endpoint == 'archive' %}active{% endif %}">Archive</a>
-            <a href="{{ url_for('action_log') }}" class="nav-link {% if request.endpoint == 'action_log' %}active{% endif %}">Action Log</a>
-            #}
-            <a href="{{ url_for('settings') }}" class="nav-link {% if request.endpoint == 'settings' %}active{% endif %}">Settings</a>
-        </div>
-        <div class="nav-user">
-            <span class="user-name">{{ session.get('github_user', '') }}</span>
-            <a href="{{ url_for('logout') }}" class="nav-link nav-logout">Logout</a>
+        <div class="nav-inner">
+            <a href="{{ url_for('dashboard') }}" class="nav-brand">
+                <span class="nav-brand-bracket">[</span>RepoDoctor<span class="nav-brand-bracket">]</span>
+            </a>
+            <div class="nav-links">
+                <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">My Repos</a>
+                <a href="{{ url_for('projects') }}" class="nav-link {% if request.endpoint == 'projects' %}active{% endif %}">Projects</a>
+                <a href="{{ url_for('stats') }}" class="nav-link {% if request.endpoint == 'stats' %}active{% endif %}">Stats</a>
+                <a href="{{ url_for('whats_next_all') }}" class="nav-link {% if request.endpoint == 'whats_next_all' %}active{% endif %}">What's Next</a>
+                <a href="{{ url_for('mac_setup') }}" class="nav-link {% if request.endpoint == 'mac_setup' %}active{% endif %}">Mac Setup</a>
+                <a href="{{ url_for('settings') }}" class="nav-link {% if request.endpoint == 'settings' %}active{% endif %}">Settings</a>
+            </div>
+            <div class="nav-user">
+                <span class="nav-user-pill" title="Signed in as {{ session.get('github_user', '') }}">
+                    <span class="nav-user-dot"></span>
+                    <span class="nav-user-name">{{ session.get('github_user', '') }}</span>
+                </span>
+                <a href="{{ url_for('logout') }}" class="nav-logout">Logout</a>
+            </div>
         </div>
     </nav>
     {% endif %}
