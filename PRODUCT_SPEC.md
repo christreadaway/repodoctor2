@@ -1,6 +1,6 @@
 # RepoDoctor2 — Product Specification
 
-**Version:** 7.0 | **Date:** 2026-03-25 | **Repo:** github.com/christreadaway/repodoctor2
+**Version:** 8.0 | **Date:** 2026-04-24 | **Repo:** github.com/christreadaway/repodoctor2
 
 ---
 
@@ -55,36 +55,41 @@ RepoDoctor v1 proved the concept but was tightly coupled and hard to extend. Rep
 **Files:** `app.py` (dashboard route), `templates/dashboard.html`
 
 - Sortable table of all user-owned and collaborator repos
-- Columns: repo name, visibility (public/private), created date, updated date, branch count, 4 required file indicators (CLAUDE, LICENSE, SPEC, NOTES), "Updated?" indicator, file score
-- "Updated?" column: checks if PRODUCT_SPEC.md and SESSION_NOTES.md were committed within 24 hours of the most recent repo commit — YES (green), NO (red), or — (files don't exist)
-- Summary stats bar: total repos, total branches, repos missing required files
+- Columns: repo name, visibility (public/private), created, updated, "Current?", branch count, 5 required-file indicators (CLAUDE, LICENSE, SPEC, STATUS, NOTES), file score (X/5), and **Size** (code bytes formatted as B/KB/MB, sortable numerically)
+- "Current?" column: checks if PRODUCT_SPEC.md / SESSION_NOTES.md were committed within 7 days of the most recent repo commit — YES (green), NO (red), or — (files don't exist)
+- Summary stats bar: total repos, total branches, repos missing required files (dynamically computed from `files_present < files_total`)
 - Expandable branch name lists (click branch count to toggle)
 - Color-coded rows: complete repos (all files present) vs. incomplete
 - Click-through to repo detail page
-- Column sorting (text and numeric) via inline JS
+- Column sorting (text and numeric) via inline JS; numeric sort prefers `data-sort-value` so unit-suffixed values (KB/MB) order correctly
 
-### 4.3 Required File Checks
+### 4.3 Required File Checks — Recursive
 
-**Files:** `github_client.py` (`check_required_files`, `get_root_files`)
+**Files:** `github_client.py` (`check_required_files`, `get_all_file_paths`)
 
-Four files are checked per repo, with flexible matching (case-insensitive, any extension):
+Five files are checked per repo, with flexible matching (case-insensitive, any extension), searched **recursively across the entire repo tree**:
 
 | Required File | Purpose |
 |---|---|
 | `CLAUDE.md` | Claude Code project instructions |
 | `LICENSE` | Open source license |
 | `PRODUCT_SPEC.md` | Product specification and business context |
-| `SESSION_NOTES.md` | Session-by-session development log and project status |
+| `PROJECT_STATUS.md` | Current-state snapshot (progress, blockers, next steps) |
+| `SESSION_NOTES.md` | Session-by-session development log |
 
-Matching is stem-based: `product_spec.pdf`, `PRODUCT_SPEC.md`, `Product_Spec.txt` all count. A single API call fetches the root directory listing, replacing individual file checks. The matcher also returns the actual filenames found on disk, so downstream features (like the "Updated?" freshness check) can reference files by their real name.
+Matching is stem-based: `product_spec.pdf`, `PRODUCT_SPEC.md`, `Product_Spec.txt` all count. A single call to `/git/trees/{ref}?recursive=1` fetches the full tree; root-level matches are preferred, with fallback to the shallowest subfolder path. Vendor/build dirs (`node_modules`, `dist`, `.venv`, `venv`, `env`, `__pycache__`, `target`, `vendor`, `.next`, `.nuxt`, `.cache`, `coverage`, `.tox`, `bower_components`, `site-packages`) are excluded so dependency copies don't masquerade as real specs.
+
+The matcher returns the **actual full path** found, so downstream features (freshness check, spec panels, AI summary generation) reference the real location even when specs live in a `docs/` subfolder.
 
 ### 4.4 Repository Detail View
 
 **Files:** `app.py` (repo_detail route), `templates/repo_detail.html`
 
 - Repo header: full name, visibility badge, default branch, branch count, description
-- Required files status grid with Y/- indicators per file
-- Spec file content panels: displays the actual contents of PRODUCT_SPEC and SESSION_NOTES pulled from the repo (truncated at 10,000 chars)
+- Required files status grid with Y/- indicators per file (5-file set)
+- Spec file content panels: displays the actual contents of `PRODUCT_SPEC`, `PROJECT_STATUS`, and `SESSION_NOTES` pulled from the repo (truncated at 10,000 chars), resolving subfolder paths via the recursive matcher
+- "What's Next" hero section (extracted from specs + mapped conversations)
+- Claude conversations timeline for this repo
 - Branch list with default branch marker
 - Link to view on GitHub
 
@@ -169,6 +174,43 @@ Content scoring weights:
 **Per-Repo Lookup:**
 - `get_conversations_for_repo(repo_name)` returns all conversations mapped to a specific repo (manual + auto-matched), sorted by date — used for timeline view
 
+### 4.7a Project Groups
+
+**Files:** `models.py` (groups helpers), `app.py` (groups routes), `templates/projects.html`
+
+Named groups of repos for filtering the Projects page. A tab bar at the top (`All | Group1 | Group2 …`) scopes the summary cards to the selected group; a collapsible "Manage Groups" panel handles create / rename / delete and per-group repo assignment via checkboxes.
+
+- Storage: `config/groups.json` (gitignored — per-machine state), shape `{group_name: [repo_name, ...]}`
+- Preference: `active_group` in `preferences.json` persists the current filter across navigation
+- Guards: rename refuses to overwrite an existing target group; empty-name submissions are rejected with a flash; delete prefers the hidden `original_name` field so an in-flight edit can't redirect the target
+- Active group lives in prefs and is updated atomically on rename/delete
+
+### 4.7b Stats View
+
+**Files:** `app.py` (`/stats`, `_collect_repo_activity`), `templates/stats.html`, `github_client.py` (`get_commits_since`, `get_code_frequency`, `get_language_bytes`)
+
+Three CSS bar-chart views with a period selector (1d / 3d / 1w / 2w / 1m / 2m):
+
+| View | Source | Notes |
+|---|---|---|
+| **Commits** | `/repos/{o}/{r}/commits?since=...` | Counted by commit age; `N+` suffix if truncated at 200 commits (2 pages × 100) |
+| **Code Size** | `/repos/{o}/{r}/languages` byte sums | Sortable static view; no period needed |
+| **Lines Added** | `/repos/{o}/{r}/stats/code_frequency` | Weekly buckets with explicit overlap pro-rating so sub-week periods (1d/3d) estimate cleanly |
+
+Repos with zero activity in the selected period drop below a divider and sort alphabetically; active repos sort by count descending. Bars scale to the busiest repo in the period. Data is cached in memory keyed by scan identity; `?refresh=1` forces recompute. Per-repo fetches run in parallel via `ThreadPoolExecutor(max_workers=8)`.
+
+### 4.7c What's Next View
+
+**Files:** `app.py` (`/whats-next`), `templates/whats_next.html`
+
+Aggregated next-step bullets across every repo whose project summary has been generated on the Projects page. Each card links to the repo detail view, shows the generation timestamp, and lists up to 5 bullet items. Cards sort alphabetically by repo name. When no summaries exist yet, the page prompts the user to click **GENERATE SUMMARIES** on the Projects page.
+
+### 4.7d Code Size Metric
+
+**Files:** `github_client.py` (`get_language_bytes`, `scan_repo_lite`)
+
+During the lightweight scan, each repo also receives a single call to `/repos/{o}/{r}/languages`. The returned `{language: bytes}` map is stored on the repo as `code_size_bytes` (sum) and `languages` (breakdown). This byte total is displayed on the dashboard, in the Stats view, and can back future per-language charts. It is a proxy for "how much code" — not literal line count — and is labeled accordingly.
+
 ### 4.8 Settings & Preferences
 
 **Files:** `app.py` (settings route), `models.py`, `templates/settings.html`
@@ -188,14 +230,17 @@ All data stored as local JSON files — no database dependency.
 
 | Data | File | Retention |
 |---|---|---|
-| User preferences | `config/preferences.json` | Permanent |
+| User preferences (incl. `active_group`) | `config/preferences.json` | Permanent |
 | Encrypted credentials | `config/credentials.enc` | Until reset |
+| Project groups | `config/groups.json` (gitignored) | Permanent (per-machine) |
 | Scan history | `data/scan_history.json` | Last 50 scans |
 | Analysis cache | `data/analysis_cache.json` | Permanent (keyed by commit SHA) |
 | Action log | `data/action_log.json` | Permanent |
 | Product specs | `data/specs/[repo].md` | Permanent |
+| Project summaries (powers What's Next) | `data/project_summaries.json` | Regenerated on demand |
 | Conversation mappings | `config.json` | Permanent |
 | Parsed conversations | `projects/conversations.json` | Until re-import |
+| Stats cache | In-memory only (keyed by scan identity) | Until next scan or `?refresh=1` |
 
 ### 4.10 Session Cost Tracking
 
@@ -237,14 +282,15 @@ All data stored as local JSON files — no database dependency.
 
 ## 5. UI / Visual Design
 
-**Files:** `static/css/style.css` (2,367 lines), `templates/base.html`
+**Files:** `static/css/style.css`, `templates/base.html`
 
 - **Aesthetic:** 1980s CRT phosphor-green terminal — dark backgrounds (#080a08), bright green text (#33ff33), monospace font (IBM Plex Mono)
-- **Layout:** Top navigation bar + single-column content area + footer with cost display
+- **Layout:** Sticky top navigation bar + single-column content area + footer with cost display
+- **Top nav:** bracketed brand on the left, menu items (My Repos, Projects, Stats, What's Next, Mac Setup, Settings) in the center, pulsing user-pill + Logout chip on the right; active link gets a glowing underline
 - **Status colors:** Green (safe/present), amber (warning/pending), red (danger/missing), cyan (info)
-- **Components:** Sortable tables, collapsible panels, badge system, file status indicators, flash messages
-- **Interactions:** Copy-to-clipboard with feedback, expandable branch lists, keyboard shortcuts (Ctrl+K for search)
-- **Responsive:** Fluid table widths with horizontal scroll on narrow screens
+- **Components:** Sortable tables, group-filter tab bars, CSS bar-chart rows with scaled fills, collapsible panels, badge system, file status indicators, flash messages
+- **Interactions:** Copy-to-clipboard with feedback, expandable branch lists, tab-switching period pills, keyboard shortcuts (Ctrl+K for search)
+- **Responsive:** Fluid table widths with horizontal scroll on narrow screens; nav collapses nav-links onto a second row below 900px
 
 ---
 
@@ -285,11 +331,19 @@ Flask Application (app.py)
 |---|---|---|---|
 | GET/POST | `/login` | Active | Authentication (setup + unlock) |
 | GET | `/logout` | Active | Clear session and credentials from memory |
-| GET | `/` | Active | Dashboard — repo table with branch counts and file status |
-| POST | `/scan` | Active | Scan all GitHub repos (lightweight mode) |
+| GET | `/` | Active | Dashboard — repo table with branch counts, file status, Size column |
+| POST | `/scan` | Active | Scan all GitHub repos (lightweight mode + language bytes) |
 | GET | `/repo/<owner>/<name>` | Active | Repo detail with spec contents and branch list |
+| GET | `/projects` | Active | Project summaries with group filter (`?group=Name`) |
+| POST | `/projects/generate` | Active | Generate AI summaries via Claude Haiku |
+| POST | `/projects/groups/save` | Active | Create or rename a group + set its repo membership |
+| POST | `/projects/groups/delete` | Active | Delete a group (prefers hidden `original_name` field) |
+| GET | `/stats` | Active | Commits / Size / Lines-Added bar charts with period selector |
+| GET | `/whats-next` | Active | Aggregated next-steps across all repos |
+| GET | `/mac-setup` | Active | Setup instructions page |
 | GET/POST | `/settings` | Active | Preferences, specs, credential management |
 | GET | `/api/session-cost` | Active | JSON: token counts and cost for current session |
+| GET | `/api/debug-files/<owner>/<name>` | Active | JSON: recursive file detection output for debugging |
 | POST | `/analyze` | Built (inactive) | AI analysis for a single branch |
 | POST | `/estimate` | Built (inactive) | Token/cost estimate before analysis |
 | GET | `/archive` | Built (inactive) | Browse archived branches |
@@ -314,7 +368,7 @@ Flask Application (app.py)
 | Security | Fernet symmetric encryption + PBKDF2-HMAC-SHA256 |
 | Frontend | Jinja2 templates + vanilla JS + retro terminal CSS |
 | Storage | Local JSON files (no database) |
-| Tests | pytest (47 tests) |
+| Tests | unittest (60 tests) |
 | Server | localhost:5001 |
 
 **Dependencies:** flask, requests, anthropic, cryptography, python-dotenv
@@ -333,30 +387,36 @@ Flask Application (app.py)
 
 ## 10. Testing
 
-**Files:** `tests/test_app.py` (47 tests)
+**Files:** `tests/test_app.py` (60 tests)
 
 Coverage areas:
 - Security: encryption/decryption roundtrips, wrong password rejection, credential file management
 - Models: preferences CRUD, scan history, analysis caching, action logging, spec management, cost tracking
+- **Groups:** set/get, dedupe + sort, rename (with collision guard), delete, active-group sync on rename/delete
+- **Required files (recursive):** 5-file count, names, business-spec exclusion, PROJECT_STATUS presence, all-present score, subfolder match, root-preferred, vendor-dir exclusion
 - GitHub: branch classification logic for all 5 categories
 - AI: token estimation, cost estimation per model, prompt building with/without specs
 - Flask: auth redirects, dashboard/settings access control, login/logout flows, API endpoints
 
 ---
 
-## 11. Current Status (March 2026)
+## 11. Current Status (April 2026)
 
 | Area | Status |
 |---|---|
 | Credential encryption | Working |
-| Dashboard (repo table + file checks) | Working |
-| Required files (4: CLAUDE.md, LICENSE, PRODUCT_SPEC.md, SESSION_NOTES.md) | Working |
-| "Updated?" doc freshness column | Working |
+| Dashboard (repo table + file checks + Size column) | Working |
+| Required files (5, recursive: CLAUDE.md, LICENSE, PRODUCT_SPEC.md, PROJECT_STATUS.md, SESSION_NOTES.md) | Working |
+| "Current?" doc freshness column | Working |
 | Repo detail (spec viewer + branch list) | Working |
+| Project Groups (filter + manage) | Working |
+| Stats view (Commits / Code Size / Lines Added) | Working |
+| What's Next aggregated view | Working |
+| Refreshed top nav with pulsing user pill | Working |
 | Settings | Working |
 | Cost tracking | Working |
-| Tests (47/47) | Passing |
-| Netlify deployment (Node.js) | Working |
+| Tests (60/60) | Passing |
+| Netlify deployment (Node.js) | Working — behind Flask version (groups, recursive search, stats, whats-next not ported yet) |
 | AI project summaries via Claude Haiku | Working |
 | AI branch analysis | Built, inactive |
 | Archive management | Built, inactive |
@@ -369,19 +429,21 @@ Coverage areas:
 ## 12. Roadmap
 
 ### Near Term
-1. Wire `project_mapper.py` into Flask routes and add conversation import UI (drag-and-drop ZIP + mapping review screen)
-2. Re-enable commented-out features: AI analysis, archive, action log, setup guide
-3. Add 30-minute auto-lock session timeout
-4. Build branch detail cards with AI summary display, risk badges, and action buttons
+1. Port Project Groups + recursive spec search + Stats + What's Next to the Netlify Node.js version
+2. Parallelize the initial scan (languages call doubled API traffic; `ThreadPoolExecutor` on `scan_repo_lite` like `/stats` does)
+3. Wire `project_mapper.py` into Flask routes and add conversation import UI (drag-and-drop ZIP + mapping review screen)
+4. Re-enable commented-out features: AI analysis, archive, action log, setup guide
+5. Build branch detail cards with AI summary display, risk badges, and action buttons
 
 ### Medium Term
-5. Timeline view merging GitHub events + Claude conversations per repo
-6. Next Steps tab with AI-generated prioritized recommendations
-7. Batch branch operations (select multiple, merge/delete/archive)
-8. Docker deployment option
+6. Per-language bar-chart breakdown on the Stats page (we already fetch `languages` during scan)
+7. Quick "group assign" toggle directly on each project card (instead of only in the Manage Groups panel)
+8. Timeline view merging GitHub events + Claude conversations per repo
+9. Batch branch operations (select multiple, merge/delete/archive)
+10. Docker deployment option
 
 ### Long Term
-9. GitHub webhook integration for real-time branch event tracking
-10. Team/org support with shared dashboards
-11. Scheduled branch cleanup automation
-12. GitHub App authentication (replace PAT)
+11. GitHub webhook integration for real-time branch event tracking
+12. Team/org support with shared dashboards
+13. Scheduled branch cleanup automation
+14. GitHub App authentication (replace PAT)

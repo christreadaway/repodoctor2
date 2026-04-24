@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}RepoDoctor — What's Next{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>What's Next</h1>
+    <div class="page-actions">
+        <a href="{{ url_for('projects') }}" class="btn btn-secondary">PROJECTS</a>
+    </div>
+</div>
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first.</p>
+    </div>
+</div>
+{% elif not has_summaries %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No project summaries yet.</h2>
+        <p>Head to the <a href="{{ url_for('projects') }}">Projects</a> page and click <strong>GENERATE SUMMARIES</strong> — the AI-produced "What's Next" bullets will show up here.</p>
+    </div>
+</div>
+{% elif not items %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No open next-steps.</h2>
+        <p>You have project summaries but none include next-step bullets. Regenerate summaries from <a href="{{ url_for('projects') }}">Projects</a>.</p>
+    </div>
+</div>
+{% else %}
+
+<p class="projects-hint">Aggregated from AI-generated summaries on the Projects page. Regenerate summaries there to refresh these.</p>
+
+<div class="whatsnext-grid">
+    {% for item in items %}
+    <div class="whatsnext-card">
+        <div class="whatsnext-card-header">
+            <a href="{{ url_for('repo_detail', owner=item.owner, name=item.repo) }}" class="whatsnext-repo">{{ item.repo }}</a>
+            {% if item.generated_at %}
+            <span class="whatsnext-generated" title="Summary generated {{ item.generated_at }}">{{ item.generated_at[:10] }}</span>
+            {% endif %}
+        </div>
+        <ul class="whatsnext-list">
+            {% for step in item.next_steps %}
+            <li>{{ step }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

@@ -21,7 +21,7 @@
         <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first, then come back here to generate project summaries.</p>
     </div>
 </div>
-{% elif not repos %}
+{% elif not all_repos %}
 <div class="onboarding">
     <div class="onboarding-welcome">
         <h2>No repositories found.</h2>
@@ -30,9 +30,89 @@
 </div>
 {% else %}
 
+<div class="group-bar">
+    <div class="group-tabs">
+        <a href="{{ url_for('projects', group='') }}"
+           class="group-tab {% if not active_group %}active{% endif %}">
+           All <span class="group-count">{{ all_repos|length }}</span>
+        </a>
+        {% for gname, gRepos in groups.items() %}
+        <a href="{{ url_for('projects', group=gname) }}"
+           class="group-tab {% if active_group == gname %}active{% endif %}">
+           {{ gname }} <span class="group-count">{{ gRepos|length }}</span>
+        </a>
+        {% endfor %}
+    </div>
+    <button type="button" class="btn btn-secondary btn-sm" id="toggle-manage-groups">
+        MANAGE GROUPS
+    </button>
+</div>
+
+<div class="manage-groups" id="manage-groups" hidden>
+    <h3 class="manage-groups-title">Manage Groups</h3>
+    <p class="manage-groups-hint">Create or edit a group, pick which projects belong to it, and the tab at top will filter the list.</p>
+
+    {% for gname, gRepos in groups.items() %}
+    <form method="POST" action="{{ url_for('save_group') }}" class="group-editor">
+        <input type="hidden" name="original_name" value="{{ gname }}">
+        <div class="group-editor-header">
+            <label class="group-editor-name">
+                <span class="group-editor-label">Group name</span>
+                <input type="text" name="group_name" value="{{ gname }}" required>
+            </label>
+            <div class="group-editor-actions">
+                <button type="submit" class="btn btn-primary btn-sm">SAVE</button>
+                <button type="submit"
+                        class="btn btn-danger btn-sm"
+                        formaction="{{ url_for('delete_group_route') }}"
+                        formnovalidate
+                        onclick="return confirm('Delete group \'{{ gname }}\'?');">
+                    DELETE
+                </button>
+            </div>
+        </div>
+        <div class="group-editor-repos">
+            {% for repo in all_repos %}
+            <label class="group-repo-option">
+                <input type="checkbox" name="repos" value="{{ repo.name }}"
+                       {% if repo.name in gRepos %}checked{% endif %}>
+                <span>{{ repo.name }}</span>
+            </label>
+            {% endfor %}
+        </div>
+    </form>
+    {% endfor %}
+
+    <form method="POST" action="{{ url_for('save_group') }}" class="group-editor group-editor-new">
+        <div class="group-editor-header">
+            <label class="group-editor-name">
+                <span class="group-editor-label">New group name</span>
+                <input type="text" name="group_name" placeholder="e.g. Active, Archived, Side Projects" required>
+            </label>
+            <div class="group-editor-actions">
+                <button type="submit" class="btn btn-primary btn-sm">CREATE GROUP</button>
+            </div>
+        </div>
+        <div class="group-editor-repos">
+            {% for repo in all_repos %}
+            <label class="group-repo-option">
+                <input type="checkbox" name="repos" value="{{ repo.name }}">
+                <span>{{ repo.name }}</span>
+            </label>
+            {% endfor %}
+        </div>
+    </form>
+</div>
+
 {% if not summaries %}
 <div class="projects-hint">
     <p>Click <strong>GENERATE SUMMARIES</strong> to use AI to analyze your project specs and create concise summaries for each repo. Uses Claude Haiku (~$0.001 per project).</p>
+</div>
+{% endif %}
+
+{% if active_group and not repos %}
+<div class="projects-hint">
+    <p>No projects in group <strong>{{ active_group }}</strong>. Click <strong>MANAGE GROUPS</strong> to add some.</p>
 </div>
 {% endif %}
 
@@ -48,7 +128,7 @@
                 {% else %}
                 <span class="badge badge-public">PUBLIC</span>
                 {% endif %}
-                <span class="file-score {% if repo.files_present == repo.files_total %}score-perfect{% elif repo.files_present >= 4 %}score-good{% elif repo.files_present >= 2 %}score-fair{% else %}score-poor{% endif %}">{{ repo.files_present }}/{{ repo.files_total }}</span>
+                <span class="file-score {% if repo.files_present == repo.files_total %}score-perfect{% elif repo.files_present >= repo.files_total - 1 %}score-good{% elif repo.files_present >= 2 %}score-fair{% else %}score-poor{% endif %}">{{ repo.files_present }}/{{ repo.files_total }}</span>
             </div>
         </div>
 
@@ -93,4 +173,16 @@
     {% endfor %}
 </div>
 {% endif %}
+
+<script>
+(function() {
+    var btn = document.getElementById('toggle-manage-groups');
+    var panel = document.getElementById('manage-groups');
+    if (!btn || !panel) return;
+    btn.addEventListener('click', function() {
+        panel.hidden = !panel.hidden;
+        btn.textContent = panel.hidden ? 'MANAGE GROUPS' : 'HIDE GROUP EDITOR';
+    });
+})();
+</script>
 {% endblock %}

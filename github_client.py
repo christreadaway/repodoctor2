@@ -135,11 +135,14 @@ class GitHubClient:
     def get_file_content(self, owner: str, repo: str, path: str, ref: str | None = None) -> str | None:
         """Fetch the text content of a file from the repo. Returns None if not found."""
         import base64
+        from urllib.parse import quote
         params = {}
         if ref:
             params["ref"] = ref
+        # Preserve path separators but encode spaces, '#', '?', etc.
+        encoded_path = quote(path, safe="/")
         resp = self._get(
-            f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}",
+            f"{GITHUB_API}/repos/{owner}/{repo}/contents/{encoded_path}",
             params=params,
         )
         if resp.status_code != 200:
@@ -172,44 +175,83 @@ class GitHubClient:
         logger.debug("get_root_files %s/%s: found %d items: %s", owner, repo, len(names), names)
         return names
 
+    def get_all_file_paths(self, owner: str, repo: str, ref: str | None = None) -> list[str]:
+        """Return every file path in the repo at ref (recursive).
+
+        Uses the git trees recursive API so subfolders are included.
+        """
+        tree_ref = ref or "HEAD"
+        resp = self._get(
+            f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{tree_ref}",
+            params={"recursive": "1"},
+        )
+        if resp.status_code != 200:
+            logger.warning("get_all_file_paths failed for %s/%s (ref=%s): HTTP %d",
+                           owner, repo, tree_ref, resp.status_code)
+            return []
+        data = resp.json()
+        if data.get("truncated"):
+            logger.warning("Tree for %s/%s is truncated; some deep files may be missed.",
+                           owner, repo)
+        return [item["path"] for item in data.get("tree", []) if item.get("type") == "blob"]
+
+    # Directories we never want to treat as project-spec locations.
+    _SKIP_PATH_SEGMENTS = {
+        "node_modules", ".git", "venv", ".venv", "env", ".env",
+        "__pycache__", "dist", "build", "target", "vendor", "site-packages",
+        ".next", ".nuxt", ".cache", "coverage", ".tox", "bower_components",
+    }
+
+    def _is_ignored_path(self, path: str) -> bool:
+        parts = path.split("/")
+        return any(p in self._SKIP_PATH_SEGMENTS for p in parts[:-1])
+
     def check_required_files(self, owner: str, repo: str, ref: str | None = None) -> tuple[dict[str, bool], dict[str, str]]:
-        """Check which required project files exist (flexible: case-insensitive, any extension).
+        """Check which required project files exist anywhere in the repo.
+
+        Searches recursively and prefers root-level matches, falling back to the
+        shallowest/shortest subfolder path. Vendor/build dirs are skipped.
 
         Returns:
             (results, actual_names) where results maps display_name -> bool,
-            and actual_names maps display_name -> real filename on disk (only for found files).
+            and actual_names maps display_name -> full path (only for found files).
         """
-        root_files = self.get_root_files(owner, repo, ref=ref)
+        all_paths = self.get_all_file_paths(owner, repo, ref=ref)
 
-        # Build a map from lowercase stem -> actual filename
-        stem_to_actual = {}
-        name_lower_to_actual = {}
-        for f in root_files:
-            fl = f.lower()
-            name_lower_to_actual[fl] = f
+        # stem -> list of (path, depth)
+        stem_to_paths: dict[str, list[tuple[str, int]]] = {}
+        for path in all_paths:
+            if self._is_ignored_path(path):
+                continue
+            filename = path.rsplit("/", 1)[-1]
+            fl = filename.lower()
             dot = fl.rfind(".")
-            if dot > 0:
-                stem_to_actual[fl[:dot]] = f
-            else:
-                stem_to_actual[fl] = f
+            stem = fl[:dot] if dot > 0 else fl
+            depth = path.count("/")
+            stem_to_paths.setdefault(stem, []).append((path, depth))
 
         required = {
             "CLAUDE.md": "claude",
             "LICENSE": "license",
             "PRODUCT_SPEC.md": "product_spec",
+            "PROJECT_STATUS.md": "project_status",
             "SESSION_NOTES.md": "session_notes",
         }
-        results = {}
-        actual_names = {}
+        results: dict[str, bool] = {}
+        actual_names: dict[str, str] = {}
         for display_name, stem in required.items():
-            found = stem in stem_to_actual
-            results[display_name] = found
-            if found:
-                actual_names[display_name] = stem_to_actual[stem]
+            matches = stem_to_paths.get(stem, [])
+            if matches:
+                # Prefer shallowest, then shortest path string
+                matches.sort(key=lambda m: (m[1], len(m[0])))
+                results[display_name] = True
+                actual_names[display_name] = matches[0][0]
+            else:
+                results[display_name] = False
 
         found_count = sum(1 for v in results.values() if v)
-        logger.debug("check_required_files %s/%s: %d/%d found. stems=%s, results=%s",
-                      owner, repo, found_count, len(required), list(stem_to_actual.keys()), results)
+        logger.debug("check_required_files %s/%s: %d/%d found. results=%s",
+                      owner, repo, found_count, len(required), actual_names)
         return results, actual_names
 
     def create_archive_tag(
@@ -287,6 +329,62 @@ class GitHubClient:
             return resp.json()
         return []
 
+    def get_language_bytes(self, owner: str, repo: str) -> dict[str, int]:
+        """Return {language: byte_count} as reported by GitHub.
+
+        We treat the sum of bytes as a proxy for "code size". It's not
+        line-count, but it's a cheap single-call metric per repo.
+        """
+        resp = self._get(f"{GITHUB_API}/repos/{owner}/{repo}/languages")
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, dict):
+                return {k: int(v) for k, v in data.items() if isinstance(v, (int, float))}
+        return {}
+
+    def get_commits_since(self, owner: str, repo: str, since_iso: str,
+                          ref: str | None = None, max_pages: int = 3) -> list[dict]:
+        """Fetch commits on `ref` since the given ISO timestamp.
+
+        Returns up to max_pages * 100 commits. Each commit dict contains at
+        minimum a `commit.author.date` / `commit.committer.date`.
+        """
+        commits: list[dict] = []
+        page = 1
+        while page <= max_pages:
+            params = {"since": since_iso, "per_page": 100, "page": page}
+            if ref:
+                params["sha"] = ref
+            resp = self._get(
+                f"{GITHUB_API}/repos/{owner}/{repo}/commits",
+                params=params,
+            )
+            if resp.status_code != 200:
+                break
+            batch = resp.json()
+            if not isinstance(batch, list) or not batch:
+                break
+            commits.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        return commits
+
+    def get_code_frequency(self, owner: str, repo: str) -> list[list[int]] | None:
+        """Return weekly [week_ts, additions, deletions] rows for the past year.
+
+        GitHub computes these stats asynchronously — the first request on a
+        cold repo returns 202 with an empty body. We return None in that case
+        (caller should treat as "not yet available").
+        """
+        resp = self._get(f"{GITHUB_API}/repos/{owner}/{repo}/stats/code_frequency")
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list):
+                return data
+        # 202 = still computing; 204 = empty repo
+        return None
+
     def classify_branch(self, comparison: dict, last_commit_date: str | None, has_pr: bool) -> str:
         """Classify a branch based on comparison data."""
         ahead = comparison.get("ahead_by", 0)
@@ -318,7 +416,7 @@ class GitHubClient:
 
 
 def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
-    """Lightweight scan: just branch count + required file checks."""
+    """Lightweight scan: branch count, required file checks, code size."""
     owner = repo["owner"]["login"]
     name = repo["name"]
     default_branch = repo.get("default_branch", "main")
@@ -328,6 +426,10 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
     non_default_count = total_branch_count - 1 if total_branch_count > 0 else 0
 
     required_files, actual_names = client.check_required_files(owner, name, ref=default_branch)
+
+    # Code size via /languages (bytes per language).
+    languages = client.get_language_bytes(owner, name)
+    code_size_bytes = sum(languages.values())
 
     # Check if SESSION_NOTES.md and PRODUCT_SPEC.md are up to date.
     # "Up to date" = docs updated within 7 days of latest repo activity.
@@ -380,6 +482,8 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
         "files_present": sum(1 for v in required_files.values() if v),
         "files_total": len(required_files),
         "docs_updated": docs_updated,
+        "code_size_bytes": code_size_bytes,
+        "languages": languages,
     }
 
 

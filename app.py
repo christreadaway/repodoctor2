@@ -143,7 +143,8 @@ def dashboard():
 @app.route("/scan", methods=["POST"])
 @_require_auth
 def scan():
-    global _scan_results
+    global _scan_results, _stats_cache
+    _stats_cache = None
     client = _get_github_client()
     if not client:
         flash("Not authenticated with GitHub.", "error")
@@ -176,7 +177,9 @@ def scan():
                 "branch_names": [],
                 "required_files": {},
                 "files_present": 0,
-                "files_total": 6,
+                "files_total": 5,
+                "code_size_bytes": 0,
+                "languages": {},
                 "error": str(e),
             })
 
@@ -219,27 +222,25 @@ def repo_detail(owner, name):
 
     ref = repo_info.get("default_branch", "main")
 
-    # Fetch file contents for the spec files
+    # Recursive spec-file search: prefers root, falls back to subfolders.
+    _, actual_paths = client.check_required_files(owner, name, ref=ref)
+
     spec_files = {
         "PRODUCT_SPEC": None,
+        "PROJECT_STATUS": None,
         "SESSION_NOTES": None,
     }
-
-    # Get root file listing to find actual filenames (flexible match)
-    root_files = client.get_root_files(owner, name, ref=ref)
-    file_map = {}
-    for f in root_files:
-        stem = f.lower()
-        dot = stem.rfind(".")
-        if dot > 0:
-            stem = stem[:dot]
-        file_map[stem] = f
+    spec_display_map = {
+        "PRODUCT_SPEC": "PRODUCT_SPEC.md",
+        "PROJECT_STATUS": "PROJECT_STATUS.md",
+        "SESSION_NOTES": "SESSION_NOTES.md",
+    }
 
     raw_specs = {}
-    for key in spec_files:
-        actual_name = file_map.get(key.lower())
-        if actual_name:
-            content = client.get_file_content(owner, name, actual_name, ref=ref)
+    for key, display_name in spec_display_map.items():
+        path = actual_paths.get(display_name)
+        if path:
+            content = client.get_file_content(owner, name, path, ref=ref)
             if content:
                 if len(content) > 10000:
                     content = content[:10000] + "\n\n... (truncated)"
@@ -330,22 +331,15 @@ def debug_files(owner, name):
                 break
 
     root_files = client.get_root_files(owner, name, ref=default_branch)
+    all_paths = client.get_all_file_paths(owner, name, ref=default_branch)
     required_files, actual_names = client.check_required_files(owner, name, ref=default_branch)
-
-    # Build stem map for debugging
-    stem_map = {}
-    for f in root_files:
-        fl = f.lower()
-        dot = fl.rfind(".")
-        stem = fl[:dot] if dot > 0 else fl
-        stem_map[stem] = f
 
     return jsonify({
         "repo": f"{owner}/{name}",
         "default_branch": default_branch,
         "root_files_from_api": root_files,
         "root_file_count": len(root_files),
-        "stem_map": stem_map,
+        "total_file_count": len(all_paths),
         "required_files_result": required_files,
         "actual_names": actual_names,
         "files_present": sum(1 for v in required_files.values() if v),
@@ -359,15 +353,75 @@ def debug_files(owner, name):
 @_require_auth
 def projects():
     summaries = models.get_project_summaries()
-    repos = []
-    if _scan_results:
-        repos = _scan_results.get("repos", [])
+    groups = models.get_groups()
+    prefs = models.get_preferences()
+
+    # Resolve active group: ?group=X wins and is persisted; otherwise use saved pref.
+    requested = request.args.get("group")
+    if requested is not None:
+        active_group = requested if requested in groups else ""
+        if prefs.get("active_group", "") != active_group:
+            prefs["active_group"] = active_group
+            models.save_preferences(prefs)
+    else:
+        active_group = prefs.get("active_group", "")
+        if active_group and active_group not in groups:
+            active_group = ""
+
+    all_repos = _scan_results.get("repos", []) if _scan_results else []
+    if active_group:
+        group_repos = set(groups.get(active_group, []))
+        repos = [r for r in all_repos if r["name"] in group_repos]
+    else:
+        repos = all_repos
+
     return render_template(
         "projects.html",
         repos=repos,
+        all_repos=all_repos,
         summaries=summaries,
         scan_results=_scan_results,
+        groups=groups,
+        active_group=active_group,
     )
+
+
+@app.route("/projects/groups/save", methods=["POST"])
+@_require_auth
+def save_group():
+    name = request.form.get("group_name", "").strip()
+    original = request.form.get("original_name", "").strip()
+    repos = request.form.getlist("repos")
+
+    if not name:
+        flash("Group name is required.", "error")
+        return redirect(url_for("projects"))
+
+    if original and original != name:
+        existing = models.get_groups()
+        if name in existing:
+            flash(f'A group named "{name}" already exists. Pick a different name.', "error")
+            return redirect(url_for("projects"))
+        if not models.rename_group(original, name):
+            flash("Could not rename group.", "error")
+            return redirect(url_for("projects"))
+
+    models.set_group(name, repos)
+    flash(f'Group "{name}" saved with {len(repos)} project(s).', "success")
+    return redirect(url_for("projects", group=name))
+
+
+@app.route("/projects/groups/delete", methods=["POST"])
+@_require_auth
+def delete_group_route():
+    # Prefer original_name (hidden field) so an in-flight edit to the
+    # editable name field can't redirect the delete at the wrong group.
+    name = (request.form.get("original_name") or request.form.get("group_name") or "").strip()
+    if models.delete_group(name):
+        flash(f'Group "{name}" deleted.', "success")
+    else:
+        flash("Group not found.", "error")
+    return redirect(url_for("projects"))
 
 
 @app.route("/projects/generate", methods=["POST"])
@@ -393,24 +447,23 @@ def generate_project_summaries():
         name = repo["name"]
         ref = repo.get("default_branch", "main")
 
-        # Fetch spec files for context
-        root_files = client.get_root_files(owner, name, ref=ref)
-        file_map = {}
-        for f in root_files:
-            stem = f.lower()
-            dot = stem.rfind(".")
-            if dot > 0:
-                stem = stem[:dot]
-            file_map[stem] = f
+        # Recursive search so specs in subfolders are found.
+        _, actual_paths = client.check_required_files(owner, name, ref=ref)
+        spec_lookup = {
+            "product_spec": actual_paths.get("PRODUCT_SPEC.md"),
+            "project_status": actual_paths.get("PROJECT_STATUS.md"),
+            "session_notes": actual_paths.get("SESSION_NOTES.md"),
+            "claude": actual_paths.get("CLAUDE.md"),
+        }
 
         spec_content = {}
-        for key in ["product_spec", "session_notes"]:
-            actual_name = file_map.get(key)
-            if actual_name:
-                content = client.get_file_content(owner, name, actual_name, ref=ref)
-                if content:
-                    # Truncate to keep prompt small
-                    spec_content[key] = content[:5000]
+        for key, path in spec_lookup.items():
+            if not path:
+                continue
+            content = client.get_file_content(owner, name, path, ref=ref)
+            if content:
+                # Truncate to keep prompt small
+                spec_content[key] = content[:5000]
 
         # Build context for AI
         context_parts = []
@@ -473,6 +526,202 @@ def generate_project_summaries():
     flash(f"Generated summaries for {generated} projects ({skipped} skipped/fallback).", "success")
     models.log_action("generate_summaries", "all", "all", f"Generated {generated}, skipped {skipped}")
     return redirect(url_for("projects"))
+
+
+# --- Stats ---
+
+# Cached stats data so the page doesn't re-hit the API on every visit.
+# Keyed by scan identity (len + first repo full_name + total_branches).
+_stats_cache: dict | None = None
+
+
+def _stats_cache_key() -> str:
+    if not _scan_results:
+        return ""
+    repos = _scan_results.get("repos", [])
+    first = repos[0]["full_name"] if repos else ""
+    return f"{len(repos)}|{first}|{_scan_results.get('total_branches', 0)}"
+
+
+PERIOD_DAYS = {
+    "1d": 1, "3d": 3, "1w": 7, "2w": 14, "1m": 30, "2m": 60,
+}
+
+
+def _collect_repo_activity(client, repo, since_iso, now_utc):
+    """Fetch commits + code_frequency for one repo. Returns dict to merge."""
+    import datetime as _dt
+    owner = repo["owner"]
+    name = repo["name"]
+    ref = repo.get("default_branch", "main")
+
+    commits_by_period = {k: 0 for k in PERIOD_DAYS}
+    loc_by_period = {k: 0 for k in PERIOD_DAYS}
+    truncated = False
+
+    try:
+        commits = client.get_commits_since(owner, name, since_iso, ref=ref, max_pages=2)
+    except Exception:
+        commits = []
+    if len(commits) >= 200:
+        truncated = True
+
+    for c in commits:
+        date_str = (
+            c.get("commit", {}).get("committer", {}).get("date")
+            or c.get("commit", {}).get("author", {}).get("date")
+        )
+        if not date_str:
+            continue
+        try:
+            dt = _dt.datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        age_days = (now_utc - dt).total_seconds() / 86400.0
+        for pkey, pdays in PERIOD_DAYS.items():
+            if age_days <= pdays:
+                commits_by_period[pkey] += 1
+
+    # Lines added via weekly code_frequency ([week_start_ts, adds, dels]).
+    # Each week bucket spans [week_start, week_start + 7d]. A commit inside
+    # that bucket is somewhere between (age_days - 7) and age_days days old,
+    # where age_days is how long ago the week STARTED relative to now.
+    try:
+        freq = client.get_code_frequency(owner, name)
+    except Exception:
+        freq = None
+    if freq:
+        for row in freq:
+            if not isinstance(row, list) or len(row) < 2:
+                continue
+            try:
+                week_ts = int(row[0])
+                additions = max(0, int(row[1]))
+            except (ValueError, TypeError):
+                continue
+            if additions == 0:
+                continue
+            try:
+                week_dt = _dt.datetime.fromtimestamp(week_ts, tz=_dt.timezone.utc)
+            except (ValueError, OSError):
+                continue
+            age_days = (now_utc - week_dt).total_seconds() / 86400.0
+            # Commits in this bucket are aged between [bucket_lo, bucket_hi] days.
+            bucket_lo = max(0.0, age_days - 7.0)
+            bucket_hi = max(0.0, age_days)
+            if bucket_hi <= bucket_lo:
+                continue
+            for pkey, pdays in PERIOD_DAYS.items():
+                # Overlap of bucket range with [0, pdays]
+                overlap = max(0.0, min(pdays, bucket_hi) - bucket_lo)
+                if overlap <= 0:
+                    continue
+                frac = min(1.0, overlap / (bucket_hi - bucket_lo))
+                loc_by_period[pkey] += int(additions * frac)
+
+    return {
+        "name": name,
+        "owner": owner,
+        "full_name": repo.get("full_name", f"{owner}/{name}"),
+        "html_url": repo.get("html_url", ""),
+        "commits_by_period": commits_by_period,
+        "commits_truncated": truncated,
+        "loc_by_period": loc_by_period,
+        "code_size_bytes": repo.get("code_size_bytes", 0),
+    }
+
+
+@app.route("/stats")
+@_require_auth
+def stats():
+    global _stats_cache
+    if not _scan_results:
+        return render_template("stats.html", repos=None, scan_results=None)
+
+    force = request.args.get("refresh") == "1"
+    key = _stats_cache_key()
+    if not force and _stats_cache and _stats_cache.get("key") == key:
+        return render_template(
+            "stats.html",
+            repos=_stats_cache["repos"],
+            scan_results=_scan_results,
+            periods=list(PERIOD_DAYS.keys()),
+        )
+
+    client = _get_github_client()
+    if not client:
+        flash("Not authenticated with GitHub.", "error")
+        return redirect(url_for("dashboard"))
+
+    import datetime as _dt
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    now_utc = _dt.datetime.now(_dt.timezone.utc)
+    since = (now_utc - _dt.timedelta(days=max(PERIOD_DAYS.values()))).isoformat()
+
+    repos = _scan_results.get("repos", [])
+    results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {
+            pool.submit(_collect_repo_activity, client, r, since, now_utc): r
+            for r in repos
+        }
+        for fut in as_completed(futures):
+            try:
+                results.append(fut.result())
+            except Exception as e:
+                r = futures[fut]
+                results.append({
+                    "name": r["name"],
+                    "owner": r["owner"],
+                    "full_name": r.get("full_name", ""),
+                    "html_url": r.get("html_url", ""),
+                    "commits_by_period": {k: 0 for k in PERIOD_DAYS},
+                    "commits_truncated": False,
+                    "loc_by_period": {k: 0 for k in PERIOD_DAYS},
+                    "code_size_bytes": r.get("code_size_bytes", 0),
+                    "error": str(e),
+                })
+
+    _stats_cache = {"key": key, "repos": results}
+    return render_template(
+        "stats.html",
+        repos=results,
+        scan_results=_scan_results,
+        periods=list(PERIOD_DAYS.keys()),
+    )
+
+
+# --- What's Next (aggregated across repos) ---
+
+@app.route("/whats-next")
+@_require_auth
+def whats_next_all():
+    summaries = models.get_project_summaries()
+    repos = _scan_results.get("repos", []) if _scan_results else []
+
+    items = []
+    for repo in repos:
+        s = summaries.get(repo["name"]) or {}
+        next_steps = s.get("next_steps") or []
+        if not next_steps:
+            continue
+        items.append({
+            "repo": repo["name"],
+            "owner": repo["owner"],
+            "html_url": repo.get("html_url", ""),
+            "next_steps": next_steps[:5],
+            "generated_at": s.get("_generated_at", ""),
+        })
+
+    items.sort(key=lambda x: x["repo"].lower())
+
+    return render_template(
+        "whats_next.html",
+        items=items,
+        scan_results=_scan_results,
+        has_summaries=bool(summaries),
+    )
 
 
 # --- Mac Setup ---

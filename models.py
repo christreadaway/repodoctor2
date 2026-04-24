@@ -41,6 +41,7 @@ DEFAULT_PREFS = {
     "excluded_repos": [],
     "ai_model": "claude-haiku-4-5-20251001",
     "display_mode": "plain_english",
+    "active_group": "",
 }
 
 
@@ -179,6 +180,58 @@ def save_project_summary(repo_name: str, summary: dict):
 
 def save_project_summaries(summaries: dict):
     _save_json(SUMMARIES_PATH, summaries)
+
+
+# --- Project Groups ---
+
+GROUPS_PATH = os.path.join(CONFIG_DIR, "groups.json")
+
+
+def get_groups() -> dict:
+    """Return {group_name: [repo_name, ...]} mapping."""
+    data = _load_json(GROUPS_PATH)
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def save_groups(groups: dict):
+    _save_json(GROUPS_PATH, groups)
+
+
+def set_group(name: str, repos: list[str]):
+    groups = get_groups()
+    groups[name] = sorted(set(repos))
+    save_groups(groups)
+
+
+def rename_group(old_name: str, new_name: str) -> bool:
+    groups = get_groups()
+    if old_name not in groups or not new_name or new_name == old_name:
+        return False
+    if new_name in groups:
+        # Would silently overwrite a different group — refuse.
+        return False
+    groups[new_name] = groups.pop(old_name)
+    save_groups(groups)
+    prefs = get_preferences()
+    if prefs.get("active_group") == old_name:
+        prefs["active_group"] = new_name
+        save_preferences(prefs)
+    return True
+
+
+def delete_group(name: str) -> bool:
+    groups = get_groups()
+    if name not in groups:
+        return False
+    groups.pop(name)
+    save_groups(groups)
+    prefs = get_preferences()
+    if prefs.get("active_group") == name:
+        prefs["active_group"] = ""
+        save_preferences(prefs)
+    return True
 
 
 # --- Session Cost Tracking ---

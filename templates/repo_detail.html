@@ -97,6 +97,15 @@
     </div>
     {% endif %}
 
+    {% if specs.PROJECT_STATUS %}
+    <div class="spec-panel">
+        <h3 class="spec-panel-title">Project Status</h3>
+        <div class="spec-panel-content">
+            <pre class="spec-text">{{ specs.PROJECT_STATUS }}</pre>
+        </div>
+    </div>
+    {% endif %}
+
     {% if specs.SESSION_NOTES %}
     <div class="spec-panel">
         <h3 class="spec-panel-title">Session Notes</h3>
@@ -106,10 +115,10 @@
     </div>
     {% endif %}
 
-    {% if not specs.PRODUCT_SPEC and not specs.SESSION_NOTES %}
+    {% if not specs.PRODUCT_SPEC and not specs.PROJECT_STATUS and not specs.SESSION_NOTES %}
     <div class="empty-state">
         <h3>No spec files found</h3>
-        <p>This repo doesn't have any of the expected spec files in its root directory.</p>
+        <p>This repo doesn't have any of the expected spec files anywhere in its tree.</p>
     </div>
     {% endif %}
 </div>
