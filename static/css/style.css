@@ -2631,6 +2631,163 @@ tbody tr:hover {
   }
 }
 
+/* ================================================================
+   Project Groups
+   ================================================================ */
+
+.group-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-lg);
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--border);
+}
+
+.group-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.group-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  transition: all var(--transition-normal);
+}
+
+.group-tab:hover {
+  border-color: var(--green-80);
+  color: var(--green-100);
+}
+
+.group-tab.active {
+  border-color: var(--green-100);
+  color: var(--bg-deep);
+  background-color: var(--green-100);
+}
+
+.group-count {
+  font-size: 0.7rem;
+  opacity: 0.8;
+}
+
+.manage-groups {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  margin-bottom: var(--space-lg);
+}
+
+.manage-groups-title {
+  margin: 0 0 var(--space-xs);
+  font-size: 1rem;
+  color: var(--green-100);
+}
+
+.manage-groups-hint {
+  margin: 0 0 var(--space-md);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.group-editor {
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.group-editor:last-child {
+  margin-bottom: 0;
+}
+
+.group-editor-new {
+  border-style: dashed;
+}
+
+.group-editor-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-sm);
+}
+
+.group-editor-name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 280px;
+}
+
+.group-editor-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.group-editor-name input[type="text"] {
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.group-editor-name input[type="text"]:focus {
+  outline: none;
+  border-color: var(--green-80);
+}
+
+.group-editor-actions {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.group-editor-repos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-xs) var(--space-md);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: var(--space-sm);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.group-repo-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.group-repo-option input[type="checkbox"] {
+  accent-color: var(--green-100);
+}
+
 
 /* ================================================================
    Mac Setup Guide Page

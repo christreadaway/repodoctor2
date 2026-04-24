@@ -176,7 +176,7 @@ def scan():
                 "branch_names": [],
                 "required_files": {},
                 "files_present": 0,
-                "files_total": 6,
+                "files_total": 5,
                 "error": str(e),
             })
 
@@ -219,27 +219,25 @@ def repo_detail(owner, name):
 
     ref = repo_info.get("default_branch", "main")
 
-    # Fetch file contents for the spec files
+    # Recursive spec-file search: prefers root, falls back to subfolders.
+    _, actual_paths = client.check_required_files(owner, name, ref=ref)
+
     spec_files = {
         "PRODUCT_SPEC": None,
+        "PROJECT_STATUS": None,
         "SESSION_NOTES": None,
     }
-
-    # Get root file listing to find actual filenames (flexible match)
-    root_files = client.get_root_files(owner, name, ref=ref)
-    file_map = {}
-    for f in root_files:
-        stem = f.lower()
-        dot = stem.rfind(".")
-        if dot > 0:
-            stem = stem[:dot]
-        file_map[stem] = f
+    spec_display_map = {
+        "PRODUCT_SPEC": "PRODUCT_SPEC.md",
+        "PROJECT_STATUS": "PROJECT_STATUS.md",
+        "SESSION_NOTES": "SESSION_NOTES.md",
+    }
 
     raw_specs = {}
-    for key in spec_files:
-        actual_name = file_map.get(key.lower())
-        if actual_name:
-            content = client.get_file_content(owner, name, actual_name, ref=ref)
+    for key, display_name in spec_display_map.items():
+        path = actual_paths.get(display_name)
+        if path:
+            content = client.get_file_content(owner, name, path, ref=ref)
             if content:
                 if len(content) > 10000:
                     content = content[:10000] + "\n\n... (truncated)"
@@ -330,22 +328,15 @@ def debug_files(owner, name):
                 break
 
     root_files = client.get_root_files(owner, name, ref=default_branch)
+    all_paths = client.get_all_file_paths(owner, name, ref=default_branch)
     required_files, actual_names = client.check_required_files(owner, name, ref=default_branch)
-
-    # Build stem map for debugging
-    stem_map = {}
-    for f in root_files:
-        fl = f.lower()
-        dot = fl.rfind(".")
-        stem = fl[:dot] if dot > 0 else fl
-        stem_map[stem] = f
 
     return jsonify({
         "repo": f"{owner}/{name}",
         "default_branch": default_branch,
         "root_files_from_api": root_files,
         "root_file_count": len(root_files),
-        "stem_map": stem_map,
+        "total_file_count": len(all_paths),
         "required_files_result": required_files,
         "actual_names": actual_names,
         "files_present": sum(1 for v in required_files.values() if v),
@@ -359,15 +350,69 @@ def debug_files(owner, name):
 @_require_auth
 def projects():
     summaries = models.get_project_summaries()
-    repos = []
-    if _scan_results:
-        repos = _scan_results.get("repos", [])
+    groups = models.get_groups()
+    prefs = models.get_preferences()
+
+    # Resolve active group: ?group=X wins and is persisted; otherwise use saved pref.
+    requested = request.args.get("group")
+    if requested is not None:
+        active_group = requested if requested in groups else ""
+        if prefs.get("active_group", "") != active_group:
+            prefs["active_group"] = active_group
+            models.save_preferences(prefs)
+    else:
+        active_group = prefs.get("active_group", "")
+        if active_group and active_group not in groups:
+            active_group = ""
+
+    all_repos = _scan_results.get("repos", []) if _scan_results else []
+    if active_group:
+        group_repos = set(groups.get(active_group, []))
+        repos = [r for r in all_repos if r["name"] in group_repos]
+    else:
+        repos = all_repos
+
     return render_template(
         "projects.html",
         repos=repos,
+        all_repos=all_repos,
         summaries=summaries,
         scan_results=_scan_results,
+        groups=groups,
+        active_group=active_group,
     )
+
+
+@app.route("/projects/groups/save", methods=["POST"])
+@_require_auth
+def save_group():
+    name = request.form.get("group_name", "").strip()
+    original = request.form.get("original_name", "").strip()
+    repos = request.form.getlist("repos")
+
+    if not name:
+        flash("Group name is required.", "error")
+        return redirect(url_for("projects"))
+
+    if original and original != name:
+        if not models.rename_group(original, name):
+            flash("Could not rename group.", "error")
+            return redirect(url_for("projects"))
+
+    models.set_group(name, repos)
+    flash(f'Group "{name}" saved with {len(repos)} project(s).', "success")
+    return redirect(url_for("projects", group=name))
+
+
+@app.route("/projects/groups/delete", methods=["POST"])
+@_require_auth
+def delete_group_route():
+    name = request.form.get("group_name", "").strip()
+    if models.delete_group(name):
+        flash(f'Group "{name}" deleted.', "success")
+    else:
+        flash("Group not found.", "error")
+    return redirect(url_for("projects"))
 
 
 @app.route("/projects/generate", methods=["POST"])
@@ -393,24 +438,23 @@ def generate_project_summaries():
         name = repo["name"]
         ref = repo.get("default_branch", "main")
 
-        # Fetch spec files for context
-        root_files = client.get_root_files(owner, name, ref=ref)
-        file_map = {}
-        for f in root_files:
-            stem = f.lower()
-            dot = stem.rfind(".")
-            if dot > 0:
-                stem = stem[:dot]
-            file_map[stem] = f
+        # Recursive search so specs in subfolders are found.
+        _, actual_paths = client.check_required_files(owner, name, ref=ref)
+        spec_lookup = {
+            "product_spec": actual_paths.get("PRODUCT_SPEC.md"),
+            "project_status": actual_paths.get("PROJECT_STATUS.md"),
+            "session_notes": actual_paths.get("SESSION_NOTES.md"),
+            "claude": actual_paths.get("CLAUDE.md"),
+        }
 
         spec_content = {}
-        for key in ["product_spec", "session_notes"]:
-            actual_name = file_map.get(key)
-            if actual_name:
-                content = client.get_file_content(owner, name, actual_name, ref=ref)
-                if content:
-                    # Truncate to keep prompt small
-                    spec_content[key] = content[:5000]
+        for key, path in spec_lookup.items():
+            if not path:
+                continue
+            content = client.get_file_content(owner, name, path, ref=ref)
+            if content:
+                # Truncate to keep prompt small
+                spec_content[key] = content[:5000]
 
         # Build context for AI
         context_parts = []

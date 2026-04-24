@@ -172,44 +172,83 @@ class GitHubClient:
         logger.debug("get_root_files %s/%s: found %d items: %s", owner, repo, len(names), names)
         return names
 
+    def get_all_file_paths(self, owner: str, repo: str, ref: str | None = None) -> list[str]:
+        """Return every file path in the repo at ref (recursive).
+
+        Uses the git trees recursive API so subfolders are included.
+        """
+        tree_ref = ref or "HEAD"
+        resp = self._get(
+            f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{tree_ref}",
+            params={"recursive": "1"},
+        )
+        if resp.status_code != 200:
+            logger.warning("get_all_file_paths failed for %s/%s (ref=%s): HTTP %d",
+                           owner, repo, tree_ref, resp.status_code)
+            return []
+        data = resp.json()
+        if data.get("truncated"):
+            logger.warning("Tree for %s/%s is truncated; some deep files may be missed.",
+                           owner, repo)
+        return [item["path"] for item in data.get("tree", []) if item.get("type") == "blob"]
+
+    # Directories we never want to treat as project-spec locations.
+    _SKIP_PATH_SEGMENTS = {
+        "node_modules", ".git", "venv", ".venv", "env", ".env",
+        "__pycache__", "dist", "build", "target", "vendor", "site-packages",
+        ".next", ".nuxt", ".cache", "coverage", ".tox", "bower_components",
+    }
+
+    def _is_ignored_path(self, path: str) -> bool:
+        parts = path.split("/")
+        return any(p in self._SKIP_PATH_SEGMENTS for p in parts[:-1])
+
     def check_required_files(self, owner: str, repo: str, ref: str | None = None) -> tuple[dict[str, bool], dict[str, str]]:
-        """Check which required project files exist (flexible: case-insensitive, any extension).
+        """Check which required project files exist anywhere in the repo.
+
+        Searches recursively and prefers root-level matches, falling back to the
+        shallowest/shortest subfolder path. Vendor/build dirs are skipped.
 
         Returns:
             (results, actual_names) where results maps display_name -> bool,
-            and actual_names maps display_name -> real filename on disk (only for found files).
+            and actual_names maps display_name -> full path (only for found files).
         """
-        root_files = self.get_root_files(owner, repo, ref=ref)
+        all_paths = self.get_all_file_paths(owner, repo, ref=ref)
 
-        # Build a map from lowercase stem -> actual filename
-        stem_to_actual = {}
-        name_lower_to_actual = {}
-        for f in root_files:
-            fl = f.lower()
-            name_lower_to_actual[fl] = f
+        # stem -> list of (path, depth)
+        stem_to_paths: dict[str, list[tuple[str, int]]] = {}
+        for path in all_paths:
+            if self._is_ignored_path(path):
+                continue
+            filename = path.rsplit("/", 1)[-1]
+            fl = filename.lower()
             dot = fl.rfind(".")
-            if dot > 0:
-                stem_to_actual[fl[:dot]] = f
-            else:
-                stem_to_actual[fl] = f
+            stem = fl[:dot] if dot > 0 else fl
+            depth = path.count("/")
+            stem_to_paths.setdefault(stem, []).append((path, depth))
 
         required = {
             "CLAUDE.md": "claude",
             "LICENSE": "license",
             "PRODUCT_SPEC.md": "product_spec",
+            "PROJECT_STATUS.md": "project_status",
             "SESSION_NOTES.md": "session_notes",
         }
-        results = {}
-        actual_names = {}
+        results: dict[str, bool] = {}
+        actual_names: dict[str, str] = {}
         for display_name, stem in required.items():
-            found = stem in stem_to_actual
-            results[display_name] = found
-            if found:
-                actual_names[display_name] = stem_to_actual[stem]
+            matches = stem_to_paths.get(stem, [])
+            if matches:
+                # Prefer shallowest, then shortest path string
+                matches.sort(key=lambda m: (m[1], len(m[0])))
+                results[display_name] = True
+                actual_names[display_name] = matches[0][0]
+            else:
+                results[display_name] = False
 
         found_count = sum(1 for v in results.values() if v)
-        logger.debug("check_required_files %s/%s: %d/%d found. stems=%s, results=%s",
-                      owner, repo, found_count, len(required), list(stem_to_actual.keys()), results)
+        logger.debug("check_required_files %s/%s: %d/%d found. results=%s",
+                      owner, repo, found_count, len(required), actual_names)
         return results, actual_names
 
     def create_archive_tag(
