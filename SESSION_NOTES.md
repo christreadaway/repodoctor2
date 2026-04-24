@@ -1,9 +1,9 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 7
-**Date Range:** 2025-02-14 to 2026-03-25
-**Last Updated:** 2026-03-25
+**Total Sessions Logged:** 8
+**Date Range:** 2025-02-14 to 2026-04-24
+**Last Updated:** 2026-04-24
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
 
@@ -11,7 +11,7 @@ This file contains a complete history of Claude Code sessions for this repositor
 
 ## Current Project Status
 
-**Overall Progress:** 85%
+**Overall Progress:** 88%
 
 **What's Working:**
 - Secure credential storage (Fernet + PBKDF2 encryption)
@@ -19,15 +19,17 @@ This file contains a complete history of Claude Code sessions for this repositor
 - Full repo scanning — branch counts, required file checks
 - Dashboard table with sortable columns, retro terminal UI
 - Sticky table headers
-- Required files detection: CLAUDE.md, LICENSE, PRODUCT_SPEC.md, SESSION_NOTES.md (case-insensitive, any extension)
-- Clickable repo detail pages with spec file content display
+- Required files detection — now 5 files: CLAUDE.md, LICENSE, PRODUCT_SPEC.md, PROJECT_STATUS.md, SESSION_NOTES.md (case-insensitive, any extension)
+- **Recursive spec-file search** — finds spec files anywhere in the tree, skipping node_modules/dist/.venv etc., preferring root-level then shallowest path
+- Clickable repo detail pages with Product Spec, Project Status, and Session Notes panels
 - "Current?" column — detects if docs are fresh (within 7 days of last commit)
 - 30-minute session auto-lock
 - Activity log with color-coded messages
 - Netlify deployment — Node.js Express app as serverless function
-- AI project summaries via Claude Haiku
+- AI project summaries via Claude Haiku (now also picks up CLAUDE.md content and subfolder specs)
+- **Project Groups** — create/rename/delete named groups, assign repos, filter the Projects page by group; active group persists in preferences
 - Parallelized scan (batches of 10) and summary generation (batches of 5)
-- 47/47 tests passing
+- 60/60 tests passing (10 new — groups + recursive search coverage)
 
 **What's Broken:** Nothing currently broken
 
@@ -38,12 +40,73 @@ This file contains a complete history of Claude Code sessions for this repositor
 - **GitHub:** REST API v3 with Personal Access Token
 
 **Next Steps:**
-1. Deploy and verify scan + summary generation on live Netlify site
-2. Merge open branches to main once verified
-3. Consider Netlify Blobs for persistent data (scan results survive cold starts)
+1. Merge `claude/add-project-grouping-sq2Hy` to main
+2. Re-scan repos to see PROJECT_STATUS column populate and spec files found in subfolders
+3. Port the groups feature + recursive search to the Netlify version
+4. Consider: add "pin group" vs "filter group" distinction, or per-user group sharing
 
 **Blockers:**
-- Free tier has 10s function timeout (26s on paid). Large GitHub accounts may still time out.
+- Free Netlify tier has 10s function timeout (26s on paid). Large GitHub accounts may still time out.
+- Netlify version is now behind Flask version (recursive search + groups not yet ported).
+
+---
+
+
+## 2026-04-24 — Project Groups + Recursive Spec Search
+
+### What Was Accomplished
+- **Project Groups feature:** named groups of repos on the Projects page, tab bar filter at top (All / GroupName), plus a collapsible "Manage Groups" panel for create/rename/delete/assign-repos. Active group persists in preferences so filter survives navigation.
+- **Recursive spec-file search:** switched from root-only to GitHub's git-trees recursive API. Spec files (PRODUCT_SPEC.md, PROJECT_STATUS.md, SESSION_NOTES.md, CLAUDE.md, LICENSE) are now found anywhere in the tree, with root-level matches preferred and vendor dirs (node_modules, dist, .venv, target, etc.) excluded.
+- **Re-introduced PROJECT_STATUS.md as a required file** — now recognized alongside the other specs, with its own column on the dashboard and its own panel on the repo detail page.
+- **Comprehensive testing + bug fixes** — ran end-to-end Flask tests of groups flow, mocked-tree tests of recursive search, fixed 6 bugs found.
+
+### Technical Details
+**New storage:**
+- `config/groups.json` — per-machine `{group_name: [repo_names]}` mapping (gitignored)
+- `active_group` key added to preferences
+
+**Files Modified:**
+- `app.py` — `/projects` filters by active group; new routes `/projects/groups/save` and `/projects/groups/delete`; `repo_detail` and `generate_project_summaries` now use recursive paths
+- `github_client.py` — new `get_all_file_paths` using `/git/trees/{ref}?recursive=1`; `check_required_files` rewritten for recursive search with vendor-dir skip list; `get_file_content` now URL-encodes paths (spaces, `#`, etc.)
+- `models.py` — new `get_groups`, `set_group`, `rename_group`, `delete_group`, `save_groups`; `active_group` added to DEFAULT_PREFS
+- `templates/projects.html` — new group tab bar, collapsible Manage Groups panel
+- `templates/dashboard.html` — added PROJECT_STATUS column + legend entry, fixed missing-files stat to use `files_total` dynamically, fixed colspans 11→12
+- `templates/repo_detail.html` — added Project Status panel
+- `static/css/style.css` — styles for `.group-bar`, `.group-tab`, `.manage-groups`, `.group-editor`, etc.
+- `.gitignore` — ignore `config/groups.json`
+- `tests/test_app.py` — rewrote TestRequiredFiles for recursive/5-file world; added TestGroups class (10 new tests)
+
+### Bugs Found During Testing and Fixed
+| Severity | Bug | Fix |
+|---|---|---|
+| Critical | `rename_group` silently clobbered an existing target group | Refuse rename if target name already exists, with user-facing error |
+| High | `get_file_content` didn't URL-encode paths; `#` truncated the URL | `urllib.parse.quote(path, safe="/")` |
+| Medium | DELETE button used editable `group_name` field, could target wrong group if user was mid-edit | Route prefers hidden `original_name` |
+| Medium | Dashboard missing PROJECT_STATUS column + legend entry | Added both |
+| Low | Missing-files stat hardcoded `< 4` | Namespace counter using `files_present < files_total` |
+| Low | Score-good threshold hardcoded `>= 4` | Uses `files_total - 1` |
+
+### Current Status
+- ✅ Groups feature live (create / rename / delete / assign / filter)
+- ✅ Recursive spec search live — finds specs in subfolders
+- ✅ PROJECT_STATUS.md back as a required file
+- ✅ 60/60 tests passing
+- ❌ Netlify version NOT yet updated with these changes
+
+### Branch Info
+- Working branch: `claude/add-project-grouping-sq2Hy`
+- Ready to merge to main: **Yes** — feature branch clean, pushed, tests green
+
+### Next Steps
+1. Merge `claude/add-project-grouping-sq2Hy` to main
+2. Re-scan repos to verify recursive search finds subfolder specs
+3. Port changes to Netlify version (github-client.js + api.js + views)
+
+### Decisions Made
+- Gitignore `config/groups.json` — it's per-machine user state, same as `scan_history.json`
+- Groups are NOT scoped per-user — single-user app
+- Vendor/build dirs hardcoded in `_SKIP_PATH_SEGMENTS` rather than configurable (KISS)
+- Root-level file wins over deeper matches; ties broken by shortest path string
 
 ---
 
