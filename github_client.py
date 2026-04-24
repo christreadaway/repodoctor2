@@ -135,11 +135,14 @@ class GitHubClient:
     def get_file_content(self, owner: str, repo: str, path: str, ref: str | None = None) -> str | None:
         """Fetch the text content of a file from the repo. Returns None if not found."""
         import base64
+        from urllib.parse import quote
         params = {}
         if ref:
             params["ref"] = ref
+        # Preserve path separators but encode spaces, '#', '?', etc.
+        encoded_path = quote(path, safe="/")
         resp = self._get(
-            f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}",
+            f"{GITHUB_API}/repos/{owner}/{repo}/contents/{encoded_path}",
             params=params,
         )
         if resp.status_code != 200:

@@ -395,6 +395,10 @@ def save_group():
         return redirect(url_for("projects"))
 
     if original and original != name:
+        existing = models.get_groups()
+        if name in existing:
+            flash(f'A group named "{name}" already exists. Pick a different name.', "error")
+            return redirect(url_for("projects"))
         if not models.rename_group(original, name):
             flash("Could not rename group.", "error")
             return redirect(url_for("projects"))
@@ -407,7 +411,9 @@ def save_group():
 @app.route("/projects/groups/delete", methods=["POST"])
 @_require_auth
 def delete_group_route():
-    name = request.form.get("group_name", "").strip()
+    # Prefer original_name (hidden field) so an in-flight edit to the
+    # editable name field can't redirect the delete at the wrong group.
+    name = (request.form.get("original_name") or request.form.get("group_name") or "").strip()
     if models.delete_group(name):
         flash(f'Group "{name}" deleted.', "success")
     else:

@@ -209,6 +209,9 @@ def rename_group(old_name: str, new_name: str) -> bool:
     groups = get_groups()
     if old_name not in groups or not new_name or new_name == old_name:
         return False
+    if new_name in groups:
+        # Would silently overwrite a different group — refuse.
+        return False
     groups[new_name] = groups.pop(old_name)
     save_groups(groups)
     prefs = get_preferences()

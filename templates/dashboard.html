@@ -37,8 +37,13 @@
         <span class="stat-label">Total Branches</span>
     </div>
     <div class="summary-stat">
-        {% set repos_missing_files = scan_results.repos | selectattr('files_present', 'lt', 4) | list | length %}
-        <span class="stat-value {% if repos_missing_files > 0 %}stat-warning{% endif %}">{{ repos_missing_files }}</span>
+        {% set counter = namespace(n=0) %}
+        {% for r in scan_results.repos %}
+            {% if r.files_total and r.files_present < r.files_total %}
+                {% set counter.n = counter.n + 1 %}
+            {% endif %}
+        {% endfor %}
+        <span class="stat-value {% if counter.n > 0 %}stat-warning{% endif %}">{{ counter.n }}</span>
         <span class="stat-label">Missing Required Files</span>
     </div>
 </div>
@@ -49,6 +54,7 @@
     <span class="legend-item">CLAUDE.md</span>
     <span class="legend-item">LICENSE</span>
     <span class="legend-item">PRODUCT_SPEC.md</span>
+    <span class="legend-item">PROJECT_STATUS.md</span>
     <span class="legend-item">SESSION_NOTES.md</span>
 </div>
 
@@ -66,8 +72,9 @@
                 <th class="col-file sortable" data-sort="text" data-col="6">CLAUDE</th>
                 <th class="col-file sortable" data-sort="text" data-col="7">LICENSE</th>
                 <th class="col-file sortable" data-sort="text" data-col="8">SPEC</th>
-                <th class="col-file sortable" data-sort="text" data-col="9">NOTES</th>
-                <th class="col-score sortable" data-sort="text" data-col="10">Score</th>
+                <th class="col-file sortable" data-sort="text" data-col="9">STATUS</th>
+                <th class="col-file sortable" data-sort="text" data-col="10">NOTES</th>
+                <th class="col-score sortable" data-sort="text" data-col="11">Score</th>
             </tr>
         </thead>
         <tbody>
@@ -119,15 +126,18 @@
                     {% if files.get('PRODUCT_SPEC.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
                 </td>
                 <td class="col-file">
+                    {% if files.get('PROJECT_STATUS.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
+                </td>
+                <td class="col-file">
                     {% if files.get('SESSION_NOTES.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
                 </td>
                 <td class="col-score">
-                    <span class="file-score {% if repo.files_present == repo.files_total %}score-perfect{% elif repo.files_present >= 4 %}score-good{% elif repo.files_present >= 2 %}score-fair{% else %}score-poor{% endif %}">{{ repo.files_present }}/{{ repo.files_total }}</span>
+                    <span class="file-score {% if repo.files_present == repo.files_total %}score-perfect{% elif repo.files_present >= repo.files_total - 1 %}score-good{% elif repo.files_present >= 2 %}score-fair{% else %}score-poor{% endif %}">{{ repo.files_present }}/{{ repo.files_total }}</span>
                 </td>
             </tr>
             {% if repo.total_branch_count > 1 %}
             <tr class="branch-detail-row branch-hidden">
-                <td colspan="11">
+                <td colspan="12">
                     <div class="branch-names">
                         {% for bname in repo.branch_names %}
                         <span class="branch-tag {% if bname == repo.default_branch %}branch-default{% endif %}">{{ bname }}{% if bname == repo.default_branch %} *{% endif %}</span>
@@ -138,7 +148,7 @@
             {% endif %}
             {% if repo.error is defined and repo.error %}
             <tr class="error-row">
-                <td colspan="11">
+                <td colspan="12">
                     <span class="repo-error">Error scanning: {{ repo.error }}</span>
                 </td>
             </tr>

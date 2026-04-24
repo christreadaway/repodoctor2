@@ -128,7 +128,7 @@
                 {% else %}
                 <span class="badge badge-public">PUBLIC</span>
                 {% endif %}
-                <span class="file-score {% if repo.files_present == repo.files_total %}score-perfect{% elif repo.files_present >= 4 %}score-good{% elif repo.files_present >= 2 %}score-fair{% else %}score-poor{% endif %}">{{ repo.files_present }}/{{ repo.files_total }}</span>
+                <span class="file-score {% if repo.files_present == repo.files_total %}score-perfect{% elif repo.files_present >= repo.files_total - 1 %}score-good{% elif repo.files_present >= 2 %}score-fair{% else %}score-poor{% endif %}">{{ repo.files_present }}/{{ repo.files_total }}</span>
             </div>
         </div>
 

@@ -180,6 +180,79 @@ class TestModels(unittest.TestCase):
         self.assertIn("repo-b", specs)
 
 
+class TestGroups(unittest.TestCase):
+    """Test project group storage."""
+
+    def setUp(self):
+        self._orig_config = models.CONFIG_DIR
+        self._orig_groups = models.GROUPS_PATH
+        self._orig_prefs = models.PREFS_PATH
+        models.CONFIG_DIR = TEST_CONFIG_DIR
+        models.GROUPS_PATH = os.path.join(TEST_CONFIG_DIR, "test_groups.json")
+        models.PREFS_PATH = os.path.join(TEST_CONFIG_DIR, "test_prefs_groups.json")
+
+    def tearDown(self):
+        models.CONFIG_DIR = self._orig_config
+        models.GROUPS_PATH = self._orig_groups
+        models.PREFS_PATH = self._orig_prefs
+        for f in ["test_groups.json", "test_prefs_groups.json"]:
+            p = os.path.join(TEST_CONFIG_DIR, f)
+            if os.path.exists(p):
+                os.remove(p)
+
+    def test_empty_by_default(self):
+        self.assertEqual(models.get_groups(), {})
+
+    def test_set_and_get(self):
+        models.set_group("Alpha", ["r1", "r2"])
+        self.assertEqual(models.get_groups(), {"Alpha": ["r1", "r2"]})
+
+    def test_set_dedupes_and_sorts(self):
+        models.set_group("Alpha", ["r2", "r1", "r2"])
+        self.assertEqual(models.get_groups()["Alpha"], ["r1", "r2"])
+
+    def test_rename(self):
+        models.set_group("Alpha", ["r1"])
+        self.assertTrue(models.rename_group("Alpha", "Beta"))
+        self.assertEqual(models.get_groups(), {"Beta": ["r1"]})
+
+    def test_rename_unknown_refused(self):
+        self.assertFalse(models.rename_group("NoSuch", "Other"))
+
+    def test_rename_to_existing_refused(self):
+        """Renaming to an existing group must not silently overwrite it."""
+        models.set_group("Alpha", ["r1"])
+        models.set_group("Beta", ["r2"])
+        self.assertFalse(models.rename_group("Alpha", "Beta"))
+        groups = models.get_groups()
+        self.assertEqual(groups["Alpha"], ["r1"])
+        self.assertEqual(groups["Beta"], ["r2"])
+
+    def test_rename_updates_active_group_pref(self):
+        models.set_group("Alpha", ["r1"])
+        prefs = models.get_preferences()
+        prefs["active_group"] = "Alpha"
+        models.save_preferences(prefs)
+        models.rename_group("Alpha", "Gamma")
+        self.assertEqual(models.get_preferences().get("active_group"), "Gamma")
+
+    def test_delete(self):
+        models.set_group("Alpha", ["r1"])
+        self.assertTrue(models.delete_group("Alpha"))
+        self.assertEqual(models.get_groups(), {})
+
+    def test_delete_unknown_returns_false(self):
+        self.assertFalse(models.delete_group("NoSuch"))
+
+    def test_delete_clears_active_group_pref(self):
+        models.set_group("Alpha", ["r1"])
+        prefs = models.get_preferences()
+        prefs["active_group"] = "Alpha"
+        models.save_preferences(prefs)
+        models.delete_group("Alpha")
+        self.assertEqual(models.get_preferences().get("active_group"), "")
+
+
 class TestRequiredFiles(unittest.TestCase):
     """Test required files configuration."""
 
@@ -187,47 +260,80 @@ class TestRequiredFiles(unittest.TestCase):
         self.client = gh.GitHubClient.__new__(gh.GitHubClient)
 
     def test_required_files_count(self):
-        """Only 4 files should be required."""
-        # Mock get_root_files to return all possible files
+        """Five files are required: CLAUDE, LICENSE, PRODUCT_SPEC, PROJECT_STATUS, SESSION_NOTES."""
         all_files = [
             "CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md", "SESSION_NOTES.md",
             "BUSINESS_SPEC.md", "PROJECT_STATUS.md",
         ]
-        with patch.object(self.client, "get_root_files", return_value=all_files):
+        with patch.object(self.client, "get_all_file_paths", return_value=all_files):
             results, actual_names = self.client.check_required_files("owner", "repo")
-        self.assertEqual(len(results), 4)
+        self.assertEqual(len(results), 5)
 
     def test_required_files_names(self):
-        """Required files are CLAUDE.md, LICENSE, PRODUCT_SPEC.md, SESSION_NOTES.md."""
-        all_files = ["CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md", "SESSION_NOTES.md"]
-        with patch.object(self.client, "get_root_files", return_value=all_files):
+        """Required files include CLAUDE, LICENSE, PRODUCT_SPEC, PROJECT_STATUS, SESSION_NOTES."""
+        all_files = [
+            "CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md",
+            "PROJECT_STATUS.md", "SESSION_NOTES.md",
+        ]
+        with patch.object(self.client, "get_all_file_paths", return_value=all_files):
             results, actual_names = self.client.check_required_files("owner", "repo")
-        self.assertIn("CLAUDE.md", results)
-        self.assertIn("LICENSE", results)
-        self.assertIn("PRODUCT_SPEC.md", results)
-        self.assertIn("SESSION_NOTES.md", results)
+        for f in ["CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md", "PROJECT_STATUS.md", "SESSION_NOTES.md"]:
+            self.assertIn(f, results)
 
     def test_business_spec_not_required(self):
         """BUSINESS_SPEC.md should NOT be in required files."""
         all_files = ["CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md", "SESSION_NOTES.md", "BUSINESS_SPEC.md"]
-        with patch.object(self.client, "get_root_files", return_value=all_files):
+        with patch.object(self.client, "get_all_file_paths", return_value=all_files):
             results, actual_names = self.client.check_required_files("owner", "repo")
         self.assertNotIn("BUSINESS_SPEC.md", results)
 
-    def test_project_status_not_required(self):
-        """PROJECT_STATUS.md should NOT be in required files."""
+    def test_project_status_is_required(self):
+        """PROJECT_STATUS.md is now part of the required set."""
         all_files = ["CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md", "SESSION_NOTES.md", "PROJECT_STATUS.md"]
-        with patch.object(self.client, "get_root_files", return_value=all_files):
+        with patch.object(self.client, "get_all_file_paths", return_value=all_files):
             results, actual_names = self.client.check_required_files("owner", "repo")
-        self.assertNotIn("PROJECT_STATUS.md", results)
+        self.assertIn("PROJECT_STATUS.md", results)
+        self.assertTrue(results["PROJECT_STATUS.md"])
 
     def test_all_present_score(self):
-        """All 4 files present gives 4/4."""
-        all_files = ["CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md", "SESSION_NOTES.md"]
-        with patch.object(self.client, "get_root_files", return_value=all_files):
+        """All 5 files present gives 5/5."""
+        all_files = [
+            "CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md",
+            "PROJECT_STATUS.md", "SESSION_NOTES.md",
+        ]
+        with patch.object(self.client, "get_all_file_paths", return_value=all_files):
             results, actual_names = self.client.check_required_files("owner", "repo")
         present = sum(1 for v in results.values() if v)
-        self.assertEqual(present, 4)
+        self.assertEqual(present, 5)
+
+    def test_recursive_subfolder_match(self):
+        """Files in subfolders are found when not at root."""
+        all_files = [
+            "docs/PRODUCT_SPEC.md",
+            "docs/SESSION_NOTES.md",
+            "CLAUDE.md",
+            "LICENSE",
+        ]
+        with patch.object(self.client, "get_all_file_paths", return_value=all_files):
+            results, actual_names = self.client.check_required_files("owner", "repo")
+        self.assertTrue(results["PRODUCT_SPEC.md"])
+        self.assertEqual(actual_names["PRODUCT_SPEC.md"], "docs/PRODUCT_SPEC.md")
+        self.assertEqual(actual_names["CLAUDE.md"], "CLAUDE.md")
+
+    def test_root_match_preferred_over_subfolder(self):
+        """Root-level matches win over subfolder matches."""
+        all_files = ["sub/CLAUDE.md", "CLAUDE.md"]
+        with patch.object(self.client, "get_all_file_paths", return_value=all_files):
+            results, actual_names = self.client.check_required_files("owner", "repo")
+        self.assertEqual(actual_names["CLAUDE.md"], "CLAUDE.md")
+
+    def test_vendor_dirs_ignored(self):
+        """Files under node_modules etc. are not counted."""
+        all_files = ["node_modules/pkg/LICENSE", "node_modules/pkg/PRODUCT_SPEC.md"]
+        with patch.object(self.client, "get_all_file_paths", return_value=all_files):
+            results, actual_names = self.client.check_required_files("owner", "repo")
+        self.assertFalse(results["LICENSE"])
+        self.assertFalse(results["PRODUCT_SPEC.md"])
 
 
 class TestGitHubClassification(unittest.TestCase):
