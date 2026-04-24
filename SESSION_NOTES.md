@@ -1,7 +1,7 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 8
+**Total Sessions Logged:** 9
 **Date Range:** 2025-02-14 to 2026-04-24
 **Last Updated:** 2026-04-24
 
@@ -11,25 +11,26 @@ This file contains a complete history of Claude Code sessions for this repositor
 
 ## Current Project Status
 
-**Overall Progress:** 88%
+**Overall Progress:** 92%
 
 **What's Working:**
 - Secure credential storage (Fernet + PBKDF2 encryption)
 - GitHub PAT authentication with scope verification
-- Full repo scanning — branch counts, required file checks
-- Dashboard table with sortable columns, retro terminal UI
-- Sticky table headers
-- Required files detection — now 5 files: CLAUDE.md, LICENSE, PRODUCT_SPEC.md, PROJECT_STATUS.md, SESSION_NOTES.md (case-insensitive, any extension)
-- **Recursive spec-file search** — finds spec files anywhere in the tree, skipping node_modules/dist/.venv etc., preferring root-level then shallowest path
+- Full repo scanning — branch counts, required file checks, **code size (bytes via /languages)**
+- Dashboard table with sortable columns (now includes **Size column, numeric-aware sort**), retro terminal UI, sticky headers
+- Required files detection — 5 files: CLAUDE.md, LICENSE, PRODUCT_SPEC.md, PROJECT_STATUS.md, SESSION_NOTES.md
+- **Recursive spec-file search** — finds spec files anywhere in the tree, skipping vendor dirs, preferring root-level then shallowest path
 - Clickable repo detail pages with Product Spec, Project Status, and Session Notes panels
 - "Current?" column — detects if docs are fresh (within 7 days of last commit)
+- **Project Groups** — create/rename/delete named groups, filter Projects page by group; active group persists in preferences
+- **Stats view** — Commits / Code Size / Lines Added bar charts with 1d/3d/1w/2w/1m/2m period selector; empty-period repos collapse below alphabetical divider
+- **What's Next view** — aggregated next-step bullets across all repos from AI summaries
+- **Refreshed top nav** — bracketed brand on left, menu center, pulsing green user pill + logout chip on right, glowing underline for active page
 - 30-minute session auto-lock
 - Activity log with color-coded messages
-- Netlify deployment — Node.js Express app as serverless function
+- Netlify deployment — Node.js Express app as serverless function (lagging behind Flask)
 - AI project summaries via Claude Haiku (now also picks up CLAUDE.md content and subfolder specs)
-- **Project Groups** — create/rename/delete named groups, assign repos, filter the Projects page by group; active group persists in preferences
-- Parallelized scan (batches of 10) and summary generation (batches of 5)
-- 60/60 tests passing (10 new — groups + recursive search coverage)
+- 60/60 tests passing
 
 **What's Broken:** Nothing currently broken
 
@@ -41,15 +42,80 @@ This file contains a complete history of Claude Code sessions for this repositor
 
 **Next Steps:**
 1. Merge `claude/add-project-grouping-sq2Hy` to main
-2. Re-scan repos to see PROJECT_STATUS column populate and spec files found in subfolders
-3. Port the groups feature + recursive search to the Netlify version
-4. Consider: add "pin group" vs "filter group" distinction, or per-user group sharing
+2. Pull main to PC (PowerShell) and Mac (Terminal) — see bottom of this file for commands
+3. Re-scan repos to see PROJECT_STATUS column populate, Size column, recursive specs, and stats charts
+4. Port groups + recursive search + stats + whats-next to the Netlify version
+5. Parallelize initial scan (languages call added API traffic)
 
 **Blockers:**
 - Free Netlify tier has 10s function timeout (26s on paid). Large GitHub accounts may still time out.
-- Netlify version is now behind Flask version (recursive search + groups not yet ported).
+- Netlify version is behind Flask version (April 24 features not ported yet).
+- First `/stats` visit on a cold repo may show 0 for Lines Added until GitHub finishes computing `/stats/code_frequency` async; click REFRESH after ~10-20s.
 
 ---
+
+
+## 2026-04-24 (evening) — Stats + What's Next + Nav Refresh + Size Metric
+
+### What Was Accomplished
+- **Stats page (`/stats`)** with three bar-chart views and a 1d/3d/1w/2w/1m/2m period selector:
+  1. **Commits** — age-bucketed counts from `/commits?since=...`; `N+` suffix when truncated (200 commits max)
+  2. **Code Size** — byte sum from `/languages`, formatted as B / KB / MB
+  3. **Lines Added** — weekly buckets from `/stats/code_frequency` with explicit overlap pro-rating so sub-week periods estimate cleanly
+- **What's Next page (`/whats-next`)** — aggregates AI-generated `next_steps` bullets from every repo's summary into a single card grid, sorted alphabetically, each linking to repo detail.
+- **Code Size as a first-class metric** — scan now makes one extra call to `/languages` per repo and stores `code_size_bytes` + `languages` breakdown on each repo. Surfaces as a sortable dashboard column (handles unit suffixes correctly via `data-sort-value`) and powers the Stats "Code Size" view.
+- **Refreshed top nav** — fresh CSS for `.top-nav` with subtle gradient, blur backdrop, pulsing green user pill on the right, glowing underline for the active link. Added "Stats" and "What's Next" menu items.
+
+### Technical Details
+**New routes in `app.py`:**
+- `GET /stats` — fetches per-repo commits + code_frequency in parallel via `ThreadPoolExecutor(max_workers=8)`, caches keyed by scan identity, re-renders instantly on revisit. `?refresh=1` forces recompute.
+- `GET /whats-next` — reads `project_summaries.json`, groups by repo, sorts alphabetically.
+
+**New methods in `github_client.py`:**
+- `get_language_bytes(owner, repo)` → `{lang: bytes}` (`/languages`)
+- `get_commits_since(owner, repo, since_iso, ref, max_pages=3)` → list of commits (`/commits?since=...`)
+- `get_code_frequency(owner, repo)` → list of `[week_ts, adds, dels]` rows (`/stats/code_frequency`); returns `None` on 202/204
+
+**Overlap math for LOC pro-rating (in `_collect_repo_activity`):**
+- Each week bucket spans `[age_days-7, age_days]` days old
+- For each period `[0, pdays]`, overlap = `max(0, min(pdays, bucket_hi) - bucket_lo)`
+- Fraction = overlap / 7; apply to `additions`
+
+**Files Modified:**
+- `app.py` — added `/stats`, `/whats-next`, `_collect_repo_activity`, stats cache, languages fallback in scan error path, cache invalidation on rescan
+- `github_client.py` — three new client methods + added `get_language_bytes()` call to `scan_repo_lite` with `code_size_bytes` and `languages` on returned dict
+- `templates/base.html` — rewrote nav layout; added Stats / What's Next menu items; brand now has bracketed wrapper
+- `templates/dashboard.html` — new Size column (position 12), colspan bumped 12→13, sort script prefers `data-sort-value` when present
+- `templates/stats.html` — new file, CSS bar chart driven by embedded JSON, client-side view+period switching
+- `templates/whats_next.html` — new file, sorted card grid with per-repo next-steps
+- `static/css/style.css` — rewrote `.top-nav` and children, new `.stats-*` + `.whatsnext-*` + `.size-value` styles
+
+### Current Status
+- ✅ All 6 user-requested items shipped
+- ✅ 60/60 tests still passing
+- ✅ End-to-end tested with mocked GitHub client (commits bucketing, LOC pro-rating, size formatting at all scales)
+- ✅ Boundary math for LOC verified: 1w period with 1-week-old bucket correctly yields ~full week
+
+### Branch Info
+- Working branch: `claude/add-project-grouping-sq2Hy`
+- Ready to merge to main: **Yes** — feature-complete, tested, pushed. Branch name is now misleading (scope expanded beyond grouping) but stable.
+
+### Decisions Made
+- "Lines of code" = weekly additions from `code_frequency`. Exact daily resolution is not achievable without per-commit `/stats` calls; sub-week periods are pro-rated with explicit overlap math.
+- "Code size" = byte sum from `/languages`. Not literal LOC; labeled clearly as "Code Size" and in tooltips.
+- Stats data cached **in memory only**, keyed by scan identity. Deliberate: user controls freshness via explicit scan or `?refresh=1`.
+- What's Next reads from `project_summaries.json` (cheap, already cached) rather than re-parsing spec files across every repo (expensive).
+- Nav kept entirely in base.html + CSS — no JS dependency, no CDN, retro aesthetic preserved.
+
+### Next Steps
+1. Merge `claude/add-project-grouping-sq2Hy` to main
+2. Follow the **Pull Instructions** at the bottom of this file to sync both machines
+3. Port this work to the Netlify Node.js app
+
+---
+
+
+## 2026-04-24 — Project Groups + Recursive Spec Search
 
 
 ## 2026-04-24 — Project Groups + Recursive Spec Search
@@ -420,5 +486,48 @@ This file contains a complete history of Claude Code sessions for this repositor
 ### Issues/Notes
 - [Attempted to push to main - authentication failed]
 - [Attempted to push main - authentication error]
+
+---
+
+
+## Pull Instructions — Syncing PC and Mac After Merge
+
+After merging `claude/add-project-grouping-sq2Hy` to `main` on GitHub:
+
+### On Mac (Terminal)
+```
+cd ~/repodoctor2
+git checkout main
+git fetch origin
+git pull origin main
+git branch -d claude/add-project-grouping-sq2Hy   # optional cleanup of local feature branch
+pip install -r requirements.txt                   # in case deps changed
+python3 app.py
+```
+
+### On PC (PowerShell)
+```
+cd $HOME\repodoctor2
+git checkout main
+git fetch origin
+git pull origin main
+git branch -d claude/add-project-grouping-sq2Hy   # optional cleanup of local feature branch
+pip install -r requirements.txt                   # in case deps changed
+python app.py
+```
+
+### If you have uncommitted local changes
+Stash before pulling so nothing is lost:
+```
+git stash
+git pull origin main
+git stash pop                                      # reapply your local work
+```
+
+### After pulling — first-time setup touches on each machine
+- `config/groups.json` is gitignored — groups you create on Mac will NOT sync to PC (and vice versa). That's by design; they're per-machine state.
+- `config/preferences.json` IS tracked, so `active_group` / model choice / excluded repos sync between machines.
+- Run a fresh **SCAN** from the dashboard so the new `code_size_bytes` + recursive spec detection populate.
+- Visit `/stats` once; the first view computes stats across all repos (takes a few seconds; cached after that).
 
 ---
