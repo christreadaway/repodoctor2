@@ -22,11 +22,35 @@
         <p>Head to the <a href="{{ url_for('projects') }}">Projects</a> page and click <strong>GENERATE SUMMARIES</strong> — the AI-produced "What's Next" bullets will show up here.</p>
     </div>
 </div>
-{% elif not items %}
+{% else %}
+
+{% if groups %}
+<div class="group-bar">
+    <div class="group-tabs">
+        <a href="{{ url_for('whats_next_all', group='') }}"
+           class="group-tab {% if not active_group %}active{% endif %}">
+           All <span class="group-count">{{ all_repos|length }}</span>
+        </a>
+        {% for gname, gRepos in groups.items() %}
+        <a href="{{ url_for('whats_next_all', group=gname) }}"
+           class="group-tab {% if active_group == gname %}active{% endif %}">
+           {{ gname }} <span class="group-count">{{ gRepos|length }}</span>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% if not items %}
 <div class="onboarding">
     <div class="onboarding-welcome">
+        {% if active_group %}
+        <h2>No open next-steps in <strong>{{ active_group }}</strong>.</h2>
+        <p>Either no projects in this group have AI summaries with next-step bullets, or those bullets are empty. Regenerate summaries from <a href="{{ url_for('projects') }}">Projects</a>, or pick another group above.</p>
+        {% else %}
         <h2>No open next-steps.</h2>
         <p>You have project summaries but none include next-step bullets. Regenerate summaries from <a href="{{ url_for('projects') }}">Projects</a>.</p>
+        {% endif %}
     </div>
 </div>
 {% else %}
@@ -50,5 +74,6 @@
     </div>
     {% endfor %}
 </div>
+{% endif %}
 {% endif %}
 {% endblock %}

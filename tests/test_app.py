@@ -823,5 +823,111 @@ class TestProjectsSortAndStatsFilter(unittest.TestCase):
             self.app_mod._github_client = self._orig_client
 
 
+class TestWhatsNextGroupFilter(unittest.TestCase):
+    """Covers /whats-next group selector (mirrors /projects behavior)."""
+
+    def setUp(self):
+        from app import app
+        import app as app_mod
+        app.config["TESTING"] = True
+        self.app_mod = app_mod
+        self.client = app.test_client()
+        with self.client.session_transaction() as sess:
+            sess["authenticated"] = True
+        self._orig_groups = models.GROUPS_PATH
+        self._orig_legacy = models._LEGACY_GROUPS_PATH
+        self._orig_prefs = models.PREFS_PATH
+        self._orig_summaries = models.SUMMARIES_PATH
+        self.tmp = tempfile.mkdtemp()
+        models.GROUPS_PATH = os.path.join(self.tmp, "groups.json")
+        models._LEGACY_GROUPS_PATH = os.path.join(self.tmp, "legacy.json")
+        models.PREFS_PATH = os.path.join(self.tmp, "prefs.json")
+        models.SUMMARIES_PATH = os.path.join(self.tmp, "summaries.json")
+        self._orig_scan = app_mod._scan_results
+        app_mod._scan_results = {
+            "repos": [
+                {"owner": "o", "name": "school1", "full_name": "o/school1",
+                 "default_branch": "main", "private": False, "html_url": "",
+                 "description": "", "updated_at": "2026-04-20T00:00:00Z",
+                 "files_present": 5, "files_total": 5, "code_size_bytes": 0,
+                 "total_branch_count": 0, "non_default_branch_count": 0,
+                 "branch_names": [], "required_files": {}, "languages": {}},
+                {"owner": "o", "name": "fun1", "full_name": "o/fun1",
+                 "default_branch": "main", "private": False, "html_url": "",
+                 "description": "", "updated_at": "2026-04-19T00:00:00Z",
+                 "files_present": 3, "files_total": 5, "code_size_bytes": 0,
+                 "total_branch_count": 0, "non_default_branch_count": 0,
+                 "branch_names": [], "required_files": {}, "languages": {}},
+            ],
+            "total_repos": 2, "total_branches": 0,
+        }
+        models.set_group("School", ["school1"])
+        models.set_group("Fun", ["fun1"])
+        models.save_project_summary("school1", {
+            "what_it_does": "x", "how_finished": "y",
+            "next_steps": ["learn algebra", "study geography"],
+        })
+        models.save_project_summary("fun1", {
+            "what_it_does": "x", "how_finished": "y",
+            "next_steps": ["beat level 5"],
+        })
+
+    def tearDown(self):
+        self.app_mod._scan_results = self._orig_scan
+        models.GROUPS_PATH = self._orig_groups
+        models._LEGACY_GROUPS_PATH = self._orig_legacy
+        models.PREFS_PATH = self._orig_prefs
+        models.SUMMARIES_PATH = self._orig_summaries
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_renders_group_bar(self):
+        resp = self.client.get("/whats-next")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"group-bar", resp.data)
+        self.assertIn(b"School", resp.data)
+        self.assertIn(b"Fun", resp.data)
+
+    def test_filters_by_group(self):
+        """?group=School shows school1's bullets but not fun1's."""
+        resp = self.client.get("/whats-next?group=School")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.data.decode()
+        self.assertIn("school1", body)
+        self.assertIn("learn algebra", body)
+        self.assertNotIn("fun1", body)
+        self.assertNotIn("beat level 5", body)
+
+    def test_persists_active_group_in_prefs(self):
+        """Selecting a group on whats-next persists in shared active_group pref."""
+        self.client.get("/whats-next?group=Fun")
+        prefs = models.get_preferences()
+        self.assertEqual(prefs["active_group"], "Fun")
+
+    def test_falls_back_to_active_group_pref(self):
+        """No URL arg -> uses saved pref."""
+        prefs = models.get_preferences()
+        prefs["active_group"] = "School"
+        models.save_preferences(prefs)
+        resp = self.client.get("/whats-next")
+        body = resp.data.decode()
+        self.assertIn("school1", body)
+        self.assertNotIn("fun1", body)
+
+    def test_invalid_group_falls_back_to_all(self):
+        resp = self.client.get("/whats-next?group=DoesNotExist")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.data.decode()
+        # Both repos shown since active_group was reset to ""
+        self.assertIn("school1", body)
+        self.assertIn("fun1", body)
+
+    def test_empty_group_shows_scoped_message(self):
+        models.set_group("Empty", ["nonexistent-repo"])
+        resp = self.client.get("/whats-next?group=Empty")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"No open next-steps in", resp.data)
+        self.assertIn(b"Empty", resp.data)
+
+
 if __name__ == "__main__":
     unittest.main()

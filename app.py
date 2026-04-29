@@ -677,7 +677,28 @@ def stats():
 @_require_auth
 def whats_next_all():
     summaries = models.get_project_summaries()
-    repos = _scan_results.get("repos", []) if _scan_results else []
+    groups = models.get_groups()
+    prefs = models.get_preferences()
+
+    # Same group-resolution behavior as /projects: ?group= wins and persists,
+    # otherwise fall back to the saved active_group pref.
+    requested = request.args.get("group")
+    if requested is not None:
+        active_group = requested if requested in groups else ""
+        if prefs.get("active_group", "") != active_group:
+            prefs["active_group"] = active_group
+            models.save_preferences(prefs)
+    else:
+        active_group = prefs.get("active_group", "")
+        if active_group and active_group not in groups:
+            active_group = ""
+
+    all_repos = _scan_results.get("repos", []) if _scan_results else []
+    if active_group:
+        group_repos = set(groups.get(active_group, []))
+        repos = [r for r in all_repos if r["name"] in group_repos]
+    else:
+        repos = all_repos
 
     items = []
     for repo in repos:
@@ -698,8 +719,11 @@ def whats_next_all():
     return render_template(
         "whats_next.html",
         items=items,
+        all_repos=all_repos,
         scan_results=_scan_results,
         has_summaries=bool(summaries),
+        groups=groups,
+        active_group=active_group,
     )
 
 
