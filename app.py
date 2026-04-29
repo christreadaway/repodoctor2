@@ -123,6 +123,10 @@ def _init_session(creds: dict):
     user_info = _github_client.verify_token()
     if user_info:
         session["github_user"] = user_info.get("login", "")
+    # TEMPORARY: see DEFAULT_USER_GROUPS in models.py — remove on next rebuild.
+    seeded = models.seed_default_groups_if_missing()
+    if seeded:
+        models.log_action("seed_groups", "all", "all", f"Seeded default groups: {', '.join(seeded)}")
 
 
 # --- Dashboard ---
@@ -368,7 +372,9 @@ def projects():
         if active_group and active_group not in groups:
             active_group = ""
 
-    all_repos = _scan_results.get("repos", []) if _scan_results else []
+    all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
+    # Most recently updated first; missing/blank dates sink to the bottom.
+    all_repos.sort(key=lambda r: r.get("updated_at") or "", reverse=True)
     if active_group:
         group_repos = set(groups.get(active_group, []))
         repos = [r for r in all_repos if r["name"] in group_repos]
@@ -549,22 +555,21 @@ PERIOD_DAYS = {
 
 
 def _collect_repo_activity(client, repo, since_iso, now_utc):
-    """Fetch commits + code_frequency for one repo. Returns dict to merge."""
+    """Fetch commit activity for one repo. Returns dict to merge."""
     import datetime as _dt
     owner = repo["owner"]
     name = repo["name"]
     ref = repo.get("default_branch", "main")
 
     commits_by_period = {k: 0 for k in PERIOD_DAYS}
-    loc_by_period = {k: 0 for k in PERIOD_DAYS}
-    truncated = False
 
+    # Page through all commits in the longest stats window. The hard ceiling
+    # (50 pages = 5000 commits) just bounds API calls for pathological repos;
+    # it doesn't visibly cap the bar like the old 200 limit did.
     try:
-        commits = client.get_commits_since(owner, name, since_iso, ref=ref, max_pages=2)
+        commits = client.get_commits_since(owner, name, since_iso, ref=ref, max_pages=50)
     except Exception:
         commits = []
-    if len(commits) >= 200:
-        truncated = True
 
     for c in commits:
         date_str = (
@@ -582,51 +587,12 @@ def _collect_repo_activity(client, repo, since_iso, now_utc):
             if age_days <= pdays:
                 commits_by_period[pkey] += 1
 
-    # Lines added via weekly code_frequency ([week_start_ts, adds, dels]).
-    # Each week bucket spans [week_start, week_start + 7d]. A commit inside
-    # that bucket is somewhere between (age_days - 7) and age_days days old,
-    # where age_days is how long ago the week STARTED relative to now.
-    try:
-        freq = client.get_code_frequency(owner, name)
-    except Exception:
-        freq = None
-    if freq:
-        for row in freq:
-            if not isinstance(row, list) or len(row) < 2:
-                continue
-            try:
-                week_ts = int(row[0])
-                additions = max(0, int(row[1]))
-            except (ValueError, TypeError):
-                continue
-            if additions == 0:
-                continue
-            try:
-                week_dt = _dt.datetime.fromtimestamp(week_ts, tz=_dt.timezone.utc)
-            except (ValueError, OSError):
-                continue
-            age_days = (now_utc - week_dt).total_seconds() / 86400.0
-            # Commits in this bucket are aged between [bucket_lo, bucket_hi] days.
-            bucket_lo = max(0.0, age_days - 7.0)
-            bucket_hi = max(0.0, age_days)
-            if bucket_hi <= bucket_lo:
-                continue
-            for pkey, pdays in PERIOD_DAYS.items():
-                # Overlap of bucket range with [0, pdays]
-                overlap = max(0.0, min(pdays, bucket_hi) - bucket_lo)
-                if overlap <= 0:
-                    continue
-                frac = min(1.0, overlap / (bucket_hi - bucket_lo))
-                loc_by_period[pkey] += int(additions * frac)
-
     return {
         "name": name,
         "owner": owner,
         "full_name": repo.get("full_name", f"{owner}/{name}"),
         "html_url": repo.get("html_url", ""),
         "commits_by_period": commits_by_period,
-        "commits_truncated": truncated,
-        "loc_by_period": loc_by_period,
         "code_size_bytes": repo.get("code_size_bytes", 0),
     }
 
@@ -635,8 +601,19 @@ def _collect_repo_activity(client, repo, since_iso, now_utc):
 @_require_auth
 def stats():
     global _stats_cache
+
+    groups = models.get_groups()
+    requested_group = request.args.get("group")
+    active_group = (requested_group if requested_group in groups else "") if requested_group is not None else ""
+
     if not _scan_results:
-        return render_template("stats.html", repos=None, scan_results=None)
+        return render_template(
+            "stats.html",
+            repos=None,
+            scan_results=None,
+            groups=groups,
+            active_group=active_group,
+        )
 
     force = request.args.get("refresh") == "1"
     key = _stats_cache_key()
@@ -646,6 +623,8 @@ def stats():
             repos=_stats_cache["repos"],
             scan_results=_scan_results,
             periods=list(PERIOD_DAYS.keys()),
+            groups=groups,
+            active_group=active_group,
         )
 
     client = _get_github_client()
@@ -677,8 +656,6 @@ def stats():
                     "full_name": r.get("full_name", ""),
                     "html_url": r.get("html_url", ""),
                     "commits_by_period": {k: 0 for k in PERIOD_DAYS},
-                    "commits_truncated": False,
-                    "loc_by_period": {k: 0 for k in PERIOD_DAYS},
                     "code_size_bytes": r.get("code_size_bytes", 0),
                     "error": str(e),
                 })
@@ -689,6 +666,8 @@ def stats():
         repos=results,
         scan_results=_scan_results,
         periods=list(PERIOD_DAYS.keys()),
+        groups=groups,
+        active_group=active_group,
     )
 
 

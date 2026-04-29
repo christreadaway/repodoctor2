@@ -3002,14 +3002,16 @@ tbody tr:hover {
 }
 
 .stats-tabs,
-.stats-periods {
+.stats-periods,
+.stats-modes {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 
 .stats-tab,
-.stats-period {
+.stats-period,
+.stats-mode {
   padding: 6px 14px;
   background: transparent;
   border: 1px solid var(--border);
@@ -3025,13 +3027,15 @@ tbody tr:hover {
 }
 
 .stats-tab:hover,
-.stats-period:hover {
+.stats-period:hover,
+.stats-mode:hover {
   border-color: var(--green-80);
   color: var(--green-100);
 }
 
 .stats-tab.active,
-.stats-period.active {
+.stats-period.active,
+.stats-mode.active {
   border-color: var(--green-100);
   color: var(--bg-deep);
   background-color: var(--green-100);

@@ -5,7 +5,7 @@
     <h1>Stats</h1>
     <div class="page-actions">
         {% if scan_results %}
-        <a href="{{ url_for('stats', refresh=1) }}" class="btn btn-secondary">REFRESH</a>
+        <a href="{{ url_for('stats', refresh=1, group=active_group) }}" class="btn btn-secondary">REFRESH</a>
         {% endif %}
     </div>
 </div>
@@ -26,12 +26,34 @@
 </div>
 {% else %}
 
+{% if groups %}
+<div class="group-bar">
+    <div class="group-tabs">
+        <a href="{{ url_for('stats') }}"
+           class="group-tab {% if not active_group %}active{% endif %}">
+           All <span class="group-count">{{ repos|length }}</span>
+        </a>
+        {% for gname, gRepos in groups.items() %}
+        <a href="{{ url_for('stats', group=gname) }}"
+           class="group-tab {% if active_group == gname %}active{% endif %}">
+           {{ gname }} <span class="group-count">{{ gRepos|length }}</span>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
 <div class="stats-toolbar">
     <div class="stats-tabs" role="tablist">
         <button type="button" class="stats-tab active" data-view="commits">Commits</button>
         <button type="button" class="stats-tab" data-view="size">Code Size</button>
-        <button type="button" class="stats-tab" data-view="loc">Lines Added</button>
     </div>
+    {% if groups and not active_group %}
+    <div class="stats-modes" id="stats-modes">
+        <button type="button" class="stats-mode active" data-mode="repos">By repo</button>
+        <button type="button" class="stats-mode" data-mode="groups">By group</button>
+    </div>
+    {% endif %}
     <div class="stats-periods" id="stats-periods">
         {% for p in periods %}
         <button type="button" class="stats-period {% if p == '1w' %}active{% endif %}" data-period="{{ p }}">{{ p }}</button>
@@ -52,7 +74,9 @@
 <script id="stats-data" type="application/json">
 {{ {
     "repos": repos,
-    "periods": periods
+    "periods": periods,
+    "groups": groups,
+    "active_group": active_group
 } | tojson }}
 </script>
 
@@ -60,7 +84,9 @@
 (function () {
     var data = JSON.parse(document.getElementById('stats-data').textContent);
     var repos = data.repos;
-    var state = { view: 'commits', period: '1w' };
+    var groups = data.groups || {};
+    var activeGroup = data.active_group || '';
+    var state = { view: 'commits', period: '1w', mode: 'repos' };
 
     function fmtBytes(n) {
         if (!n) return '0';
@@ -69,39 +95,79 @@
         return n + ' B';
     }
 
+    function visibleRepos() {
+        if (!activeGroup) return repos;
+        var allowed = {};
+        (groups[activeGroup] || []).forEach(function (n) { allowed[n] = true; });
+        return repos.filter(function (r) { return allowed[r.name]; });
+    }
+
     function viewMeta() {
+        var scope = activeGroup ? ('group "' + activeGroup + '"') : 'all repos';
         if (state.view === 'commits') {
             return {
-                title: 'Commits in last ' + state.period,
-                subtitle: 'Bars sized to the busiest repo in the period',
+                title: 'Commits in last ' + state.period + ' — ' + scope,
+                subtitle: state.mode === 'groups'
+                    ? 'Bars sized to the busiest group in the period'
+                    : 'Bars sized to the busiest repo in the period',
                 needsPeriod: true,
                 getValue: function (r) {
                     var v = (r.commits_by_period || {})[state.period] || 0;
-                    return { value: v, display: v + (r.commits_truncated ? '+' : '') };
+                    return { value: v, display: String(v) };
                 }
             };
         }
-        if (state.view === 'size') {
-            return {
-                title: 'Code size by repo',
-                subtitle: 'Sum of bytes across all languages (per GitHub /languages)',
-                needsPeriod: false,
-                getValue: function (r) {
-                    var v = r.code_size_bytes || 0;
-                    return { value: v, display: fmtBytes(v) };
-                }
-            };
-        }
-        // loc
+        // size
         return {
-            title: 'Lines added in last ' + state.period,
-            subtitle: 'Estimated from weekly code_frequency; sub-week periods are pro-rated',
-            needsPeriod: true,
+            title: 'Code size — ' + scope,
+            subtitle: 'Sum of bytes across all languages (per GitHub /languages)',
+            needsPeriod: false,
             getValue: function (r) {
-                var v = (r.loc_by_period || {})[state.period] || 0;
-                return { value: v, display: v.toLocaleString() };
+                var v = r.code_size_bytes || 0;
+                return { value: v, display: fmtBytes(v) };
             }
         };
+    }
+
+    function repoToGroupNames(repoName) {
+        var hits = [];
+        Object.keys(groups).forEach(function (gname) {
+            if ((groups[gname] || []).indexOf(repoName) !== -1) hits.push(gname);
+        });
+        if (!hits.length) hits.push('Ungrouped');
+        return hits;
+    }
+
+    function rollupByGroup(rows, meta) {
+        var totals = {};
+        rows.forEach(function (r) {
+            var v = meta.getValue(r).value;
+            repoToGroupNames(r.name).forEach(function (g) {
+                totals[g] = (totals[g] || 0) + v;
+            });
+        });
+        return Object.keys(totals).map(function (g) {
+            var v = totals[g];
+            var display = state.view === 'size' ? fmtBytes(v) : String(v);
+            return { name: g, value: v, display: display, html_url: null, isGroup: true };
+        });
+    }
+
+    function buildRows(meta) {
+        var visible = visibleRepos();
+        if (state.mode === 'groups') {
+            // When a group is active, "by group" is a degenerate rollup of one,
+            // so we silently fall back to the repo view.
+            if (activeGroup) return visible.map(function (r) {
+                var v = meta.getValue(r);
+                return { name: r.name, value: v.value, display: v.display, html_url: r.html_url };
+            });
+            return rollupByGroup(visible, meta);
+        }
+        return visible.map(function (r) {
+            var v = meta.getValue(r);
+            return { name: r.name, value: v.value, display: v.display, html_url: r.html_url };
+        });
     }
 
     function render() {
@@ -110,17 +176,8 @@
         document.getElementById('chart-subtitle').textContent = meta.subtitle;
         document.getElementById('stats-periods').style.visibility = meta.needsPeriod ? 'visible' : 'hidden';
 
-        var rows = repos.map(function (r) {
-            var v = meta.getValue(r);
-            return {
-                name: r.name,
-                html_url: r.html_url,
-                value: v.value,
-                display: v.display
-            };
-        });
+        var rows = buildRows(meta);
 
-        // Partition: active (value > 0) sorted desc, empty sorted alphabetically asc
         var active = rows.filter(function (r) { return r.value > 0; });
         var empty = rows.filter(function (r) { return !(r.value > 0); });
         active.sort(function (a, b) { return b.value - a.value; });
@@ -134,11 +191,16 @@
             var pct = max > 0 ? Math.max(2, (row.value / max) * 100) : 0;
             var rowEl = document.createElement('div');
             rowEl.className = 'stats-bar-row' + (isEmpty ? ' is-empty' : '');
-            var label = document.createElement('a');
+            var label;
+            if (row.html_url) {
+                label = document.createElement('a');
+                label.href = row.html_url;
+                label.target = '_blank';
+                label.rel = 'noopener';
+            } else {
+                label = document.createElement('span');
+            }
             label.className = 'stats-bar-label';
-            label.href = row.html_url || '#';
-            label.target = '_blank';
-            label.rel = 'noopener';
             label.textContent = row.name;
             var track = document.createElement('div');
             track.className = 'stats-bar-track';
@@ -159,12 +221,12 @@
         if (empty.length) {
             var divider = document.createElement('div');
             divider.className = 'stats-divider';
-            divider.textContent = 'No activity in period (' + empty.length + ')';
+            divider.textContent = (state.mode === 'groups' ? 'Empty groups' : 'No activity in period') + ' (' + empty.length + ')';
             container.appendChild(divider);
             empty.forEach(function (r) { appendRow(r, true); });
         }
         if (!rows.length) {
-            container.innerHTML = '<div class="stats-empty-hint">No repos to show.</div>';
+            container.innerHTML = '<div class="stats-empty-hint">Nothing to show for this selection.</div>';
         }
     }
 
@@ -182,6 +244,15 @@
             document.querySelectorAll('.stats-period').forEach(function (b) { b.classList.remove('active'); });
             btn.classList.add('active');
             state.period = btn.dataset.period;
+            render();
+        });
+    });
+
+    document.querySelectorAll('.stats-mode').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            document.querySelectorAll('.stats-mode').forEach(function (b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            state.mode = btn.dataset.mode;
             render();
         });
     });
