@@ -1,123 +1,102 @@
-# RepoDoctor2 — Windows PC Setup
+# RepoDoctor2 — Windows PowerShell Setup
 
-Step-by-step instructions to pull down the latest code and run RepoDoctor2 on a Windows PC.
+Everything runs from PowerShell. No installers to click through, no boxes to remember to check.
+
+Requires Windows 10 or 11 (which ship with `winget` built in).
 
 ---
 
-## One-Time Setup (only do this once per PC)
+## Step 1: Open PowerShell
 
-### 1. Install Python 3.10+
-- Download from https://www.python.org/downloads/windows/
-- During install, **check the box "Add Python to PATH"** (important!)
-- Verify in PowerShell:
-  ```powershell
-  python --version
-  ```
+Press the **Windows key**, type `powershell`, and click **Windows PowerShell**.
 
-### 2. Install Git
-- Download from https://git-scm.com/download/win
-- Use default install options
-- Verify in PowerShell:
-  ```powershell
-  git --version
-  ```
+A blue window opens. All the commands below get pasted here.
 
-### 3. Clone the Repo
-Open **PowerShell** and run:
+---
+
+## Step 2: Allow Scripts to Run (one-time)
+
+Paste this into PowerShell and press **Enter**:
+
 ```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+```
+
+(No output means it worked.)
+
+---
+
+## Step 3: One-Shot Install + Setup
+
+Paste this **entire block** into PowerShell and press **Enter**. It installs Python, installs Git, clones the repo, creates the virtual environment, and installs all dependencies — in one go.
+
+```powershell
+# Install Python and Git via winget
+winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements
+winget install -e --id Git.Git --accept-source-agreements --accept-package-agreements
+
+# Refresh PATH so python and git work without restarting PowerShell
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+# Clone the repo into ~\repodoctor22
 cd ~
 git clone https://github.com/christreadaway/repodoctor2.git repodoctor22
 cd ~\repodoctor22
-```
 
-> Note: We name the local folder `repodoctor22` to match the Mac convention used in CLAUDE.md.
-
-### 4. Create Virtual Environment + Install Dependencies
-```powershell
-cd ~\repodoctor22
+# Create virtual environment and install dependencies
 python -m venv venv
-venv\Scripts\activate
+.\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+
+Write-Host "`n=== Setup complete. Run .\start.ps1 to launch RepoDoctor. ===" -ForegroundColor Green
 ```
 
-You should see `(venv)` at the start of your PowerShell prompt when the venv is active.
+This takes 2–5 minutes. When you see the green "Setup complete" message, you're done with one-time setup.
+
+If `winget` says Python or Git is already installed, that's fine — keep going.
 
 ---
 
-## Pulling Down the Latest Code (every session)
+## Step 4: Start the App
 
-Open **PowerShell** and run:
-```powershell
-cd ~\repodoctor22
-git checkout main
-git pull origin main
-```
-
-If dependencies changed (e.g., `requirements.txt` was updated):
-```powershell
-venv\Scripts\activate
-pip install -r requirements.txt
-```
-
----
-
-## Running the App
+Every time you want to run RepoDoctor, paste this into PowerShell:
 
 ```powershell
 cd ~\repodoctor22
-venv\Scripts\activate
-python app.py
+.\start.ps1
 ```
 
-Then open your browser to:
-```
-http://127.0.0.1:5001
-```
+That script (already in the repo) pulls the latest code, activates the virtual environment, opens your browser to http://127.0.0.1:5001, and starts the server.
 
-Press `Ctrl+C` in PowerShell to stop the server.
+To stop the app, click the PowerShell window and press **Ctrl + C**.
 
 ---
 
-## Quick Launcher (Optional)
+## What `start.ps1` Does
 
-Create a file called `start.bat` in the project folder with this content so you can double-click to launch:
+It runs these commands so you don't have to remember them:
 
-```bat
-@echo off
-cd /d "%~dp0"
-if not exist venv (
-    echo Creating virtual environment...
-    python -m venv venv
-    call venv\Scripts\activate.bat
-    pip install -r requirements.txt
-) else (
-    call venv\Scripts\activate.bat
-)
-echo Starting RepoDoctor on http://127.0.0.1:5001
-start "" http://127.0.0.1:5001
-python app.py
-pause
-```
-
-Then just double-click `start.bat` to launch.
+1. `git pull origin main` — grabs the latest code
+2. `.\venv\Scripts\Activate.ps1` — turns on the virtual environment
+3. `pip install -r requirements.txt --quiet` — installs any new dependencies
+4. Opens http://127.0.0.1:5001 in your default browser
+5. `python app.py` — starts the Flask server
 
 ---
 
 ## Troubleshooting
 
-**`python` not recognized** — Reinstall Python and check "Add Python to PATH". Or try `py` instead of `python`.
+**`winget` not recognized** — You're on an older Windows. Update Windows, or install from https://aka.ms/getwinget.
 
-**`git` not recognized** — Reinstall Git for Windows and restart PowerShell.
+**`python` or `git` not recognized after Step 3** — Close PowerShell, reopen it, and try again. The `$env:Path` refresh works most of the time, but a full restart of PowerShell always works.
 
-**Port 5001 already in use** — Find and kill the process:
+**`Activate.ps1 cannot be loaded because running scripts is disabled`** — Step 2 didn't take. Run it again, then close and reopen PowerShell.
+
+**Port 5001 already in use** — Another instance is running. Kill it:
 ```powershell
-netstat -ano | findstr :5001
-taskkill /PID <PID_FROM_ABOVE> /F
+Get-NetTCPConnection -LocalPort 5001 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }
 ```
 
-**PowerShell blocks `venv\Scripts\activate`** — Run once as admin:
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
+**GitHub asks for a password when cloning** — Use a Personal Access Token (not your real password). Generate one at https://github.com/settings/tokens — give it `repo` scope.
 
-**Credentials don't carry over from Mac** — Encrypted credentials are local only. On first run on the PC, re-enter your GitHub Personal Access Token and Anthropic API key in the app.
+**Anything else** — Copy the red error text, paste it to Claude Code, and we'll fix it.
