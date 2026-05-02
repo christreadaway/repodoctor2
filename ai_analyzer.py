@@ -20,14 +20,19 @@ Rules:
 
 Return a JSON object with these exact fields:
 {
-  "plain_english_summary": "2-3 sentences describing what this branch does, written for a non-developer",
+  "plain_english_summary": "ONE short sentence (max 20 words) describing what was done on this branch overall, written for a non-developer. No semicolons, no compound 'and X and Y' lists — just the headline.",
+  "screen_changes": [
+    {"screen": "Name of the screen/page/area (e.g. 'Dashboard', 'Henry Branches', 'Login', 'Settings'). If the change is not user-facing, use a short area name like 'Backend / API', 'Data model', or 'Build config'.", "change": "One short phrase describing what changed on that screen — start with a verb (Added, Removed, Renamed, Fixed, etc.)"}
+  ],
   "feature_assessment": "SHOULD_MERGE | OPTIONAL | OBSOLETE | UNCLEAR",
   "risk_level": "LOW | MEDIUM | HIGH",
   "conflict_prediction": "Which files likely conflict and why, or 'No conflicts expected'",
   "merge_strategy": "fast-forward | merge | rebase",
   "claude_code_instructions": "Complete, copy/paste-ready text for Claude Code",
   "spec_alignment": "Which features this relates to, or null if no spec provided"
-}"""
+}
+
+For screen_changes: produce one bullet per distinct screen or area touched. Group multiple files for the same screen into a single bullet. Infer screen names from template/route names (e.g. templates/dashboard.html → 'Dashboard', templates/henry.html → 'Henry Branches'). Aim for 1–6 bullets — never more than 8."""
 
 
 def estimate_tokens(branch_data: dict, spec_text: str | None = None) -> int:
@@ -139,6 +144,7 @@ def analyze_branch(
     except json.JSONDecodeError:
         result = {
             "plain_english_summary": response_text,
+            "screen_changes": [],
             "feature_assessment": "UNCLEAR",
             "risk_level": "MEDIUM",
             "conflict_prediction": "Unable to parse AI response",
