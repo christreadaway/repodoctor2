@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}RepoDoctor — Henry Branches{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Henry Branches</h1>
+    <div class="page-actions">
+        {% if scan_results and branches %}
+        <form method="POST" action="{{ url_for('generate_henry_summaries') }}" class="inline-form">
+            <button type="submit" class="btn btn-primary" id="generate-btn">
+                {% if any_summaries %}REGENERATE SUMMARIES{% else %}GENERATE SUMMARIES{% endif %}
+            </button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first, then come back here.</p>
+    </div>
+</div>
+{% elif not branches %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No "henry" branches found.</h2>
+        <p>Your latest scan didn't find any branch names containing <strong>henry</strong>. If you just created one, go to <a href="{{ url_for('dashboard') }}">My Repos</a> and rescan.</p>
+    </div>
+</div>
+{% else %}
+
+<div class="projects-hint">
+    <p>Found <strong>{{ branches|length }}</strong> branch{% if branches|length != 1 %}es{% endif %} with "henry" in the name. Click <strong>{% if any_summaries %}REGENERATE{% else %}GENERATE{% endif %} SUMMARIES</strong> to use Claude to compare each one against its repo's default branch (~$0.001 per branch).</p>
+</div>
+
+<div class="projects-grid">
+    {% for b in branches %}
+    {% set summary = b.summary %}
+    <div class="project-card {% if summary %}has-summary{% endif %}">
+        <div class="project-card-header">
+            <div>
+                <a href="{{ url_for('repo_detail', owner=b.owner, name=b.repo) }}" class="project-name">{{ b.repo }}</a>
+                <div class="project-section-label" style="margin-top: 4px;">{{ b.branch_name }} → {{ b.default_branch }}</div>
+            </div>
+            <div class="project-meta">
+                {% if b.private %}
+                <span class="badge badge-dim">PRIVATE</span>
+                {% else %}
+                <span class="badge badge-public">PUBLIC</span>
+                {% endif %}
+                {% if summary and summary.risk_level %}
+                <span class="badge badge-dim">RISK: {{ summary.risk_level }}</span>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if summary %}
+            {% if summary.error %}
+            <div class="project-section">
+                <div class="project-section-label">Error</div>
+                <p class="project-section-text">{{ summary.plain_english_summary }}</p>
+            </div>
+            {% else %}
+            <div class="project-section">
+                <div class="project-section-label">What changed vs {{ b.default_branch }}</div>
+                <p class="project-section-text">{{ summary.plain_english_summary }}</p>
+            </div>
+
+            <div class="project-section">
+                <div class="project-section-label">Branch stats</div>
+                <p class="project-section-text">
+                    {{ summary.classification }} •
+                    {{ summary.ahead_by }} ahead / {{ summary.behind_by }} behind •
+                    {{ summary.commits_count }} commit{% if summary.commits_count != 1 %}s{% endif %} •
+                    {{ summary.files_count }} file{% if summary.files_count != 1 %}s{% endif %} changed
+                    {% if summary.has_pr %} • Open PR{% endif %}
+                </p>
+            </div>
+
+            <div class="project-section">
+                <div class="project-section-label">Recommendation</div>
+                <p class="project-section-text">
+                    {{ summary.feature_assessment }} —
+                    merge as <em>{{ summary.merge_strategy }}</em>.
+                    {% if summary.conflict_prediction %}
+                    <br><span style="opacity: 0.8;">{{ summary.conflict_prediction }}</span>
+                    {% endif %}
+                </p>
+            </div>
+
+            {% if summary.last_commit_author %}
+            <div class="project-section">
+                <div class="project-section-label">Last commit</div>
+                <p class="project-section-text">
+                    {{ summary.last_commit_author }}{% if summary.last_commit_date %} on {{ summary.last_commit_date[:10] }}{% endif %}
+                </p>
+            </div>
+            {% endif %}
+            {% endif %}
+
+            {% if summary._generated_at %}
+            <div class="project-generated">Generated {{ summary._generated_at[:10] }}</div>
+            {% endif %}
+
+        {% else %}
+        <div class="project-section">
+            <p class="project-no-summary">
+                No summary yet — click {% if any_summaries %}Regenerate{% else %}Generate{% endif %} Summaries above.
+            </p>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

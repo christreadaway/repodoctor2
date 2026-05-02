@@ -15,7 +15,7 @@ from flask import (
 
 import security
 import github_client as gh
-# import ai_analyzer as ai  # Commented out — not needed in simplified mode
+import ai_analyzer as ai
 import anthropic
 import models
 import spec_cleaner
@@ -532,6 +532,212 @@ def generate_project_summaries():
     flash(f"Generated summaries for {generated} projects ({skipped} skipped/fallback).", "success")
     models.log_action("generate_summaries", "all", "all", f"Generated {generated}, skipped {skipped}")
     return redirect(url_for("projects"))
+
+
+# --- Henry Branches ---
+#
+# Scan all repos for branches whose name contains "henry" (case-insensitive)
+# and produce an AI summary of each branch vs. its repo's default branch.
+
+HENRY_KEYWORD = "henry"
+
+
+def _find_henry_branches(scan_results: dict | None) -> list[dict]:
+    """Return [{owner, repo, branch_name, default_branch, private}] for every
+    non-default branch whose name contains 'henry'."""
+    found = []
+    if not scan_results:
+        return found
+    for repo in scan_results.get("repos", []):
+        default_branch = repo.get("default_branch", "main")
+        for bname in repo.get("branch_names", []):
+            if HENRY_KEYWORD in bname.lower() and bname != default_branch:
+                found.append({
+                    "owner": repo["owner"],
+                    "repo": repo["name"],
+                    "full_name": repo["full_name"],
+                    "branch_name": bname,
+                    "default_branch": default_branch,
+                    "private": repo.get("private", False),
+                    "html_url": repo.get("html_url", ""),
+                })
+    return found
+
+
+@app.route("/henry")
+@_require_auth
+def henry():
+    summaries = models.get_henry_summaries()
+    branches = _find_henry_branches(_scan_results)
+    # Attach summary (if cached) and sort: summarized first, then alphabetical.
+    for b in branches:
+        b["summary"] = summaries.get(f"{b['repo']}/{b['branch_name']}")
+    branches.sort(key=lambda b: (b["summary"] is None, b["repo"].lower(), b["branch_name"].lower()))
+    return render_template(
+        "henry.html",
+        branches=branches,
+        scan_results=_scan_results,
+        any_summaries=bool(summaries),
+    )
+
+
+@app.route("/henry/generate", methods=["POST"])
+@_require_auth
+def generate_henry_summaries():
+    client = _get_github_client()
+    creds = _get_credentials()
+    if not client or not creds:
+        flash("Not authenticated.", "error")
+        return redirect(url_for("henry"))
+    if not _scan_results:
+        flash("Run a scan first from My Repos.", "error")
+        return redirect(url_for("henry"))
+
+    targets = _find_henry_branches(_scan_results)
+    if not targets:
+        flash('No branches with "henry" in the name were found in your latest scan.', "error")
+        return redirect(url_for("henry"))
+
+    generated = 0
+    failed = 0
+    # Group by repo so we only fetch get_branches/get_pulls once per repo.
+    by_repo: dict[tuple[str, str], list[dict]] = {}
+    for t in targets:
+        by_repo.setdefault((t["owner"], t["repo"]), []).append(t)
+
+    for (owner, name), items in by_repo.items():
+        default_branch = items[0]["default_branch"]
+        try:
+            branches_full = client.get_branches(owner, name)
+        except Exception as e:
+            for t in items:
+                models.save_henry_summary(name, t["branch_name"], _henry_error_record(t, str(e)))
+                failed += 1
+            continue
+        sha_lookup = {b["name"]: b["commit"]["sha"] for b in branches_full}
+        try:
+            pulls = client.get_pulls(owner, name)
+            pr_branches = {pr["head"]["ref"] for pr in pulls}
+        except Exception:
+            pr_branches = set()
+
+        spec_text = models.get_spec(name)
+
+        for t in items:
+            bname = t["branch_name"]
+            comparison = client.compare_branches(owner, name, default_branch, bname)
+            if comparison is None:
+                models.save_henry_summary(name, bname, _henry_error_record(t, "Could not compare branch."))
+                failed += 1
+                continue
+
+            last_commit_date = None
+            last_commit_author = None
+            if comparison.get("commits"):
+                lc = comparison["commits"][-1]
+                last_commit_date = lc["commit"]["committer"]["date"]
+                last_commit_author = (
+                    lc["commit"]["author"]["name"] if lc["commit"].get("author") else "Unknown"
+                )
+            has_pr = bname in pr_branches
+            classification = client.classify_branch(comparison, last_commit_date, has_pr)
+
+            files_changed = [
+                {
+                    "filename": f["filename"],
+                    "additions": f["additions"],
+                    "deletions": f["deletions"],
+                    "status": f["status"],
+                }
+                for f in comparison.get("files", [])
+            ]
+            commit_messages = [
+                {
+                    "sha": c["sha"][:7],
+                    "message": c["commit"]["message"].split("\n")[0],
+                    "author": c["commit"]["author"]["name"] if c["commit"].get("author") else "Unknown",
+                    "date": c["commit"]["committer"]["date"] if c["commit"].get("committer") else None,
+                }
+                for c in comparison.get("commits", [])
+            ]
+
+            branch_data = {
+                "name": bname,
+                "classification": classification,
+                "ahead_by": comparison.get("ahead_by", 0),
+                "behind_by": comparison.get("behind_by", 0),
+                "last_commit_date": last_commit_date,
+                "last_commit_author": last_commit_author,
+                "has_pr": has_pr,
+                "commit_sha": sha_lookup.get(bname, ""),
+                "files_changed": files_changed,
+                "commit_messages": commit_messages,
+            }
+
+            try:
+                analysis = ai.analyze_branch(
+                    api_key=creds["anthropic_key"],
+                    repo_name=name,
+                    branch_data=branch_data,
+                    default_branch=default_branch,
+                    spec_text=spec_text,
+                )
+                usage = analysis.get("_usage", {})
+                in_tok = usage.get("input_tokens", 0)
+                out_tok = usage.get("output_tokens", 0)
+                cost = ai.estimate_cost(in_tok, out_tok)
+                _session_cost.add(in_tok, out_tok, cost)
+
+                models.save_henry_summary(name, bname, {
+                    "owner": owner,
+                    "repo": name,
+                    "branch_name": bname,
+                    "default_branch": default_branch,
+                    "html_url": t["html_url"],
+                    "private": t["private"],
+                    "plain_english_summary": analysis.get("plain_english_summary", ""),
+                    "feature_assessment": analysis.get("feature_assessment", "UNCLEAR"),
+                    "risk_level": analysis.get("risk_level", "MEDIUM"),
+                    "conflict_prediction": analysis.get("conflict_prediction", ""),
+                    "merge_strategy": analysis.get("merge_strategy", "merge"),
+                    "ahead_by": branch_data["ahead_by"],
+                    "behind_by": branch_data["behind_by"],
+                    "classification": classification,
+                    "last_commit_date": last_commit_date,
+                    "last_commit_author": last_commit_author,
+                    "has_pr": has_pr,
+                    "files_count": len(files_changed),
+                    "commits_count": len(commit_messages),
+                    "commit_sha": branch_data["commit_sha"],
+                })
+                generated += 1
+            except Exception as e:
+                models.save_henry_summary(name, bname, _henry_error_record(t, str(e)))
+                failed += 1
+
+    flash(f"Henry branches summarized: {generated} done, {failed} failed.", "success")
+    models.log_action(
+        "generate_henry_summaries",
+        "all",
+        "all",
+        f"Generated {generated}, failed {failed}",
+    )
+    return redirect(url_for("henry"))
+
+
+def _henry_error_record(target: dict, err: str) -> dict:
+    return {
+        "owner": target["owner"],
+        "repo": target["repo"],
+        "branch_name": target["branch_name"],
+        "default_branch": target["default_branch"],
+        "html_url": target.get("html_url", ""),
+        "private": target.get("private", False),
+        "plain_english_summary": f"Summary failed: {err[:200]}",
+        "feature_assessment": "UNCLEAR",
+        "risk_level": "MEDIUM",
+        "error": err[:200],
+    }
 
 
 # --- Stats ---

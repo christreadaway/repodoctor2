@@ -184,6 +184,29 @@ def save_project_summaries(summaries: dict):
     _save_json(SUMMARIES_PATH, summaries)
 
 
+# --- Henry Branch Summaries ---
+#
+# Keyed by "{repo_name}/{branch_name}" so multiple henry-named branches in the
+# same repo each get their own card.
+
+HENRY_SUMMARIES_PATH = os.path.join(DATA_DIR, "henry_summaries.json")
+
+
+def get_henry_summaries() -> dict:
+    return _load_json(HENRY_SUMMARIES_PATH) or {}
+
+
+def save_henry_summary(repo_name: str, branch_name: str, summary: dict):
+    summaries = get_henry_summaries()
+    summary["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    summaries[f"{repo_name}/{branch_name}"] = summary
+    _save_json(HENRY_SUMMARIES_PATH, summaries)
+
+
+def clear_henry_summaries():
+    _save_json(HENRY_SUMMARIES_PATH, {})
+
+
 # --- Project Groups ---
 #
 # Groups live in the user's home dir (~/.repodoctor/groups.json) so they
