@@ -65,6 +65,13 @@
             <div class="project-section">
                 <div class="project-section-label">What changed vs {{ b.default_branch }}</div>
                 <p class="project-section-text">{{ summary.plain_english_summary }}</p>
+                {% if summary.screen_changes %}
+                <ul class="project-section-list">
+                    {% for sc in summary.screen_changes %}
+                    <li><strong>{{ sc.screen }}:</strong> {{ sc.change }}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
             </div>
 
             <div class="project-section">

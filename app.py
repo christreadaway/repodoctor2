@@ -696,6 +696,7 @@ def generate_henry_summaries():
                     "html_url": t["html_url"],
                     "private": t["private"],
                     "plain_english_summary": analysis.get("plain_english_summary", ""),
+                    "screen_changes": analysis.get("screen_changes", []),
                     "feature_assessment": analysis.get("feature_assessment", "UNCLEAR"),
                     "risk_level": analysis.get("risk_level", "MEDIUM"),
                     "conflict_prediction": analysis.get("conflict_prediction", ""),
