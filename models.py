@@ -207,6 +207,38 @@ def clear_henry_summaries():
     _save_json(HENRY_SUMMARIES_PATH, {})
 
 
+# --- Firestore Configuration Data ---
+#
+# Keyed by repo name. One entry per scanned repo with detection results +
+# per-repo setup instructions. Lives in the user dir so it survives wiping
+# the codebase, mirroring groups storage.
+
+FIRESTORE_DATA_PATH = os.path.join(USER_DATA_DIR, "firestore_data.json")
+
+
+def get_firestore_data() -> dict:
+    """Return {repo_name: detection_dict, '_scanned_at': iso_ts}."""
+    data = _load_json(FIRESTORE_DATA_PATH)
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def save_firestore_data(repos: list[dict]):
+    """Save a freshly-scanned set of detection results."""
+    payload = {
+        "_scanned_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "repos": {r["name"]: r for r in repos},
+    }
+    os.makedirs(USER_DATA_DIR, exist_ok=True)
+    _save_json(FIRESTORE_DATA_PATH, payload)
+
+
+def clear_firestore_data():
+    if os.path.exists(FIRESTORE_DATA_PATH):
+        os.remove(FIRESTORE_DATA_PATH)
+
+
 # --- Project Groups ---
 #
 # Groups live in the user's home dir (~/.repodoctor/groups.json) so they

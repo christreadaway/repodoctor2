@@ -3413,3 +3413,264 @@ kbd {
 .setup-trouble p {
   margin-top: var(--space-xs);
 }
+
+
+/* ================================================================
+   Firestore Setup Page
+   ================================================================ */
+.firestore-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xl);
+  margin-bottom: var(--space-lg);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.firestore-scanned-at {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.firestore-section {
+  margin-top: var(--space-xl);
+}
+
+.firestore-section-title {
+  font-size: 1.05rem;
+  color: var(--green-100);
+  margin-bottom: var(--space-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.firestore-section-count {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.firestore-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+}
+
+.firestore-grid-compact {
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+
+.firestore-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+}
+
+.firestore-card-warn {
+  border-left-color: var(--amber-100);
+}
+
+.firestore-card-ok {
+  border-left-color: var(--green-80);
+}
+
+.firestore-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+  padding-bottom: var(--space-xs);
+  border-bottom: 1px solid var(--border);
+}
+
+.firestore-repo {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--green-100);
+  text-decoration: none;
+}
+
+.firestore-repo:hover {
+  text-decoration: underline;
+}
+
+.firestore-project-id {
+  display: inline-block;
+  margin-left: var(--space-sm);
+  font-size: 0.7rem;
+  color: var(--cyan-100);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.firestore-status {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.04em;
+}
+
+.firestore-status-warn {
+  color: var(--amber-100);
+  background: rgba(255, 170, 0, 0.08);
+  border: 1px solid var(--amber-100);
+}
+
+.firestore-status-ok {
+  color: var(--green-100);
+  background: rgba(51, 255, 51, 0.06);
+  border: 1px solid var(--green-80);
+}
+
+.firestore-block {
+  margin-top: var(--space-sm);
+}
+
+.firestore-block-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  letter-spacing: 0.05em;
+  margin-bottom: var(--space-xs);
+}
+
+.firestore-indicators,
+.firestore-missing {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.firestore-indicators li,
+.firestore-missing li {
+  position: relative;
+  padding: 3px 0 3px 18px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.firestore-indicators li::before {
+  content: '✓';
+  position: absolute;
+  left: 2px;
+  color: var(--green-80);
+}
+
+.firestore-missing li::before {
+  content: '✗';
+  position: absolute;
+  left: 2px;
+  color: var(--amber-100);
+}
+
+.firestore-indicators-compact li {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.firestore-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: firestore-step;
+}
+
+.firestore-steps li {
+  position: relative;
+  padding: var(--space-sm) 0 var(--space-sm) 32px;
+  border-bottom: 1px solid var(--border);
+  counter-increment: firestore-step;
+}
+
+.firestore-steps li:last-child {
+  border-bottom: none;
+}
+
+.firestore-steps li::before {
+  content: counter(firestore-step);
+  position: absolute;
+  left: 0;
+  top: var(--space-sm);
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--green-100);
+  background: var(--bg-card);
+  border: 1px solid var(--green-80);
+  border-radius: 50%;
+}
+
+.firestore-step-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.firestore-step-detail {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.firestore-details {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.firestore-details[open] {
+  padding-bottom: var(--space-md);
+}
+
+.firestore-details-summary {
+  cursor: pointer;
+  font-size: 0.95rem;
+  color: var(--green-100);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0;
+}
+
+.firestore-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-top: var(--space-sm);
+}
+
+.firestore-tag {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+}
+
+.firestore-tag:hover {
+  color: var(--green-100);
+  border-color: var(--green-80);
+}

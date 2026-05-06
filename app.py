@@ -20,6 +20,7 @@ import anthropic
 import models
 import spec_cleaner
 import project_mapper
+import firestore_detector
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
@@ -932,6 +933,120 @@ def whats_next_all():
         groups=groups,
         active_group=active_group,
     )
+
+
+# --- Firestore Setup ---
+#
+# Cross-repo view of which projects need Firestore configured (a manual
+# Firebase-console step) plus per-repo step-by-step instructions. Detection
+# is cached in ~/.repodoctor/firestore_data.json so the page is fast after
+# the first scan; the SCAN button forces a fresh detection across all repos.
+
+@app.route("/firestore")
+@_require_auth
+def firestore():
+    data = models.get_firestore_data()
+    repos_map = data.get("repos", {}) if data else {}
+    scanned_at = data.get("_scanned_at", "") if data else ""
+
+    # Apply same group filter as Projects / What's Next.
+    groups = models.get_groups()
+    requested = request.args.get("group")
+    active_group = (requested if requested in groups else "") if requested is not None else ""
+
+    all_repo_names = sorted(repos_map.keys())
+    if active_group:
+        in_group = set(groups.get(active_group, []))
+        visible_names = [n for n in all_repo_names if n in in_group]
+    else:
+        visible_names = all_repo_names
+
+    needs_setup = []
+    configured = []
+    not_using = []
+    for n in visible_names:
+        entry = repos_map[n]
+        s = entry.get("status")
+        if s == "needs_setup":
+            needs_setup.append(entry)
+        elif s == "configured":
+            configured.append(entry)
+        else:
+            not_using.append(entry)
+
+    needs_setup.sort(key=lambda r: r["name"].lower())
+    configured.sort(key=lambda r: r["name"].lower())
+    not_using.sort(key=lambda r: r["name"].lower())
+
+    return render_template(
+        "firestore.html",
+        scan_results=_scan_results,
+        has_data=bool(repos_map),
+        scanned_at=scanned_at,
+        needs_setup=needs_setup,
+        configured=configured,
+        not_using=not_using,
+        groups=groups,
+        active_group=active_group,
+        total_visible=len(visible_names),
+    )
+
+
+@app.route("/firestore/scan", methods=["POST"])
+@_require_auth
+def firestore_scan():
+    client = _get_github_client()
+    if not client:
+        flash("Not authenticated with GitHub.", "error")
+        return redirect(url_for("firestore"))
+    if not _scan_results:
+        flash("Run a repo scan first from My Repos.", "error")
+        return redirect(url_for("firestore"))
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    repos = _scan_results.get("repos", [])
+    results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {
+            pool.submit(
+                firestore_detector.detect_firestore_status,
+                client,
+                r["owner"],
+                r["name"],
+                r.get("default_branch", "main"),
+            ): r
+            for r in repos
+        }
+        for fut in as_completed(futures):
+            r = futures[fut]
+            try:
+                results.append(fut.result())
+            except Exception as e:
+                results.append({
+                    "owner": r["owner"],
+                    "name": r["name"],
+                    "uses_firestore": False,
+                    "status": "not_using",
+                    "indicators": [],
+                    "missing": [],
+                    "project_id": None,
+                    "site_domain": None,
+                    "indexes_count": 0,
+                    "files": {},
+                    "instructions": [],
+                    "error": str(e)[:200],
+                })
+
+    models.save_firestore_data(results)
+    needs = sum(1 for r in results if r.get("status") == "needs_setup")
+    using = sum(1 for r in results if r.get("uses_firestore"))
+    models.log_action(
+        "firestore_scan", "all", "all",
+        f"Scanned {len(results)} repos: {using} use Firestore, {needs} need setup",
+    )
+    flash(f"Firestore scan complete: {using} use Firestore, {needs} need setup.", "success")
+    return redirect(url_for("firestore"))
 
 
 # --- Mac Setup ---

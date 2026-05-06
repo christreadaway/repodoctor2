@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}RepoDoctor — Firestore Setup{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Firestore Setup</h1>
+    <div class="page-actions">
+        {% if scan_results %}
+        <form method="POST" action="{{ url_for('firestore_scan') }}" class="inline-form">
+            <button type="submit" class="btn btn-primary" id="firestore-scan-btn">
+                {% if has_data %}RE-SCAN{% else %}SCAN FOR FIRESTORE{% endif %}
+            </button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first, then come back to detect which projects need Firestore configured.</p>
+    </div>
+</div>
+{% elif not has_data %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>Find which repos still need Firestore.</h2>
+        <p>This page checks every repo in your last scan for Firestore signals (firebase.json, firestore.rules, .firebaserc, package.json deps, requirements.txt deps), figures out what's already in place, and tells you exactly what to do for each project that's still missing setup — all in one place so you can knock them out at once.</p>
+        <p class="text-secondary">The scan only reads files. It does not deploy or modify anything.</p>
+    </div>
+    <div class="onboarding-action">
+        <form method="POST" action="{{ url_for('firestore_scan') }}" class="inline-form">
+            <button type="submit" class="btn btn-primary btn-large">SCAN FOR FIRESTORE</button>
+        </form>
+    </div>
+</div>
+{% else %}
+
+{% if groups %}
+<div class="group-bar">
+    <div class="group-tabs">
+        <a href="{{ url_for('firestore', group='') }}"
+           class="group-tab {% if not active_group %}active{% endif %}">
+           All <span class="group-count">{{ total_visible if not active_group else (needs_setup|length + configured|length + not_using|length) }}</span>
+        </a>
+        {% for gname, gRepos in groups.items() %}
+        <a href="{{ url_for('firestore', group=gname) }}"
+           class="group-tab {% if active_group == gname %}active{% endif %}">
+           {{ gname }} <span class="group-count">{{ gRepos|length }}</span>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<div class="firestore-summary">
+    <div class="summary-stat">
+        <span class="stat-value {% if needs_setup|length > 0 %}stat-warning{% endif %}">{{ needs_setup|length }}</span>
+        <span class="stat-label">Need Setup</span>
+    </div>
+    <div class="summary-stat">
+        <span class="stat-value">{{ configured|length }}</span>
+        <span class="stat-label">Configured</span>
+    </div>
+    <div class="summary-stat">
+        <span class="stat-value">{{ not_using|length }}</span>
+        <span class="stat-label">Not Using</span>
+    </div>
+    {% if scanned_at %}
+    <div class="firestore-scanned-at">
+        Last scanned {{ scanned_at[:10] }}
+    </div>
+    {% endif %}
+</div>
+
+{# --- NEEDS SETUP — front and center --- #}
+{% if needs_setup %}
+<section class="firestore-section">
+    <h2 class="firestore-section-title">Needs Configuration <span class="firestore-section-count">{{ needs_setup|length }}</span></h2>
+    <p class="projects-hint">For each project below: open Firebase console, enable Firestore, deploy any rules/indexes already in the repo. Steps include the exact console URL and CLI commands.</p>
+
+    <div class="firestore-grid">
+    {% for r in needs_setup %}
+        <div class="firestore-card firestore-card-warn">
+            <div class="firestore-card-header">
+                <div>
+                    <a href="{{ url_for('repo_detail', owner=r.owner, name=r.name) }}" class="firestore-repo">{{ r.name }}</a>
+                    {% if r.project_id %}
+                    <span class="firestore-project-id" title="Firebase project ID from .firebaserc">{{ r.project_id }}</span>
+                    {% endif %}
+                </div>
+                <span class="firestore-status firestore-status-warn">NEEDS SETUP</span>
+            </div>
+
+            {% if r.indicators %}
+            <div class="firestore-block">
+                <div class="firestore-block-label">Detected</div>
+                <ul class="firestore-indicators">
+                    {% for ind in r.indicators %}
+                    <li>{{ ind }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            {% if r.missing %}
+            <div class="firestore-block">
+                <div class="firestore-block-label">Missing</div>
+                <ul class="firestore-missing">
+                    {% for m in r.missing %}
+                    <li>{{ m }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            {% if r.instructions %}
+            <div class="firestore-block">
+                <div class="firestore-block-label">Steps</div>
+                <ol class="firestore-steps">
+                    {% for step in r.instructions %}
+                    <li>
+                        <div class="firestore-step-title">{{ step.title }}</div>
+                        <div class="firestore-step-detail">{{ step.detail }}</div>
+                    </li>
+                    {% endfor %}
+                </ol>
+            </div>
+            {% endif %}
+        </div>
+    {% endfor %}
+    </div>
+</section>
+{% else %}
+<section class="firestore-section">
+    <div class="onboarding">
+        <div class="onboarding-welcome">
+            <h2>Nothing needs Firestore setup{% if active_group %} in <strong>{{ active_group }}</strong>{% endif %}.</h2>
+            <p>Either every Firestore project is already configured, or none of these repos use Firestore. Re-scan above if you've added new repos.</p>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+{# --- CONFIGURED — collapsible secondary section --- #}
+{% if configured %}
+<section class="firestore-section">
+    <details class="firestore-details">
+        <summary class="firestore-details-summary">Already configured <span class="firestore-section-count">{{ configured|length }}</span></summary>
+        <div class="firestore-grid firestore-grid-compact">
+        {% for r in configured %}
+            <div class="firestore-card firestore-card-ok">
+                <div class="firestore-card-header">
+                    <div>
+                        <a href="{{ url_for('repo_detail', owner=r.owner, name=r.name) }}" class="firestore-repo">{{ r.name }}</a>
+                        {% if r.project_id %}
+                        <span class="firestore-project-id">{{ r.project_id }}</span>
+                        {% endif %}
+                    </div>
+                    <span class="firestore-status firestore-status-ok">CONFIGURED</span>
+                </div>
+                {% if r.indicators %}
+                <ul class="firestore-indicators firestore-indicators-compact">
+                    {% for ind in r.indicators %}
+                    <li>{{ ind }}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+            </div>
+        {% endfor %}
+        </div>
+    </details>
+</section>
+{% endif %}
+
+{# --- NOT USING — minimal --- #}
+{% if not_using %}
+<section class="firestore-section">
+    <details class="firestore-details">
+        <summary class="firestore-details-summary">Not using Firestore <span class="firestore-section-count">{{ not_using|length }}</span></summary>
+        <div class="firestore-tag-list">
+            {% for r in not_using %}
+            <a href="{{ url_for('repo_detail', owner=r.owner, name=r.name) }}" class="firestore-tag">{{ r.name }}</a>
+            {% endfor %}
+        </div>
+    </details>
+</section>
+{% endif %}
+
+{% endif %}
+{% endblock %}
