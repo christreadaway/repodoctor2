@@ -8,7 +8,7 @@ Product builder, not a coder. I bring requirements and vision — you handle imp
 
 **Working with me:**
 - Bias toward action — just do it, don't argue
-- Make terminal commands dummy-proof (always start with `cd ~/repodoctor22`)
+- Make terminal commands dummy-proof (always start with `cd ~/repodoctor2`)
 - Minimize questions — make judgment calls and tell me what you chose
 - I get interrupted frequently — always end sessions with clear handoff
 
@@ -22,7 +22,7 @@ Product builder, not a coder. I bring requirements and vision — you handle imp
 
 ## File Paths
 - **Always use:** `~/RepoDoctor2/`
-- **Always start commands with:** `cd ~/repodoctor22`
+- **Always start commands with:** `cd ~/repodoctor2`
 
 ## PII Rules
 ❌ NEVER include: GitHub tokens, Anthropic API keys, real repo analysis data, credential files, file paths with /Users/christreadaway → use ~/

@@ -17,8 +17,8 @@ winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-pa
 winget install -e --id Git.Git --accept-source-agreements --accept-package-agreements
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 cd ~
-git clone https://github.com/christreadaway/repodoctor2.git repodoctor22
-cd ~\repodoctor22
+git clone https://github.com/christreadaway/repodoctor2.git repodoctor2
+cd ~\repodoctor2
 .\start.ps1
 ```
 
@@ -31,7 +31,7 @@ If `winget` reports Python or Git already installed, that's fine — keep going.
 ## Every Future Session
 
 ```powershell
-cd ~\repodoctor22; .\start.ps1
+cd ~\repodoctor2; .\start.ps1
 ```
 
 `start.ps1` pulls latest code, activates the virtual environment, refreshes dependencies, and starts the app.
@@ -49,8 +49,8 @@ $DesktopPath = [Environment]::GetFolderPath("Desktop")
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut("$DesktopPath\RepoDoctor.lnk")
 $Shortcut.TargetPath = "powershell.exe"
-$Shortcut.Arguments = "-NoExit -ExecutionPolicy Bypass -File `"$env:USERPROFILE\repodoctor22\start.ps1`""
-$Shortcut.WorkingDirectory = "$env:USERPROFILE\repodoctor22"
+$Shortcut.Arguments = "-NoExit -ExecutionPolicy Bypass -File `"$env:USERPROFILE\repodoctor2\start.ps1`""
+$Shortcut.WorkingDirectory = "$env:USERPROFILE\repodoctor2"
 $Shortcut.IconLocation = "powershell.exe,0"
 $Shortcut.Save()
 Write-Host "Shortcut created at: $DesktopPath\RepoDoctor.lnk" -ForegroundColor Green
@@ -66,7 +66,7 @@ When you double-click **RepoDoctor** on your desktop, a PowerShell window opens,
 
 **`winget` not recognized** → Update Windows, or install from https://aka.ms/getwinget.
 
-**`python` or `git` not recognized after the paste** → Close PowerShell, reopen it, then run `cd ~\repodoctor22; .\start.ps1`.
+**`python` or `git` not recognized after the paste** → Close PowerShell, reopen it, then run `cd ~\repodoctor2; .\start.ps1`.
 
 **`Activate.ps1 cannot be loaded`** → Run `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force`, then retry.
 
