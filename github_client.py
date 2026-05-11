@@ -231,16 +231,19 @@ class GitHubClient:
             stem_to_paths.setdefault(stem, []).append((path, depth))
 
         required = {
-            "CLAUDE.md": "claude",
-            "LICENSE": "license",
-            "PRODUCT_SPEC.md": "product_spec",
-            "PROJECT_STATUS.md": "project_status",
-            "SESSION_NOTES.md": "session_notes",
+            "CLAUDE.md": ["claude"],
+            "LICENSE": ["license"],
+            # business_spec.md is treated as an equivalent product spec file.
+            "PRODUCT_SPEC.md": ["product_spec", "business_spec"],
+            "PROJECT_STATUS.md": ["project_status"],
+            "SESSION_NOTES.md": ["session_notes"],
         }
         results: dict[str, bool] = {}
         actual_names: dict[str, str] = {}
-        for display_name, stem in required.items():
-            matches = stem_to_paths.get(stem, [])
+        for display_name, stems in required.items():
+            matches: list[tuple[str, int]] = []
+            for stem in stems:
+                matches.extend(stem_to_paths.get(stem, []))
             if matches:
                 # Prefer shallowest, then shortest path string
                 matches.sort(key=lambda m: (m[1], len(m[0])))

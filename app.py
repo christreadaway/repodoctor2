@@ -509,14 +509,8 @@ def generate_project_summaries():
                     ),
                 }],
             )
-            import json
             raw = response.content[0].text.strip()
-            # Handle markdown fencing if present
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-                if raw.endswith("```"):
-                    raw = raw[:-3].strip()
-            summary = json.loads(raw)
+            summary = ai.extract_json_object(raw)
             # Ensure next_steps is capped at 5
             if "next_steps" in summary and len(summary["next_steps"]) > 5:
                 summary["next_steps"] = summary["next_steps"][:5]
