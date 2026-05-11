@@ -382,10 +382,16 @@ def projects():
     else:
         repos = all_repos
 
+    # Repos that aren't a member of any group — surfaced in the Manage Groups
+    # panel so Chris can see at a glance what hasn't been categorized yet.
+    assigned = {name for member_list in groups.values() for name in member_list}
+    unassigned_repos = [r for r in all_repos if r["name"] not in assigned]
+
     return render_template(
         "projects.html",
         repos=repos,
         all_repos=all_repos,
+        unassigned_repos=unassigned_repos,
         summaries=summaries,
         scan_results=_scan_results,
         groups=groups,
@@ -509,14 +515,8 @@ def generate_project_summaries():
                     ),
                 }],
             )
-            import json
             raw = response.content[0].text.strip()
-            # Handle markdown fencing if present
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-                if raw.endswith("```"):
-                    raw = raw[:-3].strip()
-            summary = json.loads(raw)
+            summary = ai.extract_json_object(raw)
             # Ensure next_steps is capped at 5
             if "next_steps" in summary and len(summary["next_steps"]) > 5:
                 summary["next_steps"] = summary["next_steps"][:5]

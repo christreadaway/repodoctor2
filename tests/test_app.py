@@ -280,12 +280,27 @@ class TestRequiredFiles(unittest.TestCase):
         for f in ["CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md", "PROJECT_STATUS.md", "SESSION_NOTES.md"]:
             self.assertIn(f, results)
 
-    def test_business_spec_not_required(self):
-        """BUSINESS_SPEC.md should NOT be in required files."""
+    def test_business_spec_not_separate_key(self):
+        """BUSINESS_SPEC.md is not its own key — it satisfies PRODUCT_SPEC.md."""
         all_files = ["CLAUDE.md", "LICENSE", "PRODUCT_SPEC.md", "SESSION_NOTES.md", "BUSINESS_SPEC.md"]
         with patch.object(self.client, "get_all_file_paths", return_value=all_files):
             results, actual_names = self.client.check_required_files("owner", "repo")
         self.assertNotIn("BUSINESS_SPEC.md", results)
+
+    def test_business_spec_counts_as_product_spec(self):
+        """A repo with BUSINESS_SPEC.md but no PRODUCT_SPEC.md still satisfies the product_spec requirement."""
+        all_files = ["CLAUDE.md", "LICENSE", "BUSINESS_SPEC.md", "PROJECT_STATUS.md", "SESSION_NOTES.md"]
+        with patch.object(self.client, "get_all_file_paths", return_value=all_files):
+            results, actual_names = self.client.check_required_files("owner", "repo")
+        self.assertTrue(results["PRODUCT_SPEC.md"])
+        self.assertEqual(actual_names["PRODUCT_SPEC.md"], "BUSINESS_SPEC.md")
+
+    def test_product_spec_preferred_over_business_spec(self):
+        """If both PRODUCT_SPEC.md and BUSINESS_SPEC.md exist, PRODUCT_SPEC.md wins."""
+        all_files = ["BUSINESS_SPEC.md", "PRODUCT_SPEC.md"]
+        with patch.object(self.client, "get_all_file_paths", return_value=all_files):
+            results, actual_names = self.client.check_required_files("owner", "repo")
+        self.assertEqual(actual_names["PRODUCT_SPEC.md"], "PRODUCT_SPEC.md")
 
     def test_project_status_is_required(self):
         """PROJECT_STATUS.md is now part of the required set."""
@@ -750,6 +765,41 @@ class TestProjectsSortAndStatsFilter(unittest.TestCase):
         resp = self.client.get("/projects")
         self.assertEqual(resp.status_code, 200)
         self.assertIn(b"repo-none", resp.data)
+
+    @staticmethod
+    def _unassigned_names(body: str) -> set[str]:
+        """Extract repo names rendered as readonly chips in the Unassigned section."""
+        import re
+        pattern = r'<label class="group-repo-option group-repo-option--readonly">\s*<span>([^<]+)</span>'
+        return set(re.findall(pattern, body))
+
+    def test_unassigned_projects_listed_when_no_groups(self):
+        """With no groups defined, every repo is unassigned."""
+        resp = self.client.get("/projects")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.data.decode()
+        self.assertIn("Unassigned projects", body)
+        self.assertEqual(
+            self._unassigned_names(body),
+            {"repo-newest", "repo-mid", "repo-none"},
+        )
+
+    def test_unassigned_projects_excludes_grouped(self):
+        """Repos that belong to at least one group are not in the unassigned list."""
+        models.set_group("Core", ["repo-newest"])
+        models.set_group("Side", ["repo-mid"])
+        resp = self.client.get("/projects")
+        body = resp.data.decode()
+        self.assertEqual(self._unassigned_names(body), {"repo-none"})
+
+    def test_unassigned_projects_empty_message(self):
+        """When every project belongs to a group, show the empty-state message."""
+        models.set_group("All", ["repo-newest", "repo-mid", "repo-none"])
+        resp = self.client.get("/projects")
+        body = resp.data.decode()
+        self.assertIn("Unassigned projects", body)
+        self.assertIn("Every project belongs to at least one group", body)
+        self.assertEqual(self._unassigned_names(body), set())
 
     def test_stats_page_has_group_bar_when_groups_exist(self):
         models.set_group("Core", ["repo-newest"])

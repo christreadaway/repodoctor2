@@ -35,6 +35,47 @@ Return a JSON object with these exact fields:
 For screen_changes: produce one bullet per distinct screen or area touched. Group multiple files for the same screen into a single bullet. Infer screen names from template/route names (e.g. templates/dashboard.html → 'Dashboard', templates/henry.html → 'Henry Branches'). Aim for 1–6 bullets — never more than 8."""
 
 
+def extract_json_object(text: str) -> dict:
+    """Find and parse the first complete JSON object in `text`.
+
+    Tolerates leading/trailing prose, markdown code fences (```/```json),
+    and trailing commentary after the closing brace. Tracks brace depth
+    while respecting string literals so braces inside strings don't break
+    the scan.
+    """
+    if not text:
+        raise ValueError("Empty AI response")
+
+    start = text.find("{")
+    if start == -1:
+        raise ValueError("No JSON object found in AI response")
+
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(text[start:i + 1])
+
+    raise ValueError("Unbalanced braces in AI response")
+
+
 def estimate_tokens(branch_data: dict, spec_text: str | None = None) -> int:
     """Estimate token count for an analysis request."""
     text = json.dumps(branch_data)
@@ -134,16 +175,13 @@ def analyze_branch(
 
     response_text = message.content[0].text.strip()
 
-    # Parse JSON, handling potential markdown fences
-    if response_text.startswith("```"):
-        lines = response_text.split("\n")
-        response_text = "\n".join(lines[1:-1])
-
     try:
-        result = json.loads(response_text)
-    except json.JSONDecodeError:
+        result = extract_json_object(response_text)
+    except (ValueError, json.JSONDecodeError):
         result = {
-            "plain_english_summary": response_text,
+            "plain_english_summary": (
+                "AI response could not be parsed — see Claude Code instructions for manual review."
+            ),
             "screen_changes": [],
             "feature_assessment": "UNCLEAR",
             "risk_level": "MEDIUM",
