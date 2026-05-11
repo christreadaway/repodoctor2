@@ -45,6 +45,22 @@ After this, `cd ~\repodoctor2; .\start.ps1` is all you need.
 
 ---
 
+## One-Paste Recovery (handles every case)
+
+If you're not sure what state your machine is in — old `repodoctor22` folder lying around, partial clone, missing folder, anything — paste this. It's idempotent (safe to re-run) and lands you in a fresh, launched app:
+
+```powershell
+cd ~
+if (Test-Path .\repodoctor22) { Remove-Item -Recurse -Force .\repodoctor22 }
+if (-not (Test-Path .\repodoctor2)) { git clone https://github.com/christreadaway/repodoctor2.git repodoctor2 }
+cd .\repodoctor2
+.\start.ps1
+```
+
+If GitHub returns a 500 error during clone, that's a transient server hiccup — wait a minute and paste again.
+
+---
+
 ## Common Problems
 
 ### "fatal: not a git repository"
