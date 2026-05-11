@@ -766,6 +766,41 @@ class TestProjectsSortAndStatsFilter(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn(b"repo-none", resp.data)
 
+    @staticmethod
+    def _unassigned_names(body: str) -> set[str]:
+        """Extract repo names rendered as readonly chips in the Unassigned section."""
+        import re
+        pattern = r'<label class="group-repo-option group-repo-option--readonly">\s*<span>([^<]+)</span>'
+        return set(re.findall(pattern, body))
+
+    def test_unassigned_projects_listed_when_no_groups(self):
+        """With no groups defined, every repo is unassigned."""
+        resp = self.client.get("/projects")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.data.decode()
+        self.assertIn("Unassigned projects", body)
+        self.assertEqual(
+            self._unassigned_names(body),
+            {"repo-newest", "repo-mid", "repo-none"},
+        )
+
+    def test_unassigned_projects_excludes_grouped(self):
+        """Repos that belong to at least one group are not in the unassigned list."""
+        models.set_group("Core", ["repo-newest"])
+        models.set_group("Side", ["repo-mid"])
+        resp = self.client.get("/projects")
+        body = resp.data.decode()
+        self.assertEqual(self._unassigned_names(body), {"repo-none"})
+
+    def test_unassigned_projects_empty_message(self):
+        """When every project belongs to a group, show the empty-state message."""
+        models.set_group("All", ["repo-newest", "repo-mid", "repo-none"])
+        resp = self.client.get("/projects")
+        body = resp.data.decode()
+        self.assertIn("Unassigned projects", body)
+        self.assertIn("Every project belongs to at least one group", body)
+        self.assertEqual(self._unassigned_names(body), set())
+
     def test_stats_page_has_group_bar_when_groups_exist(self):
         models.set_group("Core", ["repo-newest"])
         # Stub out the API-backed activity collector

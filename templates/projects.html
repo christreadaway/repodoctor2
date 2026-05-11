@@ -102,6 +102,30 @@
             {% endfor %}
         </div>
     </form>
+
+    <div class="group-editor group-editor-unassigned">
+        <div class="group-editor-header">
+            <div class="group-editor-name">
+                <span class="group-editor-label">Unassigned projects</span>
+                <p class="manage-groups-hint" style="margin: 4px 0 0;">
+                    {% if unassigned_repos %}
+                    These {{ unassigned_repos|length }} project{% if unassigned_repos|length != 1 %}s aren't{% else %} isn't{% endif %} in any group yet.
+                    {% else %}
+                    Every project belongs to at least one group.
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+        {% if unassigned_repos %}
+        <div class="group-editor-repos">
+            {% for repo in unassigned_repos %}
+            <label class="group-repo-option group-repo-option--readonly">
+                <span>{{ repo.name }}</span>
+            </label>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
 </div>
 
 {% if not summaries %}

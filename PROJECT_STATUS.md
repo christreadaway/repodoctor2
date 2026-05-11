@@ -1,8 +1,8 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-04-24
-**Current Branch:** `claude/sort-projects-group-stats-yXxvE`
-**Overall Progress:** ~93%
+**Last Updated:** 2026-05-11
+**Current Branch:** `claude/fix-beacon-visibility-LXO09` (pushed) — needs merge to `main`
+**Overall Progress:** ~94%
 
 ---
 
@@ -17,7 +17,7 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 ### Core
 - **Auth & security:** Fernet + PBKDF2 credential encryption, 30-minute session auto-lock, GitHub PAT scope verification
 - **Scan:** repo list + branch counts + required-file detection + code size (bytes per language)
-- **Required files (5):** CLAUDE.md, LICENSE, PRODUCT_SPEC.md, PROJECT_STATUS.md, SESSION_NOTES.md — case-insensitive, any extension, searched recursively (root preferred, vendor dirs skipped)
+- **Required files (5):** CLAUDE.md, LICENSE, PRODUCT_SPEC.md (or `BUSINESS_SPEC.md` — accepted as an alias), PROJECT_STATUS.md, SESSION_NOTES.md — case-insensitive, any extension, searched recursively (root preferred, vendor dirs skipped)
 
 ### Dashboard (My Repos)
 - Sortable columns, sticky headers, per-file Y/- indicators, X/5 score
@@ -26,9 +26,15 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 
 ### Projects
 - AI-generated summaries via Claude Haiku (~$0.001/project)
+- Robust JSON parsing on the model response — handles fenced blocks, leading prose, and trailing commentary; empty/whitespace responses now raise a clear error rather than crashing
 - **Sorted by most recently updated (desc)** by default; missing dates sink to the bottom
 - **Project Groups** — tab-bar filter (All / named groups) + collapsible Manage Groups panel for create/rename/delete/assign
+- **Unassigned-projects section** at the bottom of Manage Groups — readonly chips listing every repo that isn't a member of any group, or an "Every project belongs to at least one group" empty-state
 - **5 default groups seeded on login** (School, Church, Catholic Games, Infrastructure, Fun) — temporary one-shot recovery; removal flagged in `CLAUDE.md`
+
+### Henry Branches
+- Per-branch AI summary (Haiku) of changes vs. default branch — what was done, screen-by-screen impact, risk, merge strategy, copy/paste Claude Code instructions
+- Same robust JSON extractor as Projects — no more raw-JSON-blob fallbacks when the model adds commentary after the code fence
 
 ### Stats
 - Two views: **Commits**, **Code Size** (Lines Added removed — was broken on cold repos)
@@ -56,19 +62,21 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 - Repo detail: Product Spec / Project Status / Session Notes panels, "What's Next" hero, conversation timeline
 - Activity log with color-coded messages
 - Netlify deployment (Node.js + Express + serverless-http) — older feature set
-- **Tests:** 72 passing (60 existing + 12 new covering recent-updated sort, stats group filter, default group seeding, legacy groups migration)
+- **Tests:** 83 passing (77 inherited + 3 new for `BUSINESS_SPEC.md` aliasing + 3 new for unassigned-projects rendering)
 
 ---
 
 ## What's In Progress
 
-Nothing actively in progress. The 2026-04-24 fixes are committed on `claude/sort-projects-group-stats-yXxvE` and ready for Chris's verification.
+Nothing actively in progress. The 2026-05-11 fixes are committed on `claude/fix-beacon-visibility-LXO09` and pushed.
 
 ---
 
 ## What's Broken / Known Issues
 
-- **Netlify version is behind Flask version.** April 24 features (groups, recursive search, Stats, What's Next, Size column, refreshed nav, recent-updated sort, group persistence, group rollup) have not been ported to `netlify/functions/api/`.
+- **Push to `main` is blocked** in the current sandbox environment (HTTP 403). Feature branch is the only writable target; merges to `main` must happen on Chris's local machine.
+- **Bug audit not finished.** Mid-session, audit was paused before reaching most modules. Flagged but unaddressed: `models._load_json` crashes on corrupt JSON instead of returning a default; no file locking on concurrent JSON writes; `security.decrypt_credentials` catches only `InvalidToken`, not generic corruption (e.g. truncated file).
+- **Netlify version is behind Flask version.** All April/May features need porting to `netlify/functions/api/`.
 - **Netlify free tier 10s function timeout.** Large GitHub accounts can still time out even with parallelized scans.
 - **Truncated git trees.** Very large repos can have a truncated tree response; a warning is logged and some deep files may be missed.
 - **Scan is slightly slower.** `/languages` call per repo doubles API calls vs. previous. Still sequential; parallelization on the backlog.
@@ -84,11 +92,12 @@ Nothing actively in progress. The 2026-04-24 fixes are committed on `claude/sort
 
 ## Next Steps (in priority order)
 
-1. **Verify on local machines.** Chris pulls `claude/sort-projects-group-stats-yXxvE`, logs in, confirms all 5 reported fixes behave on real data.
-2. **Merge to main** once verified.
-3. **Port April 24 + April 24-bis features to Netlify** — Stats (with group filter + rollup), What's Next, groups persistence, recursive search, Size column, refreshed nav, recent-updated sort.
-4. **Parallelize initial scan** using `ThreadPoolExecutor` (same pattern as `/stats`).
-5. **Revisit stats caching for heavy accounts** — the 5000-commit page-through can be slow on very active repos; consider a streaming / progressive-render approach.
+1. **Merge `claude/fix-beacon-visibility-LXO09` into `main`** from Chris's local machine (sandbox can't do this).
+2. **Rescan + regenerate summaries** so beacon picks up the new `BUSINESS_SPEC.md` detection and Projects/Henry cards stop showing parse-failure fallbacks.
+3. **Finish the bug audit** that was paused: `models._load_json` corruption handling, JSON write locking, `security.decrypt_credentials` exception coverage, then continue through `github_client`, `ai_analyzer`, `spec_cleaner`, `project_mapper`, `firestore_detector`, `app.py`.
+4. **Port April/May features to Netlify** — Stats (with group filter + rollup), What's Next, groups persistence, recursive search, Size column, refreshed nav, recent-updated sort, business-spec aliasing, unassigned-projects list.
+5. **Parallelize initial scan** using `ThreadPoolExecutor` (same pattern as `/stats`).
+6. **Revisit stats caching for heavy accounts** — the 5000-commit page-through can be slow on very active repos; consider a streaming / progressive-render approach.
 
 ---
 
@@ -102,7 +111,7 @@ Nothing actively in progress. The 2026-04-24 fixes are committed on `claude/sort
 | Security | Fernet + PBKDF2 | — (relies on environment) |
 | Storage | Local JSON in `config/`, `data/`, and `~/.repodoctor/` | Ephemeral per-invocation |
 | Frontend | Jinja2 templates + retro terminal CSS | EJS-style views + same CSS |
-| Tests | `unittest` (72 passing) | — |
+| Tests | `unittest` (83 passing) | — |
 
 ---
 

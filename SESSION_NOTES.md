@@ -1,11 +1,54 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 10
-**Date Range:** 2025-02-14 to 2026-04-24
-**Last Updated:** 2026-04-24
+**Total Sessions Logged:** 11
+**Date Range:** 2025-02-14 to 2026-05-11
+**Last Updated:** 2026-05-11
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 11 — 2026-05-11 (Beacon visibility, AI JSON parsing, Henry rendering, Unassigned projects)
+
+### What We Built
+Chris reported three issues with the live dashboard and asked for one new feature on the Manage Groups panel; all four were resolved this session.
+
+1. **`BUSINESS_SPEC.md` now satisfies the `PRODUCT_SPEC.md` slot.** The `check_required_files` matcher in `github_client.py` was rewritten to accept multiple stems per required file. `business_spec` is a second accepted alias for `product_spec`. Beacon's spec file is now detected (3/5 → was 2/5) and its contents are pulled into the AI summary context. When both files exist, `PRODUCT_SPEC.md` still wins because the matcher sorts by `(depth, path-length)` and `PRODUCT_SPEC.md` is shorter.
+2. **Robust AI-JSON extraction (`ai_analyzer.extract_json_object`).** The old logic in `app.generate_project_summaries` ran `if raw.startswith("\`\`\`"): split[1]` — which produced an empty string when the model returned an empty fenced block. That's what triggered Chris's `Expecting value: line 1 column 1 (char 0)` on beacon. The new helper finds the first `{`, walks brace depth (respecting string literals and escapes), and returns the JSON object — ignoring leading prose, code fences, and trailing commentary. Henry's `analyze_branch` flow uses the same helper, which fixes the cards that displayed raw JSON + a `**Key observations:**` postscript whenever the model wrapped output in fences. Empty/whitespace responses now raise a clear `ValueError` that the caller handles with a meaningful fallback message instead of dumping the raw text into `plain_english_summary`.
+3. **Unassigned-projects list on Manage Groups.** `projects()` now computes `unassigned_repos` (every repo whose name doesn't appear in any group's member list) and the template renders them as readonly chips at the bottom of the Manage Groups panel. When every project belongs to at least one group, the section shows an empty-state message instead.
+
+### Technical Details
+- **Multi-stem matcher** — `required` dict in `github_client.check_required_files` changed from `display_name → stem` to `display_name → [stems]`. The match loop concatenates path matches across all stems, then applies the existing `(depth, len(path))` sort, so the existing root-preferred / shortest-path tiebreakers still work unchanged.
+- **`extract_json_object` state machine** — tracks `depth`, `in_string`, and `escape` flags. Backslashes inside string literals consume the next character regardless of what it is; closing brace at `depth == 0` terminates the slice and hands it to `json.loads`. Smoke-tested against five real-world response shapes: clean JSON, fenced JSON + trailing commentary, fenced JSON only, leading prose, and braces inside string values.
+- **Unassigned set** — `assigned = {name for member_list in groups.values() for name in member_list}`. Iterates `all_repos` (already sorted by `updated_at` desc) and filters by membership. Cost is O(R + total-group-members); fine for the scales we care about.
+- **Fallback messages** — when `extract_json_object` fails in `analyze_branch`, `plain_english_summary` is set to `"AI response could not be parsed — see Claude Code instructions for manual review."` instead of the prior behavior (dumping the raw response into the summary, which is exactly what Chris saw on the Henry cards).
+
+### Current Status
+- ✅ Beacon's `BUSINESS_SPEC.md` is recognized as a product spec (rescan + regenerate summaries to see it)
+- ✅ Project-summary JSON parsing no longer crashes on fenced/empty responses
+- ✅ Henry cards parse fenced-with-commentary responses; no more raw-JSON dumps
+- ✅ Manage Groups panel shows an "Unassigned projects" section with readonly chips
+- ✅ 83/83 tests passing (3 new for `BUSINESS_SPEC.md` aliasing, 3 new for unassigned-projects rendering)
+- ⚠️ Push to `main` is blocked by the sandbox git server (HTTP 403). All work was pushed to `claude/fix-beacon-visibility-LXO09`; Chris needs to merge that branch into main on his own machine.
+
+### Branch Info
+- Working branch in this session: `claude/fix-beacon-visibility-LXO09` (sandbox forced this — local `main` push returned 403)
+- Local `main` has the same commits and is up to date with the feature branch
+- Not merged yet — Chris merges to `main` via his local clone or the GitHub UI
+
+### Decisions Made
+- **`BUSINESS_SPEC.md` aliases `PRODUCT_SPEC.md`** rather than becoming a separate 6th required slot. Same intent, fewer columns to render, and a repo with one or the other still scores correctly.
+- **`extract_json_object` lives in `ai_analyzer.py`** (where the henry path already uses it) and is imported by `app.py` rather than duplicated. Single source of truth for "parse JSON from a flaky model response."
+- **Unassigned chips are readonly** (no checkbox) — the existing per-group editor forms are the right place to assign a repo to a group. The unassigned list is just a visibility surface, not another edit path.
+
+### Next Steps
+1. Chris merges `claude/fix-beacon-visibility-LXO09` into `main` from his local machine.
+2. Rescan from My Repos so beacon picks up the `BUSINESS_SPEC.md` detection, then regenerate Projects and Henry summaries.
+3. The mid-session comprehensive bug audit was paused before I got past `models.py`. Items flagged but not yet acted on: `models._load_json` doesn't catch corrupt JSON (any data file crash takes the app down); no file-locking on concurrent JSON writes (browser-tab race conditions); `security.decrypt_credentials` only catches `InvalidToken`, not generic corruption. Worth a follow-up session.
+
+### Questions / Blockers
+- The sandbox git server refuses `git push origin main` with HTTP 403. Either an ACL needs adjustment or Chris just keeps merging feature branches manually.
 
 ---
 
