@@ -21,6 +21,8 @@ data/scan_history.json
 data/analysis_cache.json
 data/action_log.json
 data/project_summaries.json
+data/henry_summaries.json
+data/*.json.corrupt
 data/specs/
 
 # IDE
