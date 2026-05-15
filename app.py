@@ -32,6 +32,30 @@ _session_cost = models.SessionCost()
 _scan_results: dict | None = None  # Latest scan results
 
 
+GITHUB_AUTH_REMEDY = (
+    "GitHub authentication failed — your Personal Access Token is no longer "
+    "valid (revoked, expired, or its 'repo' scope was removed). To fix this: "
+    "(1) Go to GitHub → Settings → Developer settings → Personal access "
+    "tokens, (2) Generate a new token with the 'repo' scope, (3) Click "
+    "Logout below, (4) On the login page click \"Reset Credentials\" and "
+    "enter your new token."
+)
+
+
+@app.errorhandler(gh.GitHubAuthError)
+def _handle_github_auth_error(e):
+    """Any GitHub 401 surfaces here: flash the remedy and bounce to dashboard.
+
+    Without this, routes that call get_branches / get_file_content / etc.
+    would either silently render with empty data or crash with a 500. The
+    handler is registered globally so each new route gets the right
+    behavior for free.
+    """
+    flash(GITHUB_AUTH_REMEDY, "error")
+    target = url_for("dashboard") if session.get("authenticated") else url_for("login")
+    return redirect(target)
+
+
 @app.context_processor
 def inject_preferences():
     """Make preferences available in all templates."""
@@ -207,21 +231,9 @@ def scan():
     prefs = models.get_preferences()
     excluded = set(prefs.get("excluded_repos", []))
 
-    try:
-        repos = client.get_repos()
-    except gh.GitHubAuthError:
-        # PAT was valid at login but has since been revoked/expired, or its
-        # scopes were narrowed. Tell the user exactly how to fix it.
-        flash(
-            "GitHub authentication failed during scan — your Personal Access "
-            "Token is no longer valid. To fix this: "
-            "(1) Go to GitHub → Settings → Developer settings → Personal "
-            "access tokens, (2) Generate a new token with the 'repo' scope, "
-            "(3) Log out below, (4) On the login page click \"Reset "
-            "Credentials\" and enter your new token.",
-            "error",
-        )
-        return redirect(url_for("dashboard"))
+    # NOTE: GitHubAuthError (401 anywhere in the scan) propagates to the
+    # global handler, which flashes GITHUB_AUTH_REMEDY and redirects.
+    repos = client.get_repos()
     results = []
     for repo in repos:
         if repo["full_name"] in excluded or repo["name"] in excluded:
@@ -229,6 +241,8 @@ def scan():
         try:
             repo_data = gh.scan_repo_lite(client, repo)
             results.append(repo_data)
+        except gh.GitHubAuthError:
+            raise
         except Exception as e:
             results.append({
                 "owner": repo["owner"]["login"],
@@ -673,6 +687,8 @@ def generate_henry_summaries():
         default_branch = items[0]["default_branch"]
         try:
             branches_full = client.get_branches(owner, name)
+        except gh.GitHubAuthError:
+            raise
         except Exception as e:
             for t in items:
                 models.save_henry_summary(name, t["branch_name"], _henry_error_record(t, str(e)))
@@ -682,6 +698,8 @@ def generate_henry_summaries():
         try:
             pulls = client.get_pulls(owner, name)
             pr_branches = {pr["head"]["ref"] for pr in pulls}
+        except gh.GitHubAuthError:
+            raise
         except Exception:
             pr_branches = set()
 
@@ -699,10 +717,11 @@ def generate_henry_summaries():
             last_commit_author = None
             if comparison.get("commits"):
                 lc = comparison["commits"][-1]
-                last_commit_date = lc["commit"]["committer"]["date"]
-                last_commit_author = (
-                    lc["commit"]["author"]["name"] if lc["commit"].get("author") else "Unknown"
-                )
+                lc_commit = lc.get("commit", {})
+                committer = lc_commit.get("committer") or {}
+                last_commit_date = committer.get("date")
+                author = lc_commit.get("author") or {}
+                last_commit_author = author.get("name", "Unknown")
             has_pr = bname in pr_branches
             classification = client.classify_branch(comparison, last_commit_date, has_pr)
 
@@ -715,15 +734,18 @@ def generate_henry_summaries():
                 }
                 for f in comparison.get("files", [])
             ]
-            commit_messages = [
-                {
-                    "sha": c["sha"][:7],
-                    "message": c["commit"]["message"].split("\n")[0],
-                    "author": c["commit"]["author"]["name"] if c["commit"].get("author") else "Unknown",
-                    "date": c["commit"]["committer"]["date"] if c["commit"].get("committer") else None,
-                }
-                for c in comparison.get("commits", [])
-            ]
+            commit_messages = []
+            for c in comparison.get("commits", []):
+                c_commit = c.get("commit", {})
+                msg = (c_commit.get("message") or "").split("\n", 1)[0] or "(no message)"
+                c_author = c_commit.get("author") or {}
+                c_committer = c_commit.get("committer") or {}
+                commit_messages.append({
+                    "sha": (c.get("sha") or "")[:7],
+                    "message": msg,
+                    "author": c_author.get("name", "Unknown"),
+                    "date": c_committer.get("date"),
+                })
 
             branch_data = {
                 "name": bname,
@@ -839,6 +861,8 @@ def _collect_repo_activity(client, repo, since_iso, now_utc):
     # it doesn't visibly cap the bar like the old 200 limit did.
     try:
         commits = client.get_commits_since(owner, name, since_iso, ref=ref, max_pages=50)
+    except gh.GitHubAuthError:
+        raise
     except Exception:
         commits = []
 

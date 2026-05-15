@@ -603,6 +603,142 @@ class TestFlaskApp(unittest.TestCase):
                 self.assertEqual(resp.status_code, 200)
 
 
+class TestGitHubAuthErrorHandling(unittest.TestCase):
+    """Covers the auth-failure path: 401s from GitHub must surface a clear
+    remediation message instead of silently producing empty results."""
+
+    def setUp(self):
+        from app import app
+        app.config["TESTING"] = True
+        app.config["SECRET_KEY"] = "test-secret"
+        self.app = app
+        self.client = app.test_client()
+
+    def test_get_repos_raises_on_401(self):
+        """get_repos must raise GitHubAuthError on 401 (not silently return [])."""
+        client = gh.GitHubClient("bad_pat")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        mock_resp.text = ""
+        mock_resp.headers = {}
+        with patch.object(client.session, "get", return_value=mock_resp):
+            with self.assertRaises(gh.GitHubAuthError):
+                client.get_repos()
+
+    def test_get_branches_raises_on_401(self):
+        """All client GETs surface 401 via the centralized _get handler."""
+        client = gh.GitHubClient("bad_pat")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        mock_resp.text = ""
+        mock_resp.headers = {}
+        with patch.object(client.session, "get", return_value=mock_resp):
+            with self.assertRaises(gh.GitHubAuthError):
+                client.get_branches("owner", "repo")
+
+    def test_verify_token_returns_none_on_401(self):
+        """verify_token is a probe — it inspects 401, doesn't raise."""
+        client = gh.GitHubClient("bad_pat")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        mock_resp.text = ""
+        mock_resp.headers = {}
+        with patch.object(client.session, "get", return_value=mock_resp):
+            self.assertIsNone(client.verify_token())
+
+    def test_login_rejects_invalid_pat(self):
+        """Login with right password but invalid saved PAT shows remediation, not redirect."""
+        with patch.object(security, "credentials_exist", return_value=True), \
+             patch.object(security, "decrypt_credentials",
+                          return_value={"github_pat": "bad", "anthropic_key": "akey"}), \
+             patch("github_client.GitHubClient.verify_token", return_value=None):
+            resp = self.client.post("/login", data={"password": "right"})
+            self.assertEqual(resp.status_code, 200)  # stays on login, no redirect
+            body = resp.get_data(as_text=True)
+            self.assertIn("Personal Access Token is no longer valid", body)
+            self.assertIn("RESET CREDENTIALS", body)
+
+    def test_login_rejects_missing_repo_scope(self):
+        """PAT works but missing 'repo' scope is rejected with a helpful message."""
+        with patch.object(security, "credentials_exist", return_value=True), \
+             patch.object(security, "decrypt_credentials",
+                          return_value={"github_pat": "ok", "anthropic_key": "k"}), \
+             patch("github_client.GitHubClient.verify_token",
+                   return_value={"login": "user", "_scopes": "user"}):
+            resp = self.client.post("/login", data={"password": "right"})
+            self.assertEqual(resp.status_code, 200)
+            body = resp.get_data(as_text=True)
+            # Jinja HTML-escapes the apostrophe to &#39; — match either form.
+            self.assertTrue("'repo' scope" in body or "&#39;repo&#39; scope" in body)
+
+    def test_login_reset_endpoint(self):
+        """POST /login/reset deletes credentials and redirects to login."""
+        with patch.object(security, "delete_credentials") as mock_del:
+            resp = self.client.post("/login/reset")
+            self.assertEqual(resp.status_code, 302)
+            self.assertIn("/login", resp.headers["Location"])
+            self.assertTrue(mock_del.called)
+
+    def test_scan_auth_error_redirects_with_remedy(self):
+        """Scan that hits 401 must show remediation, not blank dashboard."""
+        with self.client.session_transaction() as sess:
+            sess["authenticated"] = True
+
+        # Inject an in-memory client whose get_repos raises GitHubAuthError
+        import app as app_module
+        fake_client = MagicMock()
+        fake_client.get_repos.side_effect = gh.GitHubAuthError("401")
+        orig_client = app_module._github_client
+        app_module._github_client = fake_client
+        try:
+            resp = self.client.post("/scan", follow_redirects=True)
+            body = resp.get_data(as_text=True)
+            self.assertIn("authentication failed", body)
+            self.assertIn("Reset Credentials", body)
+        finally:
+            app_module._github_client = orig_client
+
+    def test_repo_detail_auth_error_redirects(self):
+        """Repo detail page hitting 401 redirects to dashboard with flash."""
+        with self.client.session_transaction() as sess:
+            sess["authenticated"] = True
+
+        import app as app_module
+        app_module._scan_results = {
+            "repos": [{
+                "owner": "o", "name": "r", "full_name": "o/r",
+                "default_branch": "main", "private": False,
+                "html_url": "", "description": "", "created_at": "",
+                "updated_at": "", "total_branch_count": 1,
+                "non_default_branch_count": 0, "branch_names": ["main"],
+                "required_files": {}, "files_present": 0, "files_total": 5,
+                "code_size_bytes": 0, "languages": {},
+            }],
+            "total_repos": 1, "total_branches": 1,
+        }
+        fake_client = MagicMock()
+        fake_client.check_required_files.side_effect = gh.GitHubAuthError("401")
+        orig_client = app_module._github_client
+        app_module._github_client = fake_client
+        try:
+            resp = self.client.get("/repo/o/r", follow_redirects=False)
+            self.assertEqual(resp.status_code, 302)
+            self.assertIn("/", resp.headers["Location"])
+        finally:
+            app_module._github_client = orig_client
+            app_module._scan_results = None
+
+    def test_get_repos_non_401_non_200_returns_empty(self):
+        """Non-auth errors (e.g. 500, 503) still degrade gracefully to []."""
+        client = gh.GitHubClient("ok")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 503
+        mock_resp.text = ""
+        mock_resp.headers = {}
+        with patch.object(client.session, "get", return_value=mock_resp):
+            self.assertEqual(client.get_repos(), [])
+
+
 class TestDefaultGroupSeeding(unittest.TestCase):
     """Covers seed_default_groups_if_missing (temporary login-time recovery)."""
 
