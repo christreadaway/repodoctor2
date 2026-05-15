@@ -110,10 +110,13 @@
                     {% endif %}
                 </td>
                 <td class="col-branches">
+                    {# Henry branches are excluded from the count. The expandable
+                       list below still shows them so they're not invisible. #}
+                    {% set displayed_count = repo.non_henry_branch_count if repo.non_henry_branch_count is defined else repo.total_branch_count %}
                     {% if repo.total_branch_count > 1 %}
-                    <span class="branch-count branch-toggle {% if repo.total_branch_count > 3 %}count-warn{% elif repo.total_branch_count > 1 %}count-note{% endif %}" onclick="event.preventDefault(); this.closest('tr').nextElementSibling.classList.toggle('branch-hidden')" title="Click to show branches">{{ repo.total_branch_count }}</span>
+                    <span class="branch-count branch-toggle {% if displayed_count > 3 %}count-warn{% elif displayed_count > 1 %}count-note{% endif %}" onclick="event.preventDefault(); this.closest('tr').nextElementSibling.classList.toggle('branch-hidden')" title="Click to show branches{% if repo.henry_branch_count %} ({{ repo.henry_branch_count }} henry branch{{ 'es' if repo.henry_branch_count != 1 else '' }} hidden from count){% endif %}">{{ displayed_count }}</span>
                     {% else %}
-                    <span class="branch-count">{{ repo.total_branch_count }}</span>
+                    <span class="branch-count">{{ displayed_count }}</span>
                     {% endif %}
                 </td>
                 {% set files = repo.required_files %}
@@ -153,7 +156,8 @@
                 <td colspan="13">
                     <div class="branch-names">
                         {% for bname in repo.branch_names %}
-                        <span class="branch-tag {% if bname == repo.default_branch %}branch-default{% endif %}">{{ bname }}{% if bname == repo.default_branch %} *{% endif %}</span>
+                        {% set is_henry = 'henry' in bname.lower() and bname != repo.default_branch %}
+                        <span class="branch-tag {% if bname == repo.default_branch %}branch-default{% endif %} {% if is_henry %}branch-henry{% endif %}" {% if is_henry %}title="Excluded from branch count (henry branch)"{% endif %}>{{ bname }}{% if bname == repo.default_branch %} *{% elif is_henry %} (henry){% endif %}</span>
                         {% endfor %}
                     </div>
                 </td>

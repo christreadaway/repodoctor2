@@ -256,6 +256,8 @@ def scan():
                 "updated_at": repo.get("updated_at", ""),
                 "total_branch_count": 0,
                 "non_default_branch_count": 0,
+                "henry_branch_count": 0,
+                "non_henry_branch_count": 0,
                 "branch_names": [],
                 "required_files": {},
                 "files_present": 0,
@@ -265,13 +267,16 @@ def scan():
                 "error": str(e),
             })
 
-    # Sort by total branch count descending
-    results.sort(key=lambda r: r.get("total_branch_count", 0), reverse=True)
+    # Sort by non-henry branch count descending (henry branches are hidden
+    # from the dashboard count, so they shouldn't drive sort order either).
+    results.sort(key=lambda r: r.get("non_henry_branch_count", 0), reverse=True)
 
     _scan_results = {
         "repos": results,
         "total_repos": len(results),
-        "total_branches": sum(r.get("total_branch_count", 0) for r in results),
+        # "total_branches" is the cross-repo total displayed on the dashboard
+        # — excludes henry branches to match the per-repo column.
+        "total_branches": sum(r.get("non_henry_branch_count", 0) for r in results),
     }
     models.save_scan(_scan_results)
     models.log_action("scan", "all", "all", f"Scanned {len(results)} repos, {_scan_results['total_branches']} total branches")

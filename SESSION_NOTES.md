@@ -1,11 +1,54 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 12
+**Total Sessions Logged:** 13
 **Date Range:** 2025-02-14 to 2026-05-15
 **Last Updated:** 2026-05-15
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 13 — 2026-05-15 (Exclude henry branches from dashboard branch count)
+
+### What We Built
+Same-day follow-up to Session 12. Chris asked to stop counting branches whose name contains "henry" toward the dashboard's branch count. Henry branches still need to be discoverable by the Henry page, and still visible in the per-repo expandable branch list — they just shouldn't inflate the headline number.
+
+1. **New `non_henry_branch_count` field on every scanned repo.** `scan_repo_lite` now also computes `henry_branch_count` (case-insensitive substring match, default branch never qualifies as henry even if its name happens to contain "henry") and `non_henry_branch_count = total - henry_count`.
+2. **Dashboard switched to the new field.** The per-repo "Branches" column, the cross-repo "Total Branches" summary stat, and the table sort order all read `non_henry_branch_count`. `total_branch_count` and `branch_names` are untouched so the Henry page still finds henry branches by iterating `branch_names`.
+3. **Expandable branch list now marks henry branches visibly.** Faded + italic styling (`.branch-henry`), trailing `(henry)` suffix, and a tooltip explaining "Excluded from branch count (henry branch)" so users aren't confused when they expand the row and count more branches than the column shows.
+
+### Technical Details
+- **Case-insensitive match** — `"henry" in bname.lower()` matches `Henry-A`, `HENRY-B`, `feat-henry-c`, etc. Tests cover all three casing variants.
+- **Default-branch carve-out** — if the default branch is itself named `henry-main`, it stays counted. Same logic as the existing `_find_henry_branches` helper, so the dashboard count and Henry page agree on what "counts as henry" means.
+- **Error-fallback symmetry** — the per-repo error dict in `/scan` (rendered when `scan_repo_lite` raises a non-auth exception) gained `henry_branch_count: 0` and `non_henry_branch_count: 0` so the template doesn't see undefined fields on error rows.
+- **5 new tests** in `TestHenryBranchExclusion` cover: basic exclusion, case-insensitive match, default-branch-named-henry edge case, zero-henry no-op, and end-to-end `/scan` summary stat.
+- **Template defensiveness** — `repo.non_henry_branch_count if repo.non_henry_branch_count is defined else repo.total_branch_count` so the dashboard still renders against pre-this-session cached scan data (Chris's in-memory `_scan_results` from before he restarts the app).
+
+### Current Status
+- ✅ Per-repo Branches column excludes henry branches
+- ✅ Cross-repo Total Branches summary stat excludes henry branches
+- ✅ Henry branches still appear in the expandable list, marked as `(henry)` and faded
+- ✅ Henry page still works (uses `branch_names`, which is unchanged)
+- ✅ 97/97 tests passing (92 from Session 12 + 5 new for henry exclusion)
+
+### Branch Info
+- Working branch: `claude/fix-flask-display-issue-1yxlq` (same branch as Session 12)
+- Pushed: yes — single commit on top of Session 12's commits
+- Not merged to `main` yet — Chris merges via local clone
+
+### Decisions Made
+- **New field rather than mutating `total_branch_count`** — Henry page and the expandable list both depend on the full count being known. Adding a parallel field keeps every caller's intent explicit.
+- **Visible-but-faded styling for henry branches in the expanded list** rather than hiding them entirely. The user might still want to see them; hiding would just create a different confusion ("where did my branches go?").
+- **Tooltip on the count cell** mentions how many henry branches are hidden. Cheap to add, prevents the "the expand shows more branches than the count" surprise.
+
+### Next Steps
+1. **Chris merges `claude/fix-flask-display-issue-1yxlq` into `main`** on his local PC.
+2. **Pull main on the PC** and re-scan so the new field gets populated for his real repos.
+3. **Confirm the count looks right** for repos that have henry branches. If the henry keyword should be expanded (e.g. to other contributor names), promote `HENRY_KEYWORD` to a preference.
+
+### Questions / Blockers
+None. The change is additive and non-breaking.
 
 ---
 

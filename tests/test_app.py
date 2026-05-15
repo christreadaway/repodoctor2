@@ -739,6 +739,97 @@ class TestGitHubAuthErrorHandling(unittest.TestCase):
             self.assertEqual(client.get_repos(), [])
 
 
+class TestHenryBranchExclusion(unittest.TestCase):
+    """Branches with 'henry' in the name are excluded from the dashboard count
+    but stay in branch_names so the Henry page can still find them."""
+
+    def _fake_client(self, branches):
+        client = MagicMock()
+        client.get_branches.return_value = [{"name": b, "commit": {"sha": "x"}} for b in branches]
+        client.check_required_files.return_value = ({}, {})
+        client.get_language_bytes.return_value = {}
+        client.get_last_commit_date.return_value = None
+        client.get_last_commit_for_path.return_value = None
+        return client
+
+    def test_henry_branch_excluded_from_count(self):
+        """A repo with main + 2 henry branches reports 1 in non_henry_branch_count."""
+        client = self._fake_client(["main", "henry-feature", "henry-other"])
+        repo = {
+            "owner": {"login": "o"}, "name": "r", "full_name": "o/r",
+            "default_branch": "main", "private": False,
+        }
+        result = gh.scan_repo_lite(client, repo)
+        self.assertEqual(result["total_branch_count"], 3)
+        self.assertEqual(result["henry_branch_count"], 2)
+        self.assertEqual(result["non_henry_branch_count"], 1)
+        # branch_names keeps all of them so the Henry page can find them.
+        self.assertIn("henry-feature", result["branch_names"])
+        self.assertIn("henry-other", result["branch_names"])
+
+    def test_case_insensitive_henry_match(self):
+        """'Henry', 'HENRY', 'feature-henry-x' all count as henry branches."""
+        client = self._fake_client(["main", "Henry-A", "HENRY-B", "feat-henry-c", "normal"])
+        repo = {"owner": {"login": "o"}, "name": "r", "full_name": "o/r",
+                "default_branch": "main", "private": False}
+        result = gh.scan_repo_lite(client, repo)
+        self.assertEqual(result["henry_branch_count"], 3)
+        self.assertEqual(result["non_henry_branch_count"], 2)  # main + normal
+
+    def test_default_branch_named_henry_is_not_counted_as_henry(self):
+        """If the default branch is itself called 'henry-main', don't exclude it."""
+        client = self._fake_client(["henry-main", "feature"])
+        repo = {"owner": {"login": "o"}, "name": "r", "full_name": "o/r",
+                "default_branch": "henry-main", "private": False}
+        result = gh.scan_repo_lite(client, repo)
+        self.assertEqual(result["henry_branch_count"], 0)
+        self.assertEqual(result["non_henry_branch_count"], 2)
+
+    def test_no_henry_branches_means_no_change(self):
+        """Repo without henry branches: non_henry_branch_count == total."""
+        client = self._fake_client(["main", "feature-a", "feature-b"])
+        repo = {"owner": {"login": "o"}, "name": "r", "full_name": "o/r",
+                "default_branch": "main", "private": False}
+        result = gh.scan_repo_lite(client, repo)
+        self.assertEqual(result["total_branch_count"], 3)
+        self.assertEqual(result["henry_branch_count"], 0)
+        self.assertEqual(result["non_henry_branch_count"], 3)
+
+    def test_dashboard_summary_excludes_henry(self):
+        """Cross-repo 'total_branches' stat sums non_henry_branch_count."""
+        from app import app
+        import app as app_module
+        app.config["TESTING"] = True
+
+        fake_client = MagicMock()
+        fake_client.get_repos.return_value = [{
+            "owner": {"login": "o"}, "name": "r1", "full_name": "o/r1",
+            "default_branch": "main", "private": False, "html_url": "",
+            "description": "", "created_at": "", "updated_at": "",
+        }]
+        # r1 has main + 2 henry branches → should count as 1, not 3.
+        fake_client.get_branches.return_value = [
+            {"name": "main", "commit": {"sha": "a"}},
+            {"name": "henry-1", "commit": {"sha": "b"}},
+            {"name": "henry-2", "commit": {"sha": "c"}},
+        ]
+        fake_client.check_required_files.return_value = ({}, {})
+        fake_client.get_language_bytes.return_value = {}
+        fake_client.get_last_commit_date.return_value = None
+
+        orig = app_module._github_client
+        app_module._github_client = fake_client
+        try:
+            client = app.test_client()
+            with client.session_transaction() as sess:
+                sess["authenticated"] = True
+            client.post("/scan")
+            self.assertEqual(app_module._scan_results["total_branches"], 1)
+        finally:
+            app_module._github_client = orig
+            app_module._scan_results = None
+
+
 class TestDefaultGroupSeeding(unittest.TestCase):
     """Covers seed_default_groups_if_missing (temporary login-time recovery)."""
 
