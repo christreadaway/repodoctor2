@@ -1,11 +1,60 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 11
-**Date Range:** 2025-02-14 to 2026-05-11
-**Last Updated:** 2026-05-11
+**Total Sessions Logged:** 12
+**Date Range:** 2025-02-14 to 2026-05-15
+**Last Updated:** 2026-05-15
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 12 — 2026-05-15 (Surface GitHub 401s with remediation, fix silent-failure crashes)
+
+### What We Built
+Chris's dashboard came up blank after launching the app. Werkzeug logs showed `GET /user HTTP/1.1 401` and `GET /user/repos … 401` — GitHub had revoked or expired his saved PAT, but the app silently treated 401 as "no repos" and rendered an empty table with no indication of what went wrong. This session replaced the silent-failure paths with a centralized auth-error pipeline and fixed a handful of related edge-case crashes uncovered by a parallel bug audit.
+
+1. **Auth-error pipeline (the main fix).** `github_client._get` now raises a new `GitHubAuthError` on 401 by default. `verify_token` opts out via `raise_on_auth_error=False` because it's a probe. Every other client method (`get_repos`, `get_branches`, `get_pulls`, `get_file_content`, `get_commits_since`, …) automatically surfaces 401s without per-method changes. A global `@app.errorhandler(gh.GitHubAuthError)` in `app.py` flashes a 4-step remediation message (generate new PAT → logout → reset credentials → re-enter) and redirects to the dashboard.
+2. **Login verifies the saved PAT.** When Chris unlocks with an existing password, `/login` now calls `verify_token` BEFORE granting access. A 401 or missing `repo` scope keeps the user on the login page with a specific error instead of letting them through to an empty dashboard.
+3. **New `/login/reset` endpoint + RESET CREDENTIALS button.** Accessible without authentication so a user locked out by a revoked PAT can recover from the login screen in one click. Deletes `config/credentials.enc` and falls through to first-time setup.
+4. **Inner try/except blocks re-raise `GitHubAuthError`.** `/scan` and `/henry/generate` had `except Exception` blocks that would have converted the auth error into "this repo failed, continuing…" per-repo dummy rows. Now they re-raise, letting the global handler abort the whole operation with the right message.
+5. **Henry commit-metadata defensive access.** A parallel Explore agent flagged that `lc["commit"]["committer"]["date"]` and `c["commit"]["message"].split("\n")[0]` access keys without `.get()` checks; rare-but-possible GitHub commits with null author/committer/message would KeyError. Switched to defensive `.get()` chains with sensible fallbacks ("Unknown", "(no message)").
+6. **`models._load_json` corruption recovery.** If `preferences.json` / `groups.json` / etc. is corrupted (disk full mid-write, manual edit, etc.), the file is now renamed to `.corrupt` and an empty dict is returned. Previous behavior was to crash every request until the user manually deleted the file.
+
+### Technical Details
+- **`_get(raise_on_auth_error=True)`** — flag-based opt-out keeps the API minimal. The check is right after the rate-limit retry so the centralized log message and exception include the URL that failed.
+- **Global error handler** — uses `session.get("authenticated")` to decide whether to redirect to `/` or `/login`. Locked-out users land on login with the remedy already flashed.
+- **`GITHUB_AUTH_REMEDY` constant** — single source of truth for the remediation message, used by both the global handler and any explicit catches.
+- **9 new tests in `TestGitHubAuthErrorHandling`** — exercise `get_repos` raising 401, `verify_token` returning None on 401, login rejecting bad PAT, login rejecting missing `repo` scope, `/login/reset` end-to-end, `/scan` redirecting with remedy, `/repo/<owner>/<name>` redirecting on 401, non-401 errors still returning [] gracefully.
+- **Parallel bug audit** — spawned an Explore agent in parallel with test-writing. Returned 15 ranked bugs; we acted on the 3 that were both real and reachable from the main user flow (commit metadata KeyError, JSON corruption crash, plus the auth-error path already in progress). Skipped: CSRF on `/login/reset` (localhost-only app, would need Flask-WTF dependency); auto-escape "XSS" finding (false positive — Jinja2 escapes by default).
+
+### Current Status
+- ✅ Login rejects invalid/revoked saved PATs with a clear remediation message
+- ✅ All GitHub client methods surface 401s through one centralized error handler
+- ✅ RESET CREDENTIALS button on the login page works without authentication
+- ✅ Henry generation no longer crashes on commits with null author/committer metadata
+- ✅ Corrupted JSON files in `~/.repodoctor/` don't take the app down
+- ✅ 92/92 tests passing (83 existing + 9 new for auth-error handling)
+- ⚠️ Working branch is `claude/fix-flask-display-issue-1yxlq` (cloud-trigger forced) — Chris needs to merge to `main` on his machine
+
+### Branch Info
+- Working branch: `claude/fix-flask-display-issue-1yxlq`
+- Pushed: yes (two commits — initial 401 fix + centralization/crash fixes)
+- Not merged to `main` yet — Chris merges via his local clone
+
+### Decisions Made
+- **Centralized 401 handling in `_get`** rather than per-method 401 checks. Single point of behavior, opt-out only for the probe path.
+- **Global Flask error handler** rather than per-route try/except. Routes added later automatically inherit the right behavior; the remediation message is consistent.
+- **Reset endpoint accessible without auth** because the user is by definition locked out when they need it. Localhost-only deployment makes CSRF risk minimal; documented for revisit if the app ever leaves localhost.
+- **Skipped the CSRF and XSS findings from the audit** — CSRF requires a new dependency (Flask-WTF) for a localhost tool; the XSS finding was a false positive because Jinja2 autoescapes by default.
+
+### Next Steps
+1. **Chris's immediate fix:** generate a new PAT on github.com/settings/tokens with `repo` scope, then either delete `config/credentials.enc` manually (this version) or click RESET CREDENTIALS on the login page (after merging).
+2. Chris merges `claude/fix-flask-display-issue-1yxlq` into `main` on his local PC, then pulls (PowerShell one-liner provided in chat).
+3. Future polish: the parallel audit also flagged `_save_json` having no disk-full/perm error handling and the Anthropic key being unverified at login. Both are real but low-frequency; revisit if they actually bite.
+
+### Questions / Blockers
+None — the auth-error path is the headline fix and is fully covered by tests. Chris just needs to rotate his PAT.
 
 ---
 
