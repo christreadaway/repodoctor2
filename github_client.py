@@ -12,6 +12,15 @@ GITHUB_API = "https://api.github.com"
 logger = logging.getLogger(__name__)
 
 
+class GitHubAuthError(Exception):
+    """Raised when GitHub returns 401 Unauthorized.
+
+    Surfaces as a clear remediation message in the UI: the PAT is no longer
+    valid (revoked, expired, or wrong scopes) and the user needs to reset
+    their stored credentials.
+    """
+
+
 class GitHubClient:
     def __init__(self, pat: str):
         self.session = requests.Session()
@@ -20,8 +29,14 @@ class GitHubClient:
             "Accept": "application/vnd.github.v3+json",
         })
 
-    def _get(self, url: str, **kwargs) -> requests.Response:
-        """Make a GET request with rate-limit retry."""
+    def _get(self, url: str, raise_on_auth_error: bool = True, **kwargs) -> requests.Response:
+        """Make a GET request with rate-limit retry.
+
+        Raises GitHubAuthError on 401 by default so auth failures surface as
+        a clear UI message instead of silently producing empty results across
+        every endpoint that calls into the client. Use raise_on_auth_error=False
+        for probes like verify_token() that intentionally inspect 401s.
+        """
         resp = self.session.get(url, **kwargs)
         # If rate-limited, wait and retry once
         if resp.status_code == 403 and "rate limit" in resp.text.lower():
@@ -34,11 +49,16 @@ class GitHubClient:
             logger.warning("GitHub rate limit hit, waiting %ds", wait)
             time.sleep(wait)
             resp = self.session.get(url, **kwargs)
+        if raise_on_auth_error and resp.status_code == 401:
+            raise GitHubAuthError(
+                f"GitHub returned 401 Unauthorized for {url}. "
+                "Personal Access Token is invalid, expired, or missing required scopes."
+            )
         return resp
 
     def verify_token(self) -> dict | None:
         """Verify the PAT and return user info, or None if invalid."""
-        resp = self._get(f"{GITHUB_API}/user")
+        resp = self._get(f"{GITHUB_API}/user", raise_on_auth_error=False)
         if resp.status_code == 200:
             data = resp.json()
             scopes = resp.headers.get("X-OAuth-Scopes", "")
@@ -47,7 +67,12 @@ class GitHubClient:
         return None
 
     def get_repos(self) -> list[dict]:
-        """Fetch all repositories accessible to the authenticated user."""
+        """Fetch all repositories accessible to the authenticated user.
+
+        Raises GitHubAuthError (via _get) if GitHub returns 401 so the caller
+        can show a clear remediation message instead of silently returning
+        an empty list.
+        """
         repos = []
         page = 1
         while True:

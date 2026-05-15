@@ -1,8 +1,8 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-05-11
-**Current Branch:** `claude/fix-beacon-visibility-LXO09` (pushed) — needs merge to `main`
-**Overall Progress:** ~94%
+**Last Updated:** 2026-05-15
+**Current Branch:** `claude/fix-flask-display-issue-1yxlq` (pushed) — needs merge to `main`
+**Overall Progress:** ~95%
 
 ---
 
@@ -16,8 +16,10 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 
 ### Core
 - **Auth & security:** Fernet + PBKDF2 credential encryption, 30-minute session auto-lock, GitHub PAT scope verification
+- **GitHub auth-error handling (NEW 2026-05-15):** every 401 from GitHub now surfaces a clear, actionable remediation message instead of silently producing an empty dashboard. Login refuses to grant access if the saved PAT is invalid/revoked/expired. A new RESET CREDENTIALS button on the login page lets locked-out users recover in one click.
 - **Scan:** repo list + branch counts + required-file detection + code size (bytes per language)
 - **Required files (5):** CLAUDE.md, LICENSE, PRODUCT_SPEC.md (or `BUSINESS_SPEC.md` — accepted as an alias), PROJECT_STATUS.md, SESSION_NOTES.md — case-insensitive, any extension, searched recursively (root preferred, vendor dirs skipped)
+- **Corrupted-JSON tolerance (NEW 2026-05-15):** if `preferences.json` / `groups.json` / etc. gets corrupted, the file is renamed to `.corrupt` and the app starts fresh instead of crashing every request.
 
 ### Dashboard (My Repos)
 - Sortable columns, sticky headers, per-file Y/- indicators, X/5 score
@@ -35,6 +37,7 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 ### Henry Branches
 - Per-branch AI summary (Haiku) of changes vs. default branch — what was done, screen-by-screen impact, risk, merge strategy, copy/paste Claude Code instructions
 - Same robust JSON extractor as Projects — no more raw-JSON-blob fallbacks when the model adds commentary after the code fence
+- **Defensive commit metadata access (NEW 2026-05-15):** commits with missing committer/author/message no longer KeyError
 
 ### Stats
 - Two views: **Commits**, **Code Size** (Lines Added removed — was broken on cold repos)
@@ -62,25 +65,26 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 - Repo detail: Product Spec / Project Status / Session Notes panels, "What's Next" hero, conversation timeline
 - Activity log with color-coded messages
 - Netlify deployment (Node.js + Express + serverless-http) — older feature set
-- **Tests:** 83 passing (77 inherited + 3 new for `BUSINESS_SPEC.md` aliasing + 3 new for unassigned-projects rendering)
+- **Tests:** 92 passing (83 inherited + 9 new for `GitHubAuthError` handling)
 
 ---
 
 ## What's In Progress
 
-Nothing actively in progress. The 2026-05-11 fixes are committed on `claude/fix-beacon-visibility-LXO09` and pushed.
+Nothing actively in progress. The 2026-05-15 fixes are committed on `claude/fix-flask-display-issue-1yxlq` and pushed.
 
 ---
 
 ## What's Broken / Known Issues
 
-- **Push to `main` is blocked** in the current sandbox environment (HTTP 403). Feature branch is the only writable target; merges to `main` must happen on Chris's local machine.
-- **Bug audit not finished.** Mid-session, audit was paused before reaching most modules. Flagged but unaddressed: `models._load_json` crashes on corrupt JSON instead of returning a default; no file locking on concurrent JSON writes; `security.decrypt_credentials` catches only `InvalidToken`, not generic corruption (e.g. truncated file).
 - **Netlify version is behind Flask version.** All April/May features need porting to `netlify/functions/api/`.
 - **Netlify free tier 10s function timeout.** Large GitHub accounts can still time out even with parallelized scans.
 - **Truncated git trees.** Very large repos can have a truncated tree response; a warning is logged and some deep files may be missed.
 - **Scan is slightly slower.** `/languages` call per repo doubles API calls vs. previous. Still sequential; parallelization on the backlog.
 - **Stats first-load latency.** Commit stats page through up to 5000 commits per repo × N repos — first visit after a scan can take noticeably longer for heavy accounts. `?refresh=1` forces recompute; normal loads are cache hits.
+- **Anthropic key not verified at login.** An invalid/empty Anthropic key only surfaces when the user runs `/projects/generate` or `/henry/generate`, where it shows up as a per-repo error. Flagged in audit; low-frequency since the key rarely changes after first setup.
+- **`_save_json` has no disk-full / permission error handling.** Silent data loss possible on a full disk. Flagged in audit; revisit if it actually bites.
+- **`/login/reset` has no CSRF protection.** Localhost-only app + same-origin requirement on form POSTs mitigate the risk; revisit if the app ever leaves localhost.
 
 ---
 
@@ -92,12 +96,12 @@ Nothing actively in progress. The 2026-05-11 fixes are committed on `claude/fix-
 
 ## Next Steps (in priority order)
 
-1. **Merge `claude/fix-beacon-visibility-LXO09` into `main`** from Chris's local machine (sandbox can't do this).
-2. **Rescan + regenerate summaries** so beacon picks up the new `BUSINESS_SPEC.md` detection and Projects/Henry cards stop showing parse-failure fallbacks.
-3. **Finish the bug audit** that was paused: `models._load_json` corruption handling, JSON write locking, `security.decrypt_credentials` exception coverage, then continue through `github_client`, `ai_analyzer`, `spec_cleaner`, `project_mapper`, `firestore_detector`, `app.py`.
-4. **Port April/May features to Netlify** — Stats (with group filter + rollup), What's Next, groups persistence, recursive search, Size column, refreshed nav, recent-updated sort, business-spec aliasing, unassigned-projects list.
+1. **Chris rotates his GitHub PAT.** The 2026-05-15 session was triggered by his old PAT being rejected. New PAT needed at github.com/settings/tokens (must have `repo` scope), then RESET CREDENTIALS on the login page (after merging) or `rm config/credentials.enc` and re-launch.
+2. **Merge `claude/fix-flask-display-issue-1yxlq` into `main`** from Chris's local machine.
+3. **Rescan + regenerate summaries** once the new PAT is in place.
+4. **Port April/May features to Netlify** — auth-error handling, Stats (with group filter + rollup), What's Next, groups persistence, recursive search, Size column, refreshed nav, recent-updated sort, business-spec aliasing, unassigned-projects list.
 5. **Parallelize initial scan** using `ThreadPoolExecutor` (same pattern as `/stats`).
-6. **Revisit stats caching for heavy accounts** — the 5000-commit page-through can be slow on very active repos; consider a streaming / progressive-render approach.
+6. **Verify Anthropic key at login** the same way GitHub PAT is verified, so bad keys are caught up front.
 
 ---
 
@@ -111,7 +115,7 @@ Nothing actively in progress. The 2026-05-11 fixes are committed on `claude/fix-
 | Security | Fernet + PBKDF2 | — (relies on environment) |
 | Storage | Local JSON in `config/`, `data/`, and `~/.repodoctor/` | Ephemeral per-invocation |
 | Frontend | Jinja2 templates + retro terminal CSS | EJS-style views + same CSS |
-| Tests | `unittest` (83 passing) | — |
+| Tests | `unittest` (92 passing) | — |
 
 ---
 
@@ -122,4 +126,3 @@ Nothing actively in progress. The 2026-05-11 fixes are committed on `claude/fix-
 - **User data (survives codebase wipes):** `~/.repodoctor/groups.json`
 - User data in repo (all gitignored, do not survive a fresh clone): `config/credentials.enc`, `config/groups.json` (legacy), `data/scan_history.json`, `data/analysis_cache.json`, `data/action_log.json`, `data/project_summaries.json`, `data/specs/`
 - Session logs: `SESSION_NOTES.md` (append new entries at top)
-- Pull instructions for PC + Mac: bottom of `SESSION_NOTES.md`

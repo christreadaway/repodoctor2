@@ -5,7 +5,10 @@ Handles scan history, analysis cache, action log, and preferences.
 
 import datetime
 import json
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
@@ -20,10 +23,20 @@ def _ensure_dirs():
 
 
 def _load_json(path: str) -> dict | list:
-    if os.path.exists(path):
+    if not os.path.exists(path):
+        return {}
+    try:
         with open(path, "r") as f:
             return json.load(f)
-    return {}
+    except (json.JSONDecodeError, OSError) as e:
+        # Corrupted or unreadable file should not crash the app. Rename it
+        # aside so the user can inspect, and start fresh.
+        logger.warning("Could not load %s (%s); renaming to .corrupt and starting fresh", path, e)
+        try:
+            os.rename(path, path + ".corrupt")
+        except OSError:
+            pass
+        return {}
 
 
 def _save_json(path: str, data):
