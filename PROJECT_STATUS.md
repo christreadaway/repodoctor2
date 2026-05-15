@@ -1,6 +1,6 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-05-15
+**Last Updated:** 2026-05-15 (Session 13)
 **Current Branch:** `claude/fix-flask-display-issue-1yxlq` (pushed) — needs merge to `main`
 **Overall Progress:** ~95%
 
@@ -25,6 +25,7 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 - Sortable columns, sticky headers, per-file Y/- indicators, X/5 score
 - Size column (B / KB / MB) — numeric sort honors unit suffixes
 - "Current?" freshness column, expandable branch lists
+- **Henry branches excluded from the count (NEW 2026-05-15 Session 13):** per-repo Branches column and cross-repo Total Branches summary use `non_henry_branch_count`. Henry branches still appear in the expandable list, marked faded + italic with a `(henry)` suffix and tooltip explaining the exclusion.
 
 ### Projects
 - AI-generated summaries via Claude Haiku (~$0.001/project)
@@ -65,13 +66,13 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 - Repo detail: Product Spec / Project Status / Session Notes panels, "What's Next" hero, conversation timeline
 - Activity log with color-coded messages
 - Netlify deployment (Node.js + Express + serverless-http) — older feature set
-- **Tests:** 92 passing (83 inherited + 9 new for `GitHubAuthError` handling)
+- **Tests:** 97 passing (83 inherited + 9 new for `GitHubAuthError` handling + 5 new for henry-branch exclusion)
 
 ---
 
 ## What's In Progress
 
-Nothing actively in progress. The 2026-05-15 fixes are committed on `claude/fix-flask-display-issue-1yxlq` and pushed.
+Nothing actively in progress. All 2026-05-15 work (Sessions 12 and 13) is committed on `claude/fix-flask-display-issue-1yxlq` and pushed.
 
 ---
 
@@ -115,7 +116,7 @@ Nothing actively in progress. The 2026-05-15 fixes are committed on `claude/fix-
 | Security | Fernet + PBKDF2 | — (relies on environment) |
 | Storage | Local JSON in `config/`, `data/`, and `~/.repodoctor/` | Ephemeral per-invocation |
 | Frontend | Jinja2 templates + retro terminal CSS | EJS-style views + same CSS |
-| Tests | `unittest` (92 passing) | — |
+| Tests | `unittest` (97 passing) | — |
 
 ---
 
