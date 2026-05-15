@@ -12,6 +12,15 @@ GITHUB_API = "https://api.github.com"
 logger = logging.getLogger(__name__)
 
 
+class GitHubAuthError(Exception):
+    """Raised when GitHub returns 401 Unauthorized.
+
+    Surfaces as a clear remediation message in the UI: the PAT is no longer
+    valid (revoked, expired, or wrong scopes) and the user needs to reset
+    their stored credentials.
+    """
+
+
 class GitHubClient:
     def __init__(self, pat: str):
         self.session = requests.Session()
@@ -47,7 +56,11 @@ class GitHubClient:
         return None
 
     def get_repos(self) -> list[dict]:
-        """Fetch all repositories accessible to the authenticated user."""
+        """Fetch all repositories accessible to the authenticated user.
+
+        Raises GitHubAuthError if GitHub returns 401 so the caller can show a
+        clear remediation message instead of silently returning an empty list.
+        """
         repos = []
         page = 1
         while True:
@@ -61,6 +74,11 @@ class GitHubClient:
                     "affiliation": "owner,collaborator",
                 },
             )
+            if resp.status_code == 401:
+                raise GitHubAuthError(
+                    "GitHub returned 401 Unauthorized when listing repos. "
+                    "The stored Personal Access Token is invalid, expired, or had its scopes changed."
+                )
             if resp.status_code != 200:
                 break
             batch = resp.json()

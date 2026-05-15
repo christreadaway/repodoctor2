@@ -19,7 +19,15 @@
             </div>
             <button type="submit" class="btn btn-primary btn-full">UNLOCK</button>
         </form>
-        <p class="text-secondary login-hint">Forgot password? Delete <code>config/credentials.enc</code> and restart.</p>
+        <form method="POST" action="{{ url_for('login_reset') }}" class="reset-creds-form"
+              onsubmit="return confirm('Delete the saved encrypted credentials? You will need to re-enter your GitHub PAT and Anthropic key.');">
+            <button type="submit" class="btn btn-secondary btn-full">RESET CREDENTIALS</button>
+            <p class="text-secondary login-hint">
+                Use this if your GitHub PAT was revoked/expired, you forgot
+                your password, or you want to start fresh. Deletes
+                <code>config/credentials.enc</code>.
+            </p>
+        </form>
         {% else %}
         <h2>First-Time Setup</h2>
         <p class="text-secondary">Enter your API keys and choose a password to encrypt them.</p>

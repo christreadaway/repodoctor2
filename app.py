@@ -72,7 +72,36 @@ def login():
             if creds is None:
                 flash("Wrong password. Try again.", "error")
                 return render_template("login.html", has_credentials=True)
-            _init_session(creds)
+
+            # Verify the decrypted PAT still works with GitHub BEFORE
+            # marking the user authenticated. Without this check, an
+            # invalid/revoked PAT silently lands the user on an empty
+            # dashboard with no indication of what went wrong.
+            test_client = gh.GitHubClient(creds["github_pat"])
+            user_info = test_client.verify_token()
+            if user_info is None:
+                flash(
+                    "Your saved GitHub Personal Access Token is no longer valid "
+                    "(likely revoked, expired, or its scopes changed). "
+                    "Click \"Reset Credentials\" below, then re-enter a fresh "
+                    "token from GitHub → Settings → Developer settings → "
+                    "Personal access tokens (needs 'repo' scope).",
+                    "error",
+                )
+                return render_template("login.html", has_credentials=True, pat_invalid=True)
+
+            scopes = user_info.get("_scopes", "")
+            if "repo" not in scopes:
+                flash(
+                    f"Your saved GitHub token is missing the 'repo' scope "
+                    f"(current scopes: {scopes or '(none)'}). "
+                    "Click \"Reset Credentials\" below and re-enter a token "
+                    "that has the 'repo' scope checked.",
+                    "error",
+                )
+                return render_template("login.html", has_credentials=True, pat_invalid=True)
+
+            _init_session(creds, user_info)
             session["authenticated"] = True
             return redirect(url_for("dashboard"))
         else:
@@ -117,17 +146,37 @@ def logout():
     return redirect(url_for("login"))
 
 
-def _init_session(creds: dict):
+def _init_session(creds: dict, user_info: dict | None = None):
     global _github_client, _credentials
     _credentials = creds
     _github_client = gh.GitHubClient(creds["github_pat"])
-    user_info = _github_client.verify_token()
+    if user_info is None:
+        user_info = _github_client.verify_token()
     if user_info:
         session["github_user"] = user_info.get("login", "")
     # TEMPORARY: see DEFAULT_USER_GROUPS in models.py — remove on next rebuild.
     seeded = models.seed_default_groups_if_missing()
     if seeded:
         models.log_action("seed_groups", "all", "all", f"Seeded default groups: {', '.join(seeded)}")
+
+
+@app.route("/login/reset", methods=["POST"])
+def login_reset():
+    """Delete saved encrypted credentials so the user can re-enter fresh ones.
+
+    Reachable without auth so users locked out by a revoked/expired PAT can
+    recover from the login screen without manually deleting files.
+    """
+    global _github_client, _credentials
+    _github_client = None
+    _credentials = None
+    security.delete_credentials()
+    session.clear()
+    flash(
+        "Stored credentials deleted. Enter your new GitHub PAT and Anthropic key below.",
+        "success",
+    )
+    return redirect(url_for("login"))
 
 
 # --- Dashboard ---
@@ -158,7 +207,21 @@ def scan():
     prefs = models.get_preferences()
     excluded = set(prefs.get("excluded_repos", []))
 
-    repos = client.get_repos()
+    try:
+        repos = client.get_repos()
+    except gh.GitHubAuthError:
+        # PAT was valid at login but has since been revoked/expired, or its
+        # scopes were narrowed. Tell the user exactly how to fix it.
+        flash(
+            "GitHub authentication failed during scan — your Personal Access "
+            "Token is no longer valid. To fix this: "
+            "(1) Go to GitHub → Settings → Developer settings → Personal "
+            "access tokens, (2) Generate a new token with the 'repo' scope, "
+            "(3) Log out below, (4) On the login page click \"Reset "
+            "Credentials\" and enter your new token.",
+            "error",
+        )
+        return redirect(url_for("dashboard"))
     results = []
     for repo in repos:
         if repo["full_name"] in excluded or repo["name"] in excluded:
