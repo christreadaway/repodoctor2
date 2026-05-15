@@ -438,6 +438,17 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
     total_branch_count = len(branches)
     non_default_count = total_branch_count - 1 if total_branch_count > 0 else 0
 
+    # Branches with "henry" in the name are excluded from the dashboard count
+    # (per Chris's preference). They're still listed in branch_names so the
+    # Henry page can find them, but they don't inflate the per-repo or
+    # cross-repo totals on My Repos. Default branch is never treated as
+    # "henry" even if its name happens to contain the substring.
+    henry_branch_count = sum(
+        1 for b in branches
+        if "henry" in b["name"].lower() and b["name"] != default_branch
+    )
+    non_henry_branch_count = total_branch_count - henry_branch_count
+
     required_files, actual_names = client.check_required_files(owner, name, ref=default_branch)
 
     # Code size via /languages (bytes per language).
@@ -490,6 +501,8 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
         "updated_at": repo.get("updated_at", ""),
         "total_branch_count": total_branch_count,
         "non_default_branch_count": non_default_count,
+        "henry_branch_count": henry_branch_count,
+        "non_henry_branch_count": non_henry_branch_count,
         "branch_names": [b["name"] for b in branches],
         "required_files": required_files,
         "files_present": sum(1 for v in required_files.values() if v),

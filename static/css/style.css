@@ -2388,6 +2388,11 @@ tbody tr:hover {
   background: rgba(51, 255, 51, 0.06);
 }
 
+.branch-henry {
+  opacity: 0.55;
+  font-style: italic;
+}
+
 .error-row td {
   padding: 0.35rem 1rem;
   border-bottom: 1px solid var(--border);
