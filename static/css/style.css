@@ -3859,6 +3859,28 @@ kbd {
   gap: 0.6rem;
 }
 
+.tracker-gen-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.tracker-model-select {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  min-width: 230px;
+}
+
+.tracker-model-select:focus {
+  outline: none;
+  border-color: var(--tk-cyan-bd);
+}
+
 .tracker-model-hint {
   flex-basis: 100%;
   margin-top: 0.55rem;

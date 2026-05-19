@@ -1318,11 +1318,23 @@ def tracker_generate(owner, name):
     default_branch = repo_info.get("default_branch", "main")
     prior = models.get_tracker(owner, name)
     prefs = models.get_preferences()
-    model = prefs.get("ai_model", "claude-haiku-4-5-20251001")
+
+    # Per-generation model override from the toolbar dropdown (form field
+    # "model"); falls back to the global Settings preference.
+    requested_model = (request.form.get("model") or "").strip()
+    valid_models = {
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-4-5-20250929",
+        "claude-opus-4-6",
+    }
+    if requested_model and requested_model in valid_models:
+        model = requested_model
+    else:
+        model = prefs.get("ai_model", "claude-haiku-4-5-20251001")
 
     models.log_tracker_event(
         "generate_start", owner=owner, repo=name, model=model,
-        had_prior=bool(prior),
+        had_prior=bool(prior), override=bool(requested_model),
     )
 
     try:
