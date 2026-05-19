@@ -143,9 +143,13 @@
 {# MAIN TRACKER VIEW — 8 TABS                                    #}
 {# ============================================================ #}
 
-{# Status counts header #}
+{# Status counts header — use .get() so an unexpected status (validation
+   already emits a warning) doesn't crash the page render with KeyError. #}
 {% set status_counts = {'functional': 0, 'prototype': 0, 'visual': 0, 'missing': 0} %}
-{% for m in tracker.modules %}{% if status_counts.update({m.status: status_counts[m.status] + 1}) %}{% endif %}{% endfor %}
+{% for m in tracker.modules %}
+  {% set s = m.status if m.status in status_counts else None %}
+  {% if s %}{% if status_counts.update({s: status_counts[s] + 1}) %}{% endif %}{% endif %}
+{% endfor %}
 
 <div class="tracker-header-stats">
     <div class="tracker-stat"><span class="chip chip-functional">{{ status_counts.functional }}</span><span class="tracker-stat-label">Functional</span></div>

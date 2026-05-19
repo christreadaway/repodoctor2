@@ -289,5 +289,169 @@ class TestPromptBuilding(unittest.TestCase):
         self.assertIn("2026-05-19", prompt)
 
 
+class TestStorageRoundTrip(unittest.TestCase):
+    """Cover the per-repo tracker JSON storage helpers in models.py.
+    Runs in a tempdir so it doesn't pollute the real data/ dir."""
+
+    def setUp(self):
+        import models
+        self.models = models
+        self._tmp = tempfile.mkdtemp()
+        self._orig_data_dir = models.DATA_DIR
+        self._orig_trackers = models.TRACKERS_DIR
+        self._orig_log = models.TRACKER_LOG_PATH
+        models.DATA_DIR = os.path.join(self._tmp, "data")
+        models.TRACKERS_DIR = os.path.join(models.DATA_DIR, "trackers")
+        models.TRACKER_LOG_PATH = os.path.join(models.DATA_DIR, "logs", "tracker.log")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+        self.models.DATA_DIR = self._orig_data_dir
+        self.models.TRACKERS_DIR = self._orig_trackers
+        self.models.TRACKER_LOG_PATH = self._orig_log
+
+    def test_save_and_get_roundtrip(self):
+        t = _valid_tracker()
+        self.models.save_tracker("alice", "demo", t)
+        loaded = self.models.get_tracker("alice", "demo")
+        self.assertEqual(loaded, t)
+
+    def test_get_missing_returns_none(self):
+        self.assertIsNone(self.models.get_tracker("nobody", "noproj"))
+
+    def test_list_trackers(self):
+        self.models.save_tracker("a", "r1", _valid_tracker())
+        self.models.save_tracker("b", "r2", _valid_tracker())
+        listed = self.models.list_trackers()
+        self.assertIn("a/r1", listed)
+        self.assertIn("b/r2", listed)
+
+    def test_list_trackers_skips_corrupt_files(self):
+        # Write a junk file into the trackers dir; list shouldn't crash.
+        os.makedirs(self.models.TRACKERS_DIR, exist_ok=True)
+        with open(os.path.join(self.models.TRACKERS_DIR, "x__y.json"), "w") as f:
+            f.write("{not json")
+        listed = self.models.list_trackers()
+        self.assertIsInstance(listed, dict)
+
+    def test_delete_tracker(self):
+        self.models.save_tracker("a", "r", _valid_tracker())
+        self.assertTrue(self.models.delete_tracker("a", "r"))
+        self.assertIsNone(self.models.get_tracker("a", "r"))
+        self.assertFalse(self.models.delete_tracker("a", "r"))
+
+    def test_log_event_roundtrip(self):
+        self.models.log_tracker_event("smoke", n=42)
+        events = self.models.tail_tracker_log(10)
+        self.assertGreater(len(events), 0)
+        self.assertEqual(events[-1]["event"], "smoke")
+        self.assertEqual(events[-1]["n"], 42)
+
+
+class TestPathSafety(unittest.TestCase):
+    """`_tracker_path` should never escape the trackers dir even when
+    given hostile owner/repo segments. Flask URL routing strips `/` from
+    segments by default but defense-in-depth is cheap."""
+
+    def test_dotdot_paths_dont_escape(self):
+        import models
+        p = models._tracker_path("../etc", "passwd")
+        # The constructed path stays under the trackers dir.
+        self.assertTrue(p.startswith(models.TRACKERS_DIR + os.sep))
+        # The dotted segment doesn't survive verbatim.
+        self.assertNotIn("../", p)
+
+    def test_slash_in_segment_neutralized(self):
+        import models
+        p = models._tracker_path("a/b", "c")
+        self.assertTrue(p.startswith(models.TRACKERS_DIR + os.sep))
+
+
+class TestStatusCountsTemplateLogic(unittest.TestCase):
+    """The template's status-counts block previously crashed when a
+    module had an unknown status (e.g. a typoed AI response). The fix
+    uses .get() with a safe fallback. This test renders the template
+    with a deliberately bad status to confirm no crash."""
+
+    def test_unknown_status_does_not_crash_template(self):
+        from jinja2 import Environment, FileSystemLoader, ChoiceLoader, DictLoader
+        env = Environment(loader=ChoiceLoader([
+            DictLoader({"base.html": "{% block content %}{% endblock %}"}),
+            FileSystemLoader(os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "templates",
+            )),
+        ]))
+        env.filters['central_time'] = lambda x: x or ""
+        env.globals['url_for'] = lambda *a, **k: "/u"
+        env.globals['request'] = type('R', (), {'endpoint': 'tracker_view'})()
+        env.globals['session'] = {"authenticated": True}
+        env.globals['get_flashed_messages'] = lambda **k: []
+        tpl = env.get_template("tracker.html")
+
+        bad = _valid_tracker()
+        bad["modules"][0]["status"] = "weird"
+        bad["modules"].append({
+            "id": "M9", "name": "Bad", "category": "C", "routes": [],
+            "status": None, "priority": "P0", "notes": "",
+        })
+
+        out = tpl.render(
+            mode="view",
+            scan_results={"repos": [], "scanned_at": ""},
+            repos=[],
+            selected_owner="alice", selected_name="demo",
+            tracker=bad, repo_info=None,
+            validation_errors=["bad status 'weird'"],
+            meta=td, preferences={"ai_model": "x"},
+        )
+        # No crash, output non-empty.
+        self.assertGreater(len(out), 1000)
+
+
+class TestFirestoreInputs(unittest.TestCase):
+    """When firestore_detector reports the repo uses Firebase, the
+    tracker prompt must include the detection so the AI emits E* + I*
+    rows. When status='not_using', firestore stays None and the prompt
+    doesn't mention it."""
+
+    def test_firestore_included_in_prompt_when_present(self):
+        try:
+            import tracker_generator as tg
+        except ImportError:
+            self.skipTest("anthropic not installed")
+        prompt = tg.build_user_prompt(
+            "a", "r",
+            inputs={
+                "docs": {}, "file_tree": [], "recent_commits": [],
+                "firestore": {
+                    "status": "needs_setup",
+                    "project_id": "test-123",
+                    "indicators": ["firebase.json present"],
+                    "missing": ["firestore.rules"],
+                },
+            },
+            prior_tracker=None,
+        )
+        self.assertIn("FIRESTORE", prompt)
+        self.assertIn("test-123", prompt)
+        self.assertIn("firestore.rules", prompt)
+        self.assertIn("external_systems", prompt)
+
+    def test_firestore_omitted_when_none(self):
+        try:
+            import tracker_generator as tg
+        except ImportError:
+            self.skipTest("anthropic not installed")
+        prompt = tg.build_user_prompt(
+            "a", "r",
+            inputs={"docs": {}, "file_tree": [], "recent_commits": [],
+                    "firestore": None},
+            prior_tracker=None,
+        )
+        self.assertNotIn("FIRESTORE", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

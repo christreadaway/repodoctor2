@@ -1201,21 +1201,40 @@ def _resolve_repo(owner: str, name: str) -> dict | None:
 
 def _tracker_repo_list() -> list[dict]:
     """[{owner, name, full_name, has_tracker, generated_at}] for the dropdown.
-    Returns every scanned repo so the user can pick any to generate against."""
+    Includes every scanned repo PLUS any repo that has a saved tracker
+    (so a fresh Flask restart with no in-memory scan still lets you reach
+    your existing trackers via the dropdown)."""
     out: list[dict] = []
-    if not _scan_results:
-        return out
     saved = models.list_trackers()
-    for r in _scan_results.get("repos", []):
-        key = f"{r['owner']}/{r['name']}"
-        existing = saved.get(key)
+    seen: set[str] = set()
+
+    if _scan_results:
+        for r in _scan_results.get("repos", []):
+            key = f"{r['owner']}/{r['name']}"
+            existing = saved.get(key)
+            out.append({
+                "owner": r["owner"],
+                "name": r["name"],
+                "full_name": r.get("full_name", key),
+                "has_tracker": bool(existing),
+                "generated_at": (existing or {}).get("generated_at", ""),
+            })
+            seen.add(key)
+
+    # Saved trackers for repos that aren't in the current scan (e.g. excluded,
+    # deleted on GitHub, or scan_results not yet populated this session).
+    for key, t in saved.items():
+        if key in seen:
+            continue
+        owner, name = key.split("/", 1)
         out.append({
-            "owner": r["owner"],
-            "name": r["name"],
-            "full_name": r.get("full_name", key),
-            "has_tracker": bool(existing),
-            "generated_at": (existing or {}).get("generated_at", ""),
+            "owner": owner,
+            "name": name,
+            "full_name": key,
+            "has_tracker": True,
+            "generated_at": t.get("generated_at", ""),
         })
+
     out.sort(key=lambda r: r["name"].lower())
     return out
 
@@ -1223,10 +1242,12 @@ def _tracker_repo_list() -> list[dict]:
 @app.route("/tracker")
 @_require_auth
 def tracker_index():
-    """Landing page — dropdown + recent trackers + onboarding when empty."""
-    repos = _tracker_repo_list()
+    """Landing page — auto-routes to the most-recently-generated tracker
+    if one exists, otherwise renders the onboarding view with a dropdown."""
     saved = models.list_trackers()
-    # If the user has trackers already, default the dropdown to the most-recent.
+
+    # If any tracker is saved, jump straight to the most-recent one so
+    # the user lands on data, not a blank dropdown.
     recent_key = ""
     recent_ts = ""
     for key, t in saved.items():
@@ -1234,17 +1255,17 @@ def tracker_index():
         if ts and ts > recent_ts:
             recent_ts = ts
             recent_key = key
-    selected_owner = ""
-    selected_name = ""
     if recent_key:
-        selected_owner, selected_name = recent_key.split("/", 1)
+        owner, name = recent_key.split("/", 1)
+        return redirect(url_for("tracker_view", owner=owner, name=name))
+
     return render_template(
         "tracker.html",
         mode="index",
         scan_results=_scan_results,
-        repos=repos,
-        selected_owner=selected_owner,
-        selected_name=selected_name,
+        repos=_tracker_repo_list(),
+        selected_owner="",
+        selected_name="",
         tracker=None,
         meta=tracker_data,
     )
