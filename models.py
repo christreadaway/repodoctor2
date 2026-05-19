@@ -19,6 +19,8 @@ USER_DATA_DIR = os.path.join(os.path.expanduser("~"), ".repodoctor")
 def _ensure_dirs():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(os.path.join(DATA_DIR, "specs"), exist_ok=True)
+    os.makedirs(os.path.join(DATA_DIR, "trackers"), exist_ok=True)
+    os.makedirs(os.path.join(DATA_DIR, "logs"), exist_ok=True)
     os.makedirs(CONFIG_DIR, exist_ok=True)
 
 
@@ -360,6 +362,106 @@ def delete_group(name: str) -> bool:
         prefs["active_group"] = ""
         save_preferences(prefs)
     return True
+
+
+# --- Codebase Trackers ---
+#
+# One JSON file per repo at data/trackers/<owner>__<name>.json, containing
+# the full tracker (modules, infra_gaps, features, external_systems,
+# questions, next_actions, recent_changes, build_sequence,
+# rollout_sequence). IDs (M1, I1, F1, ...) are stable across regenerations;
+# never reuse a deleted integer.
+
+TRACKERS_DIR = os.path.join(DATA_DIR, "trackers")
+
+
+def _tracker_path(owner: str, repo: str) -> str:
+    safe = f"{owner}__{repo}".replace("/", "_").replace("..", "_")
+    return os.path.join(TRACKERS_DIR, f"{safe}.json")
+
+
+def get_tracker(owner: str, repo: str) -> dict | None:
+    path = _tracker_path(owner, repo)
+    if not os.path.exists(path):
+        return None
+    return _load_json(path) or None
+
+
+def save_tracker(owner: str, repo: str, tracker: dict):
+    _ensure_dirs()
+    _save_json(_tracker_path(owner, repo), tracker)
+
+
+def list_trackers() -> dict[str, dict]:
+    """Return {f'{owner}/{repo}': tracker_dict} for every saved tracker."""
+    _ensure_dirs()
+    out: dict[str, dict] = {}
+    if not os.path.exists(TRACKERS_DIR):
+        return out
+    for fname in os.listdir(TRACKERS_DIR):
+        if not fname.endswith(".json"):
+            continue
+        stem = fname[:-5]
+        if "__" not in stem:
+            continue
+        owner, repo = stem.split("__", 1)
+        data = _load_json(os.path.join(TRACKERS_DIR, fname))
+        if isinstance(data, dict):
+            out[f"{owner}/{repo}"] = data
+    return out
+
+
+def delete_tracker(owner: str, repo: str) -> bool:
+    path = _tracker_path(owner, repo)
+    if os.path.exists(path):
+        os.remove(path)
+        return True
+    return False
+
+
+# --- Tracker Event Log ---
+#
+# Append-only line-oriented log file at data/logs/tracker.log. Captures
+# every generation, validation result, render error, and copy-prompt
+# event. Format is one JSON object per line so it's grep-able and
+# copy-paste-able into Claude Code for debugging (per CLAUDE.md).
+
+TRACKER_LOG_PATH = os.path.join(DATA_DIR, "logs", "tracker.log")
+
+
+def log_tracker_event(event: str, **fields):
+    _ensure_dirs()
+    record = {
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "event": event,
+    }
+    record.update(fields)
+    try:
+        with open(TRACKER_LOG_PATH, "a") as f:
+            f.write(json.dumps(record, default=str) + "\n")
+    except OSError as e:
+        logger.warning("tracker log write failed: %s", e)
+
+
+def tail_tracker_log(n: int = 100) -> list[dict]:
+    """Return the last n events from the tracker log."""
+    if not os.path.exists(TRACKER_LOG_PATH):
+        return []
+    try:
+        with open(TRACKER_LOG_PATH, "r") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    out: list[dict] = []
+    for line in lines[-n:]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
 
 
 # --- Session Cost Tracking ---

@@ -1,0 +1,494 @@
+{% extends "base.html" %}
+{% block title %}RepoDoctor — Tracker{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <div class="page-header-title">
+        <h1>Codebase Tracker</h1>
+        {% if tracker and tracker.generated_at %}
+        <p class="page-subtitle">Last generated: {{ tracker.generated_at | central_time }} · model {{ tracker.ai_model }}</p>
+        {% elif mode == 'index' %}
+        <p class="page-subtitle">Pick a project. Claude reads the docs + code and produces a stable tracker: modules, infra gaps, features, external systems, open questions, and copy/paste-ready next actions.</p>
+        {% endif %}
+    </div>
+</div>
+
+{# --- Repo selector + actions --- #}
+{% if scan_results %}
+<div class="tracker-toolbar">
+    <form method="GET" action="" class="tracker-pick" id="tracker-pick-form">
+        <label for="tracker-pick" class="tracker-pick-label">Project</label>
+        <select id="tracker-pick" class="tracker-pick-select" onchange="trackerNav(this.value)">
+            <option value="">— pick a project —</option>
+            {% for r in repos %}
+            <option value="{{ r.owner }}/{{ r.name }}"
+                    {% if selected_owner == r.owner and selected_name == r.name %}selected{% endif %}>
+                {{ r.name }}{% if r.has_tracker %} ●{% endif %}
+            </option>
+            {% endfor %}
+        </select>
+        <span class="tracker-pick-legend"><span class="tracker-pick-dot">●</span> tracker exists</span>
+    </form>
+
+    {% if selected_owner and selected_name %}
+    <div class="tracker-actions">
+        <form method="POST" action="{{ url_for('tracker_generate', owner=selected_owner, name=selected_name) }}" class="inline-form">
+            <button type="submit" class="btn btn-primary" data-loading-text="ANALYZING…">
+                {% if tracker %}REGENERATE{% else %}GENERATE TRACKER{% endif %}
+            </button>
+        </form>
+        <a href="{{ url_for('tracker_debug', owner=selected_owner, name=selected_name) }}" class="btn btn-secondary btn-sm">DEBUG</a>
+        <a href="{{ url_for('repo_detail', owner=selected_owner, name=selected_name) }}" class="btn btn-ghost btn-sm">REPO DETAIL →</a>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first so the tracker can pick from your repos.</p>
+    </div>
+</div>
+
+{% elif mode == 'index' and not tracker %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>Pick a project to begin.</h2>
+        <p>Use the dropdown above. The first generation reads PRODUCT_SPEC, PROJECT_STATUS, SESSION_NOTES, CLAUDE.md, the README, the repo file tree, and the last 30 days of commits. Output is a structured tracker you can scan in 90 seconds.</p>
+        <p class="tracker-codes-hint">
+            <strong>What the codes mean:</strong>
+            <span class="chip chip-code">M*</span> modules (real surfaces in the app) ·
+            <span class="chip chip-code">I*</span> infra gaps (missing infra blocking ≥2 modules) ·
+            <span class="chip chip-code">F*</span> feature specs (proposed or shipped, with a spec doc) ·
+            <span class="chip chip-code">E*</span> external systems (Stripe, Anthropic, Firebase, etc.) ·
+            <span class="chip chip-code">Q*</span> open questions (human-only decisions) ·
+            <span class="chip chip-code">N*</span> next actions (one-Claude-Code-session units of work, with copy/paste prompts)
+        </p>
+    </div>
+</div>
+
+{% elif mode == 'view' and not tracker %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No tracker yet for <strong>{{ selected_name }}</strong>.</h2>
+        <p>Click <strong>GENERATE TRACKER</strong> above. Claude will read this repo's docs + code and produce the full 8-tab tracker. First generation takes 20-60 seconds.</p>
+    </div>
+</div>
+
+{% elif mode == 'debug' %}
+{# ============================================================ #}
+{# DEBUG SURFACE                                                 #}
+{# ============================================================ #}
+<div class="tracker-debug">
+    <h2>Debug — {{ selected_owner }}/{{ selected_name }}</h2>
+
+    <section class="tracker-debug-section">
+        <h3>Integrity Check</h3>
+        {% if not tracker %}
+        <p class="text-secondary">No tracker saved for this repo. Generate one first.</p>
+        {% elif not validation_errors %}
+        <p class="chip chip-functional">✓ All §5.5 invariants pass</p>
+        {% else %}
+        <p class="chip chip-missing">✗ {{ validation_errors|length }} issue(s)</p>
+        <ul class="tracker-debug-errors">
+            {% for err in validation_errors %}<li>{{ err }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+    </section>
+
+    <section class="tracker-debug-section">
+        <h3>Meta</h3>
+        {% if tracker %}
+        <ul class="tracker-meta-list">
+            <li><strong>Owner / Repo:</strong> {{ tracker.owner }}/{{ tracker.repo }}</li>
+            <li><strong>Generated at:</strong> {{ tracker.generated_at }}</li>
+            <li><strong>Branch verified:</strong> {{ tracker.branch_at_verification }}</li>
+            <li><strong>Model:</strong> {{ tracker.ai_model }}</li>
+            <li><strong>Counts:</strong>
+                M={{ tracker.modules|length }},
+                I={{ tracker.infra_gaps|length }},
+                F={{ tracker.features|length }},
+                E={{ tracker.external_systems|length }},
+                Q={{ tracker.questions|length }},
+                N={{ tracker.next_actions|length }},
+                Changes={{ tracker.recent_changes|length }}
+            </li>
+        </ul>
+        {% else %}
+        <p class="text-secondary">No tracker saved.</p>
+        {% endif %}
+    </section>
+
+    <section class="tracker-debug-section">
+        <h3>Recent log events (last 100)</h3>
+        <div class="tracker-log-actions">
+            <button type="button" class="btn btn-sm btn-outline" onclick="trackerCopyDebug()">COPY FOR CLAUDE CODE</button>
+        </div>
+        <pre id="tracker-debug-log" class="tracker-debug-log">{% for ev in log_events|reverse %}{{ ev.ts }} {{ ev.event }} {{ ev|tojson }}
+{% endfor %}</pre>
+    </section>
+
+    <p><a href="{{ url_for('tracker_view', owner=selected_owner, name=selected_name) }}" class="btn btn-ghost btn-sm">← BACK TO TRACKER</a></p>
+</div>
+
+{% elif tracker %}
+{# ============================================================ #}
+{# MAIN TRACKER VIEW — 8 TABS                                    #}
+{# ============================================================ #}
+
+{# Status counts header #}
+{% set status_counts = {'functional': 0, 'prototype': 0, 'visual': 0, 'missing': 0} %}
+{% for m in tracker.modules %}{% if status_counts.update({m.status: status_counts[m.status] + 1}) %}{% endif %}{% endfor %}
+
+<div class="tracker-header-stats">
+    <div class="tracker-stat"><span class="chip chip-functional">{{ status_counts.functional }}</span><span class="tracker-stat-label">Functional</span></div>
+    <div class="tracker-stat"><span class="chip chip-prototype">{{ status_counts.prototype }}</span><span class="tracker-stat-label">Prototype</span></div>
+    <div class="tracker-stat"><span class="chip chip-visual">{{ status_counts.visual }}</span><span class="tracker-stat-label">Visual</span></div>
+    <div class="tracker-stat"><span class="chip chip-missing">{{ status_counts.missing }}</span><span class="tracker-stat-label">Missing</span></div>
+    <div class="tracker-stat-divider"></div>
+    {% set p0_actions = tracker.next_actions | selectattr('priority', 'equalto', 'P0') | rejectattr('status', 'equalto', 'shipped') | list %}
+    <div class="tracker-stat"><span class="chip chip-p0">{{ p0_actions|length }}</span><span class="tracker-stat-label">P0 open</span></div>
+    <div class="tracker-stat"><span class="chip chip-code">{{ tracker.infra_gaps|length }}</span><span class="tracker-stat-label">Infra gaps</span></div>
+</div>
+
+{% if validation_errors %}
+<div class="tracker-warning">
+    <strong>⚠ Integrity check found {{ validation_errors|length }} issue(s) in this tracker.</strong>
+    <a href="{{ url_for('tracker_debug', owner=selected_owner, name=selected_name) }}">View debug →</a>
+</div>
+{% endif %}
+
+<div class="tracker-tabs" role="tablist">
+    <button class="tracker-tab active" data-tab="overview" role="tab">Overview</button>
+    <button class="tracker-tab" data-tab="recent" role="tab">Recent <span class="tab-count">{{ tracker.recent_changes|length }}</span></button>
+    <button class="tracker-tab" data-tab="next" role="tab">Next Actions <span class="tab-count">{{ tracker.next_actions|length }}</span></button>
+    <button class="tracker-tab" data-tab="modules" role="tab">Modules <span class="tab-count">{{ tracker.modules|length }}</span></button>
+    <button class="tracker-tab" data-tab="infra" role="tab">Infra Gaps <span class="tab-count">{{ tracker.infra_gaps|length }}</span></button>
+    <button class="tracker-tab" data-tab="features" role="tab">Features <span class="tab-count">{{ tracker.features|length }}</span></button>
+    <button class="tracker-tab" data-tab="external" role="tab">External <span class="tab-count">{{ tracker.external_systems|length }}</span></button>
+    <button class="tracker-tab" data-tab="questions" role="tab">Questions <span class="tab-count">{{ tracker.questions|length }}</span></button>
+</div>
+
+{# ---------- OVERVIEW TAB ---------- #}
+<section class="tracker-panel active" data-panel="overview">
+    {% set recent3 = tracker.recent_changes[:3] %}
+    <div class="tracker-panel-grid">
+        <div class="tracker-card">
+            <h3>What's open right now</h3>
+            {% set p0_open = tracker.next_actions | selectattr('priority', 'equalto', 'P0') | rejectattr('status', 'equalto', 'shipped') | list %}
+            {% if p0_open %}
+            <ul class="tracker-overview-list">
+                {% for n in p0_open %}
+                <li>
+                    <span class="chip chip-p0">P0</span>
+                    <a href="#" class="tracker-jump" data-tab="next" data-row="{{ n.id }}">{{ n.id }}</a>
+                    — {{ n.title }}
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="text-secondary">No P0 actions open. (Check P1 list in Next Actions.)</p>
+            {% endif %}
+            <div class="tracker-card-cta">
+                <button type="button" class="btn btn-sm" onclick="trackerSwitchTab('next')">SHOW ME WHAT TO BUILD NEXT →</button>
+            </div>
+        </div>
+
+        <div class="tracker-card">
+            <h3>What changed recently</h3>
+            {% if recent3 %}
+            <ul class="tracker-overview-list">
+                {% for c in recent3 %}
+                <li>
+                    <span class="chip chip-tone-{{ c.kind }}">{{ c.kind }}</span>
+                    <span class="tracker-date">{{ c.date }}</span>
+                    — {{ c.title }}
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="text-secondary">No recent changes recorded yet.</p>
+            {% endif %}
+            <div class="tracker-card-cta">
+                <button type="button" class="btn btn-sm" onclick="trackerSwitchTab('recent')">FULL CHANGELOG →</button>
+            </div>
+        </div>
+
+        {% if tracker.build_sequence %}
+        <div class="tracker-card">
+            <h3>Recommended build sequence</h3>
+            <ol class="tracker-sequence">
+                {% for s in tracker.build_sequence %}<li>{{ s }}</li>{% endfor %}
+            </ol>
+        </div>
+        {% endif %}
+
+        {% if tracker.rollout_sequence %}
+        <div class="tracker-card">
+            <h3>Recommended rollout sequence</h3>
+            <ol class="tracker-sequence">
+                {% for s in tracker.rollout_sequence %}<li>{{ s }}</li>{% endfor %}
+            </ol>
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+{# ---------- RECENT TAB ---------- #}
+<section class="tracker-panel" data-panel="recent">
+    {% if tracker.recent_changes %}
+    <ol class="tracker-recent-list">
+        {% for c in tracker.recent_changes %}
+        <li class="tracker-recent-item">
+            <div class="tracker-recent-meta">
+                <span class="chip chip-tone-{{ c.kind }}">{{ c.kind }}</span>
+                <span class="tracker-date">{{ c.date }}</span>
+            </div>
+            <div class="tracker-recent-body">
+                <div class="tracker-recent-title">{{ c.title }}</div>
+                <div class="tracker-recent-desc">{{ c.description }}</div>
+                {% if c.related_ids %}
+                <div class="tracker-related">
+                    {% for rid in c.related_ids %}<span class="chip chip-code">{{ rid }}</span>{% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </li>
+        {% endfor %}
+    </ol>
+    {% else %}
+    <p class="text-secondary">No changes recorded yet.</p>
+    {% endif %}
+</section>
+
+{# ---------- NEXT ACTIONS TAB ---------- #}
+<section class="tracker-panel" data-panel="next">
+    <div class="tracker-filters">
+        <span class="tracker-filter-label">Priority:</span>
+        {% for p in ['ALL', 'P0', 'P1', 'P2', 'P3'] %}
+        <button class="tracker-filter-chip {% if p == 'ALL' %}active{% endif %}" data-filter="priority" data-value="{{ p }}">{{ p }}</button>
+        {% endfor %}
+        <span class="tracker-filter-divider">|</span>
+        <span class="tracker-filter-label">Status:</span>
+        <button class="tracker-filter-chip active" data-filter="status" data-value="OPEN">Open</button>
+        <button class="tracker-filter-chip" data-filter="status" data-value="SHIPPED">Show shipped</button>
+        <button class="tracker-filter-chip" data-filter="status" data-value="ALL">All</button>
+    </div>
+
+    {% if tracker.next_actions %}
+    <div class="tracker-next-list">
+        {% for n in tracker.next_actions %}
+        <article class="tracker-next-card {% if n.status == 'shipped' %}is-shipped{% endif %}"
+                 id="row-{{ n.id }}"
+                 data-priority="{{ n.priority }}"
+                 data-status="{{ n.status or 'todo' }}">
+            <header class="tracker-next-header">
+                <div class="tracker-next-id">
+                    <span class="chip chip-code">{{ n.id }}</span>
+                    <span class="chip chip-p{{ n.priority|lower if n.priority != '—' else 'none' }}">{{ n.priority }}</span>
+                    <span class="chip chip-effort" title="{{ meta.EFFORT_META.get(n.effort, {}).get('hint', '') }}">{{ n.effort }}</span>
+                    <span class="chip chip-tone-{{ n.status or 'todo' }}">{{ meta.NEXT_ACTION_STATUS_META.get(n.status or 'todo', {}).get('label', n.status or 'todo') }}</span>
+                </div>
+                <h3 class="tracker-next-title">{{ n.title }}</h3>
+            </header>
+            <p class="tracker-next-why"><strong>Why:</strong> {{ n.why }}</p>
+            {% if n.related_ids %}
+            <div class="tracker-related">
+                <span class="tracker-related-label">touches</span>
+                {% for rid in n.related_ids %}<span class="chip chip-code">{{ rid }}</span>{% endfor %}
+            </div>
+            {% endif %}
+            {% if n.depends_on %}
+            <div class="tracker-related">
+                <span class="tracker-related-label">depends on</span>
+                {% for did in n.depends_on %}<span class="chip chip-code">{{ did }}</span>{% endfor %}
+            </div>
+            {% endif %}
+            {% if n.status_note %}
+            <p class="tracker-status-note">{{ n.status_note }}</p>
+            {% endif %}
+            <div class="tracker-next-prompt">
+                <div class="tracker-next-prompt-actions">
+                    <button type="button" class="btn btn-sm btn-primary tracker-copy-btn"
+                            data-action-id="{{ n.id }}"
+                            data-owner="{{ tracker.owner }}"
+                            data-repo="{{ tracker.repo }}">COPY PROMPT</button>
+                    <button type="button" class="btn btn-sm btn-outline tracker-toggle-prompt" data-target="prompt-{{ n.id }}">SHOW PROMPT</button>
+                </div>
+                <pre id="prompt-{{ n.id }}" class="tracker-prompt-body" hidden>{{ n.prompt }}</pre>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-secondary">No next actions yet.</p>
+    {% endif %}
+</section>
+
+{# ---------- MODULES TAB ---------- #}
+<section class="tracker-panel" data-panel="modules">
+    <div class="tracker-filters">
+        <input type="search" id="tracker-module-search" class="tracker-search" placeholder="Search modules…">
+        <span class="tracker-filter-divider">|</span>
+        <span class="tracker-filter-label">Status:</span>
+        {% for s in ['ALL', 'functional', 'prototype', 'visual', 'missing'] %}
+        <button class="tracker-filter-chip {% if s == 'ALL' %}active{% endif %}" data-filter="mod-status" data-value="{{ s }}">{{ s }}</button>
+        {% endfor %}
+    </div>
+
+    {% if tracker.modules %}
+    {% set cats = tracker.modules | map(attribute='category') | unique | list %}
+    {% for cat in cats %}
+    <div class="tracker-module-group" data-category="{{ cat }}">
+        <h3 class="tracker-module-group-title">{{ cat or 'Uncategorised' }}</h3>
+        <div class="tracker-module-list">
+            {% for m in tracker.modules if m.category == cat %}
+            <article class="tracker-module-card" data-status="{{ m.status }}" data-name="{{ m.name|lower }}" id="row-{{ m.id }}">
+                <header class="tracker-module-header">
+                    <span class="chip chip-code">{{ m.id }}</span>
+                    <span class="chip chip-{{ m.status }}">{{ meta.STATUS_META.get(m.status, {}).get('label', m.status) }}</span>
+                    {% if m.priority and m.priority != '—' %}
+                    <span class="chip chip-p{{ m.priority|lower }}">{{ m.priority }}</span>
+                    {% endif %}
+                </header>
+                <h4 class="tracker-module-name">{{ m.name }}</h4>
+                {% if m.routes %}
+                <div class="tracker-module-routes">
+                    {% for route in m.routes %}<code>{{ route }}</code>{% endfor %}
+                </div>
+                {% endif %}
+                <p class="tracker-module-notes">{{ m.notes }}</p>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="text-secondary">No modules listed.</p>
+    {% endif %}
+</section>
+
+{# ---------- INFRA GAPS TAB ---------- #}
+<section class="tracker-panel" data-panel="infra">
+    {% if tracker.infra_gaps %}
+    <div class="tracker-infra-list">
+        {% for g in tracker.infra_gaps %}
+        <article class="tracker-infra-card" id="row-{{ g.id }}">
+            <header class="tracker-infra-header">
+                <span class="chip chip-code">{{ g.id }}</span>
+                <span class="chip chip-p{{ g.priority|lower if g.priority != '—' else 'none' }}">{{ g.priority }}</span>
+            </header>
+            <h3 class="tracker-infra-name">{{ g.name }}</h3>
+            <p class="tracker-infra-desc">{{ g.description }}</p>
+            {% if g.blocks %}
+            <div class="tracker-related">
+                <span class="tracker-related-label">blocks</span>
+                {% for mid in g.blocks %}<span class="chip chip-code">{{ mid }}</span>{% endfor %}
+            </div>
+            {% endif %}
+        </article>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-secondary">No infra gaps recorded. (Either the repo is solid, or the model hasn't found any worth listing — regenerate after a code change if you think one's missing.)</p>
+    {% endif %}
+</section>
+
+{# ---------- FEATURES TAB ---------- #}
+<section class="tracker-panel" data-panel="features">
+    {% if tracker.features %}
+    <div class="tracker-feature-list">
+        {% for f in tracker.features %}
+        <article class="tracker-feature-card" id="row-{{ f.id }}">
+            <header class="tracker-feature-header">
+                <span class="chip chip-code">{{ f.id }}</span>
+                <span class="chip {{ meta.FEATURE_STATUS_META.get(f.status, {}).get('chip', 'chip-p3') }}">{{ f.status }}</span>
+            </header>
+            <h3 class="tracker-feature-name">{{ f.name }}</h3>
+            <div class="tracker-feature-priorities">
+                <span class="tracker-priority-pair">
+                    <span class="tracker-priority-label">build</span>
+                    <span class="chip chip-p{{ f.build_priority|lower if f.build_priority != '—' else 'none' }}">{{ f.build_priority }}</span>
+                </span>
+                <span class="tracker-priority-pair">
+                    <span class="tracker-priority-label">rollout</span>
+                    <span class="chip chip-p{{ f.roll_priority|lower if f.roll_priority != '—' else 'none' }}">{{ f.roll_priority }}</span>
+                </span>
+            </div>
+            <p class="tracker-feature-take">{{ f.take }}</p>
+            {% if f.modules %}
+            <div class="tracker-related">
+                <span class="tracker-related-label">touches</span>
+                {% for mid in f.modules %}<span class="chip chip-code">{{ mid }}</span>{% endfor %}
+            </div>
+            {% endif %}
+            {% if f.spec %}<div class="tracker-feature-spec">Spec: <code>{{ f.spec }}</code></div>{% endif %}
+            {% if f.built_note %}<p class="tracker-built-note">{{ f.built_note }}</p>{% endif %}
+        </article>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-secondary">No feature specs yet. Add files under <code>docs/specs/</code> in the repo and regenerate.</p>
+    {% endif %}
+</section>
+
+{# ---------- EXTERNAL SYSTEMS TAB ---------- #}
+<section class="tracker-panel" data-panel="external">
+    {% if tracker.external_systems %}
+    <div class="tracker-external-list">
+        {% for e in tracker.external_systems %}
+        <article class="tracker-external-card" id="row-{{ e.id }}">
+            <header class="tracker-external-header">
+                <span class="chip chip-code">{{ e.id }}</span>
+                <span class="chip {{ meta.EXTERNAL_MODE_META.get(e.mode, {}).get('chip', 'chip-p3') }}">{{ e.mode }}</span>
+            </header>
+            <h3 class="tracker-external-name">{{ e.name }}</h3>
+            <p class="tracker-external-what">{{ e.what }}</p>
+            <p class="tracker-external-migration"><strong>Setup:</strong> {{ e.migration }}</p>
+        </article>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-secondary">No external systems recorded.</p>
+    {% endif %}
+</section>
+
+{# ---------- QUESTIONS TAB ---------- #}
+<section class="tracker-panel" data-panel="questions">
+    {% if tracker.questions %}
+    {% set groups = tracker.questions | map(attribute='group') | unique | list %}
+    {% for grp in groups %}
+    <div class="tracker-question-group">
+        <h3 class="tracker-question-group-title">{{ grp or 'General' }}</h3>
+        <ul class="tracker-question-list">
+            {% for q in tracker.questions if q.group == grp %}
+            <li id="row-{{ q.id }}">
+                <span class="chip chip-code">{{ q.id }}</span>
+                {{ q.text }}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="text-secondary">No open questions recorded.</p>
+    {% endif %}
+</section>
+
+{% endif %}
+
+<script src="{{ url_for('static', filename='js/tracker.js') }}"></script>
+
+<script>
+function trackerNav(value) {
+    if (!value) return;
+    var parts = value.split('/');
+    if (parts.length === 2) {
+        window.location.href = '/tracker/' + parts[0] + '/' + parts[1];
+    }
+}
+</script>
+
+{% endblock %}
