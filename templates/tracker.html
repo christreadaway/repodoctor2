@@ -2,6 +2,107 @@
 {% block title %}RepoDoctor — Tracker{% endblock %}
 {% block content %}
 
+{# ============================================================
+   Macros: per-row Claude Code prompt + copy button.
+   Each non-action row gets a generated prompt that names the IDs
+   the work touches, links to the source docs, lists the steps,
+   and closes with an acceptance criterion.
+   ============================================================ #}
+{% macro prompt_row(row_kind, row_id, prompt_text, owner, repo) %}
+<div class="tracker-row-prompt">
+    <div class="tracker-row-prompt-actions">
+        <button type="button" class="btn btn-sm btn-primary tracker-copy-btn"
+                data-action-id="{{ row_id }}"
+                data-owner="{{ owner }}"
+                data-repo="{{ repo }}">COPY PROMPT</button>
+        <button type="button" class="btn btn-sm btn-outline tracker-toggle-prompt"
+                data-target="prompt-{{ row_id }}">SHOW PROMPT</button>
+    </div>
+    <pre id="prompt-{{ row_id }}" class="tracker-prompt-body" hidden>{{ prompt_text }}</pre>
+</div>
+{% endmacro %}
+
+{% macro module_prompt(m, repo_full_name) -%}
+Goal: bring module {{ m.id }} ({{ m.name }}) to fully functional status.
+
+Context for this repo ({{ repo_full_name }}):
+- Module ID: {{ m.id }}
+- Current status: {{ m.status }}
+- Priority: {{ m.priority }}
+- Routes/paths: {{ m.routes | join(', ') if m.routes else '(none listed)' }}
+- Notes: {{ m.notes or '(none)' }}
+
+Steps:
+1. Open PRODUCT_SPEC.md, PROJECT_STATUS.md, and SESSION_NOTES.md to confirm the latest context for {{ m.id }}.
+2. Open the route(s) above and audit what is wired vs. what is stubbed.
+3. Implement the missing pieces per the notes. Keep changes scoped to {{ m.id }} unless related rows in the tracker explicitly require otherwise.
+4. Add tests covering the new behavior; run the full test suite before finishing.
+5. Append a SESSION_NOTES.md entry summarising what changed and which tracker rows should flip status.
+
+Acceptance: {{ m.id }} can be flipped to status "functional" with no new infra gaps introduced, all tests green, and a Recent entry queued for the tracker.
+{%- endmacro %}
+
+{% macro infra_prompt(g, repo_full_name) -%}
+Goal: resolve infra gap {{ g.id }} ({{ g.name }}).
+
+Context for {{ repo_full_name }}:
+- Gap ID: {{ g.id }}
+- Priority: {{ g.priority }}
+- Blocks modules: {{ g.blocks | join(', ') if g.blocks else '(none listed)' }}
+- Description: {{ g.description or '(none)' }}
+
+Steps:
+1. Read PRODUCT_SPEC.md and PROJECT_STATUS.md, then locate where the gap surfaces in the codebase.
+2. Implement the missing infrastructure (Cloud Function / env var / config file / rules deploy / etc. as the description indicates).
+3. Verify each blocked module above actually flips from prototype/missing to functional once the gap closes.
+4. Run the test suite. Add tests for the new infra plumbing where it's testable.
+5. Append a SESSION_NOTES.md entry; the tracker's Recent feed should get an "unblocked" entry referencing {{ g.id }} and every M-ID it touches.
+
+Acceptance: {{ g.id }} is resolved (blocks list empty), every previously-blocked module compiles and runs against real backends, and the change is captured in SESSION_NOTES.
+{%- endmacro %}
+
+{% macro feature_prompt(f, repo_full_name) -%}
+Goal: advance feature {{ f.id }} ({{ f.name }}) toward "Shipped".
+
+Context for {{ repo_full_name }}:
+- Feature ID: {{ f.id }}
+- Current status: {{ f.status }}
+- Build priority: {{ f.build_priority }} · Rollout priority: {{ f.roll_priority }}
+- Touches modules: {{ f.modules | join(', ') if f.modules else '(none listed)' }}
+- Spec: {{ f.spec or '(no spec doc — write one first under docs/specs/)' }}
+- Take: {{ f.take or '(none)' }}
+{% if f.built_note %}- Build note: {{ f.built_note }}{% endif %}
+
+Steps:
+1. Read the spec at {{ f.spec or 'docs/specs/' }} and PRODUCT_SPEC.md / PROJECT_STATUS.md.
+2. Identify the smallest shippable slice that flips {{ f.id }} from {{ f.status }} to the next state (Proposed → In Progress → Shipped).
+3. Implement that slice. Touch only the modules listed above unless the spec requires otherwise.
+4. Add tests; run the full suite.
+5. Append SESSION_NOTES.md describing what landed and queue a Recent entry referencing {{ f.id }}.
+
+Acceptance: the smallest slice is in main, tests green, and the tracker can be re-generated with {{ f.id }} status advanced.
+{%- endmacro %}
+
+{% macro external_prompt(e, repo_full_name) -%}
+Goal: configure / verify external system {{ e.id }} ({{ e.name }}).
+
+Context for {{ repo_full_name }}:
+- System ID: {{ e.id }}
+- Mode: {{ e.mode }}
+- What it does for the app: {{ e.what or '(none)' }}
+- Setup notes: {{ e.migration or '(none)' }}
+
+Steps:
+1. Read PRODUCT_SPEC.md and the setup notes above. Identify the env vars, config files, or admin steps required.
+2. Add the configuration scaffolding the app needs (env var loaders, init code, dependency in package.json / requirements.txt if missing).
+3. Smoke-test the integration end-to-end: a real call from the app to the external service.
+4. Document the setup steps in PRODUCT_SPEC.md / a dedicated SETUP_*.md so future sessions don't redo this discovery.
+5. Append SESSION_NOTES.md; queue a Recent entry referencing {{ e.id }} if a status changed.
+
+Acceptance: the external system is reachable from the app under realistic config, setup is documented, and the tracker can flip {{ e.id }} mode if appropriate.
+{%- endmacro %}
+
+
 <div class="page-header">
     <div class="page-header-title">
         <h1>Codebase Tracker</h1>
@@ -159,14 +260,27 @@
 {% endfor %}
 
 <div class="tracker-header-stats">
-    <div class="tracker-stat"><span class="chip chip-functional">{{ status_counts.functional }}</span><span class="tracker-stat-label">Functional</span></div>
-    <div class="tracker-stat"><span class="chip chip-prototype">{{ status_counts.prototype }}</span><span class="tracker-stat-label">Prototype</span></div>
-    <div class="tracker-stat"><span class="chip chip-visual">{{ status_counts.visual }}</span><span class="tracker-stat-label">Visual</span></div>
-    <div class="tracker-stat"><span class="chip chip-missing">{{ status_counts.missing }}</span><span class="tracker-stat-label">Missing</span></div>
+    <button type="button" class="tracker-stat tracker-stat-jump" data-jump-tab="modules" data-jump-filter="mod-status" data-jump-value="functional" title="Show functional modules">
+        <span class="chip chip-functional">{{ status_counts.functional }}</span><span class="tracker-stat-label">Functional</span>
+    </button>
+    <button type="button" class="tracker-stat tracker-stat-jump" data-jump-tab="modules" data-jump-filter="mod-status" data-jump-value="prototype" title="Show prototype modules">
+        <span class="chip chip-prototype">{{ status_counts.prototype }}</span><span class="tracker-stat-label">Prototype</span>
+    </button>
+    <button type="button" class="tracker-stat tracker-stat-jump" data-jump-tab="modules" data-jump-filter="mod-status" data-jump-value="visual" title="Show visual-only modules">
+        <span class="chip chip-visual">{{ status_counts.visual }}</span><span class="tracker-stat-label">Visual</span>
+    </button>
+    <button type="button" class="tracker-stat tracker-stat-jump" data-jump-tab="modules" data-jump-filter="mod-status" data-jump-value="missing" title="Show missing modules">
+        <span class="chip chip-missing">{{ status_counts.missing }}</span><span class="tracker-stat-label">Missing</span>
+    </button>
     <div class="tracker-stat-divider"></div>
-    {% set p0_actions = tracker.next_actions | selectattr('priority', 'equalto', 'P0') | rejectattr('status', 'equalto', 'shipped') | list %}
-    <div class="tracker-stat"><span class="chip chip-p0">{{ p0_actions|length }}</span><span class="tracker-stat-label">P0 open</span></div>
-    <div class="tracker-stat"><span class="chip chip-code">{{ tracker.infra_gaps|length }}</span><span class="tracker-stat-label">Infra gaps</span></div>
+    {% set hidden_statuses = ['shipped', 'dismissed'] %}
+    {% set p0_actions = tracker.next_actions | selectattr('priority', 'equalto', 'P0') | rejectattr('status', 'in', hidden_statuses) | list %}
+    <button type="button" class="tracker-stat tracker-stat-jump" data-jump-tab="next" data-jump-filter="priority" data-jump-value="P0" title="Open P0 next actions">
+        <span class="chip chip-p0">{{ p0_actions|length }}</span><span class="tracker-stat-label">P0 open</span>
+    </button>
+    <button type="button" class="tracker-stat tracker-stat-jump" data-jump-tab="infra" title="View infra gaps">
+        <span class="chip chip-code">{{ tracker.infra_gaps|length }}</span><span class="tracker-stat-label">Infra gaps</span>
+    </button>
 </div>
 
 {% if validation_errors %}
@@ -176,10 +290,17 @@
 </div>
 {% endif %}
 
+{# Pre-compute next-action partitions so the tab counts and content stay in sync.
+   "Open" = anything not shipped + not dismissed. Blocked items stay in Open so the user
+   can find them with the dedicated filter chip. #}
+{% set open_actions = tracker.next_actions | rejectattr('status', 'in', ['shipped', 'dismissed']) | list %}
+{% set shipped_actions = tracker.next_actions | selectattr('status', 'equalto', 'shipped') | list %}
+
 <div class="tracker-tabs" role="tablist">
     <button class="tracker-tab active" data-tab="overview" role="tab">Overview</button>
     <button class="tracker-tab" data-tab="recent" role="tab">Recent <span class="tab-count">{{ tracker.recent_changes|length }}</span></button>
-    <button class="tracker-tab" data-tab="next" role="tab">Next Actions <span class="tab-count">{{ tracker.next_actions|length }}</span></button>
+    <button class="tracker-tab" data-tab="next" role="tab">Next Actions <span class="tab-count">{{ open_actions|length }}</span></button>
+    <button class="tracker-tab" data-tab="shipped" role="tab">Shipped <span class="tab-count">{{ shipped_actions|length }}</span></button>
     <button class="tracker-tab" data-tab="modules" role="tab">Modules <span class="tab-count">{{ tracker.modules|length }}</span></button>
     <button class="tracker-tab" data-tab="infra" role="tab">Infra Gaps <span class="tab-count">{{ tracker.infra_gaps|length }}</span></button>
     <button class="tracker-tab" data-tab="features" role="tab">Features <span class="tab-count">{{ tracker.features|length }}</span></button>
@@ -280,6 +401,69 @@
 </section>
 
 {# ---------- NEXT ACTIONS TAB ---------- #}
+{% macro render_next_card(n) %}
+<article class="tracker-next-card status-{{ n.status or 'todo' }}"
+         id="row-{{ n.id }}"
+         data-priority="{{ n.priority }}"
+         data-status="{{ n.status or 'todo' }}">
+    <header class="tracker-next-header">
+        <div class="tracker-next-id">
+            <span class="chip chip-code">{{ n.id }}</span>
+            <span class="chip chip-p{{ n.priority|lower if n.priority != '—' else 'none' }}">{{ n.priority }}</span>
+            <span class="chip chip-effort" title="{{ meta.EFFORT_META.get(n.effort, {}).get('hint', '') }}">{{ n.effort }}</span>
+            <span class="chip chip-tone-{{ n.status or 'todo' }}">{{ meta.NEXT_ACTION_STATUS_META.get(n.status or 'todo', {}).get('label', n.status or 'todo') }}</span>
+        </div>
+        <h3 class="tracker-next-title">{{ n.title }}</h3>
+    </header>
+    <p class="tracker-next-why"><strong>Why:</strong> {{ n.why }}</p>
+    {% if n.related_ids %}
+    <div class="tracker-related">
+        <span class="tracker-related-label">touches</span>
+        {% for rid in n.related_ids %}<span class="chip chip-code">{{ rid }}</span>{% endfor %}
+    </div>
+    {% endif %}
+    {% if n.depends_on %}
+    <div class="tracker-related">
+        <span class="tracker-related-label">depends on</span>
+        {% for did in n.depends_on %}<span class="chip chip-code">{{ did }}</span>{% endfor %}
+    </div>
+    {% endif %}
+    {% if n.status_note %}
+    <p class="tracker-status-note">📌 {{ n.status_note }}</p>
+    {% endif %}
+    <div class="tracker-next-prompt">
+        <div class="tracker-next-prompt-actions">
+            <button type="button" class="btn btn-sm btn-primary tracker-copy-btn"
+                    data-action-id="{{ n.id }}"
+                    data-owner="{{ tracker.owner }}"
+                    data-repo="{{ tracker.repo }}">COPY PROMPT</button>
+            <button type="button" class="btn btn-sm btn-outline tracker-toggle-prompt" data-target="prompt-{{ n.id }}">SHOW PROMPT</button>
+        </div>
+        <pre id="prompt-{{ n.id }}" class="tracker-prompt-body" hidden>{{ n.prompt }}</pre>
+    </div>
+
+    {# Status controls — each card carries its own little form so the user
+       can mark blocked / shipped / dismissed without leaving the page. #}
+    <form method="POST"
+          action="{{ url_for('tracker_action_status', owner=tracker.owner, name=tracker.repo, action_id=n.id) }}"
+          class="tracker-action-status-form">
+        <label class="tracker-action-status-label" for="status-{{ n.id }}">Set status</label>
+        <select name="status" id="status-{{ n.id }}" class="tracker-action-status-select">
+            {% for opt in ['todo', 'in_progress', 'awaiting_deploy', 'shipped', 'blocked', 'dismissed'] %}
+            <option value="{{ opt }}" {% if (n.status or 'todo') == opt %}selected{% endif %}>
+                {{ meta.NEXT_ACTION_STATUS_META.get(opt, {}).get('label', opt) }}
+            </option>
+            {% endfor %}
+        </select>
+        <input type="text" name="status_note" class="tracker-action-status-note"
+               value="{{ n.status_note or '' }}"
+               placeholder="Note (e.g. why blocked) — optional"
+               maxlength="500">
+        <button type="submit" class="btn btn-sm">UPDATE</button>
+    </form>
+</article>
+{% endmacro %}
+
 <section class="tracker-panel" data-panel="next">
     <div class="tracker-filters">
         <span class="tracker-filter-label">Priority:</span>
@@ -289,57 +473,35 @@
         <span class="tracker-filter-divider">|</span>
         <span class="tracker-filter-label">Status:</span>
         <button class="tracker-filter-chip active" data-filter="status" data-value="OPEN">Open</button>
-        <button class="tracker-filter-chip" data-filter="status" data-value="SHIPPED">Show shipped</button>
+        <button class="tracker-filter-chip" data-filter="status" data-value="BLOCKED">Blocked only</button>
+        <button class="tracker-filter-chip" data-filter="status" data-value="DISMISSED">Dismissed</button>
         <button class="tracker-filter-chip" data-filter="status" data-value="ALL">All</button>
     </div>
 
-    {% if tracker.next_actions %}
+    {% if open_actions or (tracker.next_actions | selectattr('status', 'in', ['dismissed']) | list) %}
     <div class="tracker-next-list">
-        {% for n in tracker.next_actions %}
-        <article class="tracker-next-card {% if n.status == 'shipped' %}is-shipped{% endif %}"
-                 id="row-{{ n.id }}"
-                 data-priority="{{ n.priority }}"
-                 data-status="{{ n.status or 'todo' }}">
-            <header class="tracker-next-header">
-                <div class="tracker-next-id">
-                    <span class="chip chip-code">{{ n.id }}</span>
-                    <span class="chip chip-p{{ n.priority|lower if n.priority != '—' else 'none' }}">{{ n.priority }}</span>
-                    <span class="chip chip-effort" title="{{ meta.EFFORT_META.get(n.effort, {}).get('hint', '') }}">{{ n.effort }}</span>
-                    <span class="chip chip-tone-{{ n.status or 'todo' }}">{{ meta.NEXT_ACTION_STATUS_META.get(n.status or 'todo', {}).get('label', n.status or 'todo') }}</span>
-                </div>
-                <h3 class="tracker-next-title">{{ n.title }}</h3>
-            </header>
-            <p class="tracker-next-why"><strong>Why:</strong> {{ n.why }}</p>
-            {% if n.related_ids %}
-            <div class="tracker-related">
-                <span class="tracker-related-label">touches</span>
-                {% for rid in n.related_ids %}<span class="chip chip-code">{{ rid }}</span>{% endfor %}
-            </div>
-            {% endif %}
-            {% if n.depends_on %}
-            <div class="tracker-related">
-                <span class="tracker-related-label">depends on</span>
-                {% for did in n.depends_on %}<span class="chip chip-code">{{ did }}</span>{% endfor %}
-            </div>
-            {% endif %}
-            {% if n.status_note %}
-            <p class="tracker-status-note">{{ n.status_note }}</p>
-            {% endif %}
-            <div class="tracker-next-prompt">
-                <div class="tracker-next-prompt-actions">
-                    <button type="button" class="btn btn-sm btn-primary tracker-copy-btn"
-                            data-action-id="{{ n.id }}"
-                            data-owner="{{ tracker.owner }}"
-                            data-repo="{{ tracker.repo }}">COPY PROMPT</button>
-                    <button type="button" class="btn btn-sm btn-outline tracker-toggle-prompt" data-target="prompt-{{ n.id }}">SHOW PROMPT</button>
-                </div>
-                <pre id="prompt-{{ n.id }}" class="tracker-prompt-body" hidden>{{ n.prompt }}</pre>
-            </div>
-        </article>
+        {# Render every non-shipped action. Shipped items live in their own tab.
+           The Open filter still excludes dismissed by default. #}
+        {% for n in tracker.next_actions if (n.status or 'todo') != 'shipped' %}
+            {{ render_next_card(n) }}
         {% endfor %}
     </div>
     {% else %}
-    <p class="text-secondary">No next actions yet.</p>
+    <p class="text-secondary">No open next actions. Check the Shipped tab for completed work.</p>
+    {% endif %}
+</section>
+
+{# ---------- SHIPPED TAB ---------- #}
+<section class="tracker-panel" data-panel="shipped">
+    {% if shipped_actions %}
+    <p class="projects-hint">Completed next-actions. They stay here as a record — IDs (N1, N2…) keep pointing at them in Recent and from other rows.</p>
+    <div class="tracker-next-list">
+        {% for n in shipped_actions %}
+            {{ render_next_card(n) }}
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-secondary">Nothing shipped yet. When you mark a next-action as <strong>shipped</strong>, it lands here.</p>
     {% endif %}
 </section>
 
@@ -376,6 +538,7 @@
                 </div>
                 {% endif %}
                 <p class="tracker-module-notes">{{ m.notes }}</p>
+                {{ prompt_row('module', m.id, module_prompt(m, tracker.owner ~ '/' ~ tracker.repo), tracker.owner, tracker.repo) }}
             </article>
             {% endfor %}
         </div>
@@ -404,6 +567,7 @@
                 {% for mid in g.blocks %}<span class="chip chip-code">{{ mid }}</span>{% endfor %}
             </div>
             {% endif %}
+            {{ prompt_row('infra', g.id, infra_prompt(g, tracker.owner ~ '/' ~ tracker.repo), tracker.owner, tracker.repo) }}
         </article>
         {% endfor %}
     </div>
@@ -442,6 +606,7 @@
             {% endif %}
             {% if f.spec %}<div class="tracker-feature-spec">Spec: <code>{{ f.spec }}</code></div>{% endif %}
             {% if f.built_note %}<p class="tracker-built-note">{{ f.built_note }}</p>{% endif %}
+            {{ prompt_row('feature', f.id, feature_prompt(f, tracker.owner ~ '/' ~ tracker.repo), tracker.owner, tracker.repo) }}
         </article>
         {% endfor %}
     </div>
@@ -463,6 +628,7 @@
             <h3 class="tracker-external-name">{{ e.name }}</h3>
             <p class="tracker-external-what">{{ e.what }}</p>
             <p class="tracker-external-migration"><strong>Setup:</strong> {{ e.migration }}</p>
+            {{ prompt_row('external', e.id, external_prompt(e, tracker.owner ~ '/' ~ tracker.repo), tracker.owner, tracker.repo) }}
         </article>
         {% endfor %}
     </div>

@@ -116,18 +116,26 @@
   });
 
   // ---------- Next-action filters ----------
+  // Status filter values:
+  //   OPEN      = neither shipped nor dismissed (default view)
+  //   BLOCKED   = status == 'blocked'
+  //   DISMISSED = status == 'dismissed'
+  //   ALL       = show everything (including shipped + dismissed)
+  // Note: shipped items live in their own tab now and are excluded from the
+  // Next Actions panel template-side, so SHIPPED filter is no longer needed here.
   function applyNextFilters() {
-    var prioBtn = document.querySelector('.tracker-filter-chip.active[data-filter="priority"]');
-    var statusBtn = document.querySelector('.tracker-filter-chip.active[data-filter="status"]');
+    var prioBtn = document.querySelector('.tracker-panel[data-panel="next"] .tracker-filter-chip.active[data-filter="priority"]');
+    var statusBtn = document.querySelector('.tracker-panel[data-panel="next"] .tracker-filter-chip.active[data-filter="status"]');
     var prio = prioBtn ? prioBtn.dataset.value : "ALL";
     var stat = statusBtn ? statusBtn.dataset.value : "OPEN";
-    document.querySelectorAll(".tracker-next-card").forEach(function (card) {
+    document.querySelectorAll('.tracker-panel[data-panel="next"] .tracker-next-card').forEach(function (card) {
       var rowPrio = card.dataset.priority;
       var rowStat = card.dataset.status;
       var prioOk = prio === "ALL" || rowPrio === prio;
       var statOk = true;
-      if (stat === "OPEN") statOk = rowStat !== "shipped";
-      else if (stat === "SHIPPED") statOk = rowStat === "shipped";
+      if (stat === "OPEN") statOk = (rowStat !== "shipped" && rowStat !== "dismissed");
+      else if (stat === "BLOCKED") statOk = rowStat === "blocked";
+      else if (stat === "DISMISSED") statOk = rowStat === "dismissed";
       // ALL → show everything
       card.style.display = (prioOk && statOk) ? "" : "none";
     });
@@ -158,12 +166,41 @@
     var chip = e.target.closest(".tracker-filter-chip");
     if (!chip) return;
     var group = chip.dataset.filter;
-    document.querySelectorAll('.tracker-filter-chip[data-filter="' + group + '"]')
+    // Scope the active-class toggle to the same panel so filter chips in
+    // Next Actions don't fight filter chips in Modules.
+    var scope = chip.closest(".tracker-panel") || document;
+    scope.querySelectorAll('.tracker-filter-chip[data-filter="' + group + '"]')
       .forEach(function (c) { c.classList.remove("active"); });
     chip.classList.add("active");
     logEvent("filter_change", { filter: group, value: chip.dataset.value });
     if (group === "priority" || group === "status") applyNextFilters();
     if (group === "mod-status") applyModuleFilters();
+  });
+
+  // ---------- Clickable headline stats ----------
+  // Each stat in the page header jumps to the right tab and pre-applies
+  // the filter that matches its label (e.g. "9 P0 open" → Next Actions tab
+  // with priority=P0 and status=Open).
+  function jumpToFilter(tab, filterKey, filterValue) {
+    switchTab(tab);
+    if (!filterKey) return;
+    var scope = document.querySelector('.tracker-panel[data-panel="' + tab + '"]') || document;
+    var target = scope.querySelector(
+      '.tracker-filter-chip[data-filter="' + filterKey + '"][data-value="' + filterValue + '"]'
+    );
+    if (target) {
+      // simulate the same click handler that drives chip-active state
+      target.click();
+    }
+  }
+
+  document.addEventListener("click", function (e) {
+    var stat = e.target.closest(".tracker-stat-jump");
+    if (!stat) return;
+    var tab = stat.dataset.jumpTab;
+    var filterKey = stat.dataset.jumpFilter;
+    var filterValue = stat.dataset.jumpValue;
+    if (tab) jumpToFilter(tab, filterKey, filterValue);
   });
 
   var search = document.getElementById("tracker-module-search");

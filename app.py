@@ -1422,6 +1422,46 @@ def tracker_copy_event(owner, name):
     return jsonify({"ok": True})
 
 
+@app.route("/tracker/<owner>/<name>/action/<action_id>/status", methods=["POST"])
+@_require_auth
+def tracker_action_status(owner, name, action_id):
+    """Update a single next-action's status (and optional status_note).
+    Used by the BLOCK / DISMISS / mark-shipped buttons on each card."""
+    new_status = (request.form.get("status") or "").strip()
+    new_note = request.form.get("status_note", "").strip()
+    if new_status not in tracker_data.NEXT_ACTION_STATUSES:
+        flash(f"Bad status '{new_status}'.", "error")
+        return redirect(url_for("tracker_view", owner=owner, name=name))
+
+    tracker = models.get_tracker(owner, name)
+    if not tracker:
+        flash("No tracker found for this repo.", "error")
+        return redirect(url_for("tracker_view", owner=owner, name=name))
+
+    updated = False
+    for n in tracker.get("next_actions") or []:
+        if n.get("id") == action_id:
+            n["status"] = new_status
+            if new_note or new_status in ("blocked", "dismissed"):
+                # Always record a note for blocked/dismissed so the UI
+                # can show WHY. Empty string is fine if user didn't supply.
+                n["status_note"] = new_note
+            updated = True
+            break
+    if not updated:
+        flash(f"Action {action_id} not found.", "error")
+        return redirect(url_for("tracker_view", owner=owner, name=name))
+
+    models.save_tracker(owner, name, tracker)
+    models.log_tracker_event(
+        "action_status_update",
+        owner=owner, repo=name, action_id=action_id,
+        new_status=new_status, has_note=bool(new_note),
+    )
+    flash(f"{action_id} → {new_status}.", "success")
+    return redirect(url_for("tracker_view", owner=owner, name=name) + f"#row-{action_id}")
+
+
 # =====================================================================
 # COMMENTED OUT — full branch analysis features (will re-enable later)
 # =====================================================================
