@@ -34,10 +34,13 @@ VENDOR_DIRS = {
     ".tox", "bower_components", "site-packages", ".git",
 }
 
-# Truncation budgets — keep prompt under ~50k input tokens on Haiku.
-MAX_DOC_CHARS = 8000
-MAX_TREE_PATHS = 250
-MAX_COMMITS = 50
+# Truncation budgets — keep prompt under ~50k input tokens on Haiku and
+# leave plenty of output room. Complex repos (parentpoint, catholicevents)
+# can push the output to 12K+ tokens once next-action prompts, modules,
+# and recent_changes are populated, so generation runs with max_tokens=16000.
+MAX_DOC_CHARS = 6000
+MAX_TREE_PATHS = 200
+MAX_COMMITS = 40
 MAX_PRIOR_TRACKER_CHARS = 8000
 
 SYSTEM_PROMPT = """You are a codebase analyst producing a structured tracker for a software project, following a strict JSON schema.
@@ -49,7 +52,7 @@ Hard rules:
 1. Return ONLY valid JSON. No markdown fences, no leading prose, no trailing commentary. The first character is `{`.
 2. IDs are stable. If the user supplies a "prior_tracker" object, every ID it contains MUST appear in your response with the same prefix+integer. Add NEW rows with the next unused integer per prefix (e.g. if prior has M1..M7, new modules start at M8).
 3. Never reuse a deleted integer. Always pick max(prefix)+1 for new rows.
-4. Every `next_actions[].prompt` is a complete copy/paste-ready instruction to Claude Code: opens with a one-sentence goal, then numbered steps, then acceptance criteria. Minimum 50 characters. Reference the M/I/F IDs the action touches.
+4. Every `next_actions[].prompt` is a complete copy/paste-ready instruction to Claude Code: opens with a one-sentence goal, then numbered steps, then acceptance criteria. Minimum 50 characters, aim for 200-600 characters — concise but complete. Reference the M/I/F IDs the action touches.
 5. Every `next_actions[].related_ids`, every `infra_gaps[].blocks`, every `features[].modules`, every `recent_changes[].related_ids` must point at IDs you actually defined in this same response. No dangling references.
 6. Status enums are exact strings — never paraphrase:
    - module.status: "functional" | "prototype" | "visual" | "missing"
@@ -338,13 +341,28 @@ def generate_tracker(
                     owner, repo, attempt, max_attempts, model)
         message = client.messages.create(
             model=model,
-            max_tokens=8000,
+            max_tokens=16000,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
         )
         last_raw = message.content[0].text.strip()
         usage["input_tokens"] += message.usage.input_tokens
         usage["output_tokens"] += message.usage.output_tokens
+
+        # Truncation: stop_reason == "max_tokens" means the JSON is cut off
+        # mid-output and no retry will help — fail fast with a clear message.
+        if getattr(message, "stop_reason", None) == "max_tokens":
+            raise TrackerGenerationError(
+                "AI response was truncated (hit the 16000-token output cap). "
+                "This usually means the repo has very rich docs and the model "
+                "tried to emit a too-large tracker in one shot. Options: "
+                "(1) switch to Sonnet in Settings — it has a much larger "
+                "output budget; (2) trim PRODUCT_SPEC.md / SESSION_NOTES.md "
+                "in the source repo to give the model more room; "
+                f"(3) try again — output size varies run to run. "
+                f"Tokens used: input={usage['input_tokens']}, "
+                f"output={usage['output_tokens']}."
+            )
 
         try:
             parsed = extract_json_object(last_raw)
