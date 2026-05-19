@@ -2140,12 +2140,49 @@ tbody tr:hover {
    Repo Overview Table (simplified dashboard)
    ================================================================ */
 
+.scan-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xl);
+  align-items: baseline;
+  margin: var(--space-lg) 0 var(--space-md);
+  padding: 0.85rem 1.1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.summary-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.summary-stat .stat-value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--green-100);
+  font-family: var(--font-mono);
+  line-height: 1;
+}
+
+.summary-stat .stat-value.stat-warning {
+  color: var(--amber-100);
+}
+
+.summary-stat .stat-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .file-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
-  margin-bottom: 1.5rem;
+  margin: 0 0 1.5rem;
   padding: 0.75rem 1rem;
   background: var(--bg-card);
   border: 1px solid var(--border);
