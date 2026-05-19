@@ -1,9 +1,9 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 14 (14 + 14b same-day continuation)
+**Total Sessions Logged:** 14 (14 + 14b + 14c same-day continuation)
 **Date Range:** 2025-02-14 to 2026-05-19
-**Last Updated:** 2026-05-19 (Session 14b)
+**Last Updated:** 2026-05-19 (Session 14c)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
 
@@ -86,6 +86,52 @@ Also fixed a long-standing dashboard spacing bug surfaced this session: the summ
 
 - Branch: `claude/add-project-tracker-L4awW`
 - Status: pushed, second merge to `main` needed after Session 14b production hardening
+
+---
+
+## Session 14c — 2026-05-19 (Validation leniency + type guards)
+
+The Session 14b streaming + 32K bump fixed truncation but exposed a different problem on parentpoint: the validator was too strict for what Claude actually emits. Three categories of failure surfaced, all of them my over-strict reads of the PRD, not real data problems.
+
+### What Was Wrong
+
+1. **`next_action.related_ids` rejected Q-IDs.** Claude was emitting `"related_ids": ["Q1"]` to mean "this action answers question Q1," which is semantically sensible. The PRD §5.5 says M/F/I-only, but in practice the model has a richer mental model. Validation kept failing on perfectly good output.
+
+2. **`next_action.depends_on` rejected anything but N-IDs.** Same story — Claude emits `"depends_on": ["I3"]` to mean "can't ship N5 until I3 is fixed." Architecturally that's true; the validator was just narrow.
+
+3. **`recent_changes` order rejected when the model interleaved dates.** When grouping commits into themes, Claude sometimes emits 2026-05-19, 2026-05-08, 2026-05-12 (i.e., not strictly newest-first). The validator treated this as an error. It's a cosmetic issue — fixable by sorting server-side.
+
+### What We Fixed
+
+1. **`related_ids` and `recent_changes.related_ids`** now accept any in-tracker ID type (M / I / F / E / Q / N). Still rejects IDs that don't exist anywhere in the tracker.
+2. **`depends_on`** accepts any row type, not just N. Cycle detection still walks only N→N edges (other row types can't form action cycles).
+3. **`recent_changes` order** is no longer a validation failure. New `sort_recent_changes()` helper sorts newest-first in place; the generator calls it after parsing and before validating, so save data is always clean.
+
+### Bonus Robustness (audit-found)
+
+A comprehensive audit pass also caught two robustness gaps unrelated to the validation leniency work:
+
+4. **Type-guard AI output.** If Claude ever returned a non-list for a list-typed section (`modules: 42` or `modules: "string"`), the validator would crash on iteration. Now each section is type-checked; a non-list value falls back to the empty default and is logged at warn level. A non-dict top-level response (rare but possible) fails the attempt cleanly with a clear error.
+
+5. **Type-guard `_compact_prior`.** The prior-tracker compaction (which feeds existing IDs to the next generation so they stay stable) was iterating whatever shape was in the loaded tracker file. A hand-edited tracker file with a malformed section would crash here. Now defensively skips non-list sections and non-dict rows.
+
+### Tests
+
+- 43 unit tests pass (up from 39 in Session 14, +1 from 14b). 6 of those skip in the remote test env because the anthropic SDK isn't installed there.
+- New tests cover: Q-IDs in related_ids, mixed-type depends_on, cycle detection across mixed-type graphs, sort idempotency, sort with missing dates, type-guard on malformed sections, _compact_prior on malformed input.
+- Comprehensive audit script (29 checks) exercises validator edge cases, lenient cases, cycle detection, sort helper, and a full storage roundtrip — all green.
+- Template stress test renders a 20-module / 15-action / 18-change tracker (the prompt caps in 14b) cleanly at 91K chars.
+
+### Commits
+
+- `a43a2a2` — validation leniency (related_ids accepts Q/E, depends_on accepts any type, recent_changes auto-sort)
+- `78bf2da` — type guards on AI output and `_compact_prior`
+
+### Lessons
+
+- A strict validator wastes API tokens on retries the model can't satisfy. Lenient where the data is semantically reasonable; strict where it's actually broken.
+- "Cosmetic" issues (sort order, formatting) should be auto-fixed server-side, not bounced back at the user.
+- AI outputs can be malformed in low-frequency but real ways. Type-guarding the parse step costs nothing and prevents 500s.
 
 ---
 

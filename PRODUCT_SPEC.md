@@ -244,14 +244,16 @@ Per-repo deep view that turns each project's docs + code into a structured, navi
 - Output is validated against the §5.5 invariants. Invalid AI output triggers one retry with the validation errors fed back to the model; second failure errors cleanly instead of saving a corrupt tracker.
 - **Truncation handling:** if the model hits the 32K output cap (`stop_reason == "max_tokens"`), generation aborts immediately (no retry, since the next call truncates the same way) with a clear error message suggesting Sonnet or a retry. Token counts surface in the error so the user can see how close they got.
 
-**Integrity validation (PRD §5.5)** — enforced both at save time AND in unit tests:
+**Integrity validation (PRD §5.5 with practical leniency)** — enforced both at save time AND in unit tests:
 
 - Every row ID matches its prefix regex (`/^M\d+$/`, etc.), is unique within its array.
 - Every enum value (status, priority, effort, feature status, change kind, external mode, next-action status) is one of the known constants.
-- Every cross-reference (`infra_gap.blocks`, `feature.modules`, `next_action.related_ids`, `recent_change.related_ids`) points at a real row ID in the same tracker.
-- `next_action.depends_on` is acyclic, never self-references, and points at real next-action IDs.
+- `infra_gap.blocks` and `feature.modules` must point at real module IDs (strict — these have a specific architectural meaning).
+- `next_action.related_ids` and `recent_change.related_ids` may point at any in-tracker ID (M/I/F/E/Q/N) — the PRD's M/F/I-only read was too narrow for the model's natural output (Q for "answers question," E for "uses external system" are both reasonable).
+- `next_action.depends_on` may reference any row type (e.g., "can't ship N5 until I3 is fixed"), is acyclic on the N→N subgraph, and never self-references.
 - `next_action.prompt` is ≥ 50 chars.
-- `recent_change.date` matches `YYYY-MM-DD` and entries are sorted newest-first.
+- `recent_change.date` matches `YYYY-MM-DD`. Sort order is auto-fixed (newest-first) by `sort_recent_changes()` before save instead of being a hard validation failure — the model occasionally interleaves dates when grouping commits and that's cosmetic, not corruption.
+- **Type-guarded AI output:** a non-list value for a list-typed section (rare but possible if the model malforms output) falls back to the empty default and logs a warning rather than crashing the validator. A non-dict top-level response fails the attempt cleanly with a parse error.
 
 **Color-coded chips** (departing from the all-green retro palette):
 
