@@ -5,8 +5,15 @@ Main Flask application.
 Simplified mode: repo overview with branch counts + required file checks.
 """
 
+import datetime
 import os
 import secrets
+
+try:
+    from zoneinfo import ZoneInfo
+    _CENTRAL_TZ = ZoneInfo("America/Chicago")
+except Exception:
+    _CENTRAL_TZ = None
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -25,11 +32,34 @@ import firestore_detector
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 
+
+@app.template_filter("central_time")
+def _central_time(iso_ts):
+    """Format an ISO 8601 UTC timestamp as US Central Time (Chicago).
+
+    Returns 'May 19, 2026 2:47 PM CDT'. Empty string on bad input.
+    Uses the tz abbreviation (CST/CDT) so DST is unambiguous.
+    """
+    if not iso_ts:
+        return ""
+    try:
+        dt = datetime.datetime.fromisoformat(str(iso_ts).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    if _CENTRAL_TZ is not None:
+        dt = dt.astimezone(_CENTRAL_TZ)
+    hour = dt.strftime("%I").lstrip("0") or "12"
+    tz_abbrev = dt.tzname() or "CT"
+    return f"{dt.strftime('%b %d, %Y')} {hour}:{dt.strftime('%M %p')} {tz_abbrev}"
+
+
 # In-memory session state
 _github_client: gh.GitHubClient | None = None
 _credentials: dict | None = None
 _session_cost = models.SessionCost()
-_scan_results: dict | None = None  # Latest scan results
+_scan_results: dict | None = models.get_latest_scan()  # Latest scan, restored on restart
 
 
 GITHUB_AUTH_REMEDY = (
@@ -277,6 +307,7 @@ def scan():
         # "total_branches" is the cross-repo total displayed on the dashboard
         # — excludes henry branches to match the per-repo column.
         "total_branches": sum(r.get("non_henry_branch_count", 0) for r in results),
+        "scanned_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
     models.save_scan(_scan_results)
     models.log_action("scan", "all", "all", f"Scanned {len(results)} repos, {_scan_results['total_branches']} total branches")

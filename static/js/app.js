@@ -900,6 +900,30 @@
   };
 
   // ---------------------------------------------------------------------------
+  // 9b. Scan-form submit feedback
+  //
+  // The Scan button POSTs synchronously and the round trip can take 30–60s
+  // for a large GitHub account (one /branches + /languages + /commits call
+  // per repo). Without feedback, the click felt like it did nothing and
+  // users would click again. Disable + relabel on submit so the click is
+  // visibly acknowledged.
+  // ---------------------------------------------------------------------------
+
+  document.addEventListener("DOMContentLoaded", function () {
+    var scanForms = document.querySelectorAll("form.scan-form");
+    for (var i = 0; i < scanForms.length; i++) {
+      scanForms[i].addEventListener("submit", function (e) {
+        var btn = e.currentTarget.querySelector('button[type="submit"]');
+        if (!btn) return;
+        var loadingText = btn.dataset.loadingText || "WORKING…";
+        btn.disabled = true;
+        btn.classList.add("btn-loading");
+        btn.textContent = loadingText;
+      });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
   // 10. Keyboard Shortcuts & UX Niceties
   // ---------------------------------------------------------------------------
 

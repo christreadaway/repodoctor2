@@ -1672,6 +1672,24 @@ tbody tr:hover {
   border-width: 2px;
 }
 
+/* Buttons in an in-flight state (e.g. during scan submit). */
+.btn.btn-loading {
+  cursor: progress;
+  opacity: 0.75;
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+/* Page-header title block: keeps "Last updated" tucked under the h1. */
+.page-header-title {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.page-header-title .last-scanned {
+  margin-top: 0;
+}
+
 
 /* ================================================================
    Footer — Session Cost
