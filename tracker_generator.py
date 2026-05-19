@@ -62,10 +62,20 @@ Hard rules:
    - next_action.status: "todo" | "in_progress" | "awaiting_deploy" | "shipped"
    - change.kind: "shipped" | "unblocked" | "doc" | "fix" | "blocked"
    - external_system.mode: "Core" | "Integrate" | "Replace" | "Optional"
-7. Be ruthless about scope. A module is a real surface in the app (a route, a page, a domain). Don't list every helper function. 5-25 modules for most repos.
+7. Be ruthless about scope. HARD CAPS — exceeding any of these is a failure of the task:
+   - At most 25 modules. Group sub-screens under one module. Skip helpers and one-off utilities.
+   - At most 8 infra_gaps. Only list a gap when ≥2 modules are blocked. Otherwise fold into the module's `notes`.
+   - At most 12 features. Skip features that ship without a spec doc.
+   - At most 12 external_systems. Combine related services (e.g. all Firebase services → one E-row).
+   - At most 15 questions. Only genuine ambiguity that needs a human decision.
+   - At most 15 next_actions. Prioritise P0/P1 work + every infra gap. Drop P3 items; they don't earn their place in this list.
+   - At most 20 recent_changes. Newest-first, group commits that ship together.
+   - At most 8 items each in build_sequence and rollout_sequence.
+   If you can't fit everything, prefer (a) all P0/P1 next_actions over P2/P3, (b) modules with status != "functional" over fully-finished ones, (c) infra_gaps blocking more modules over fewer.
 8. Infra gaps only when ≥2 modules are blocked. If exactly one module is blocked, fold the note into that module's `notes` field.
 9. `recent_changes` are newest-first, dated YYYY-MM-DD, drawn from the supplied commit titles + SESSION_NOTES timeline. Group related commits into one entry.
 10. `questions` capture genuine ambiguity ("which Stripe model do we use?"), not "what should I do next?" — that's a next_action.
+11. Keep prose tight throughout. `notes`, `description`, `take`, `why`, `what`, `migration` are all 1-3 sentences max — never a paragraph.
 
 Output schema (every field required unless marked optional):
 
@@ -339,9 +349,12 @@ def generate_tracker(
     for attempt in range(1, max_attempts + 1):
         logger.info("tracker.generate %s/%s attempt %d/%d (model=%s)",
                     owner, repo, attempt, max_attempts, model)
+        # Haiku 4.5 supports up to 64K output tokens; 32K gives enough room
+        # for any reasonable tracker even on complex repos like parentpoint
+        # while still failing fast if the model starts writing essays.
         message = client.messages.create(
             model=model,
-            max_tokens=16000,
+            max_tokens=32000,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
         )
@@ -353,13 +366,11 @@ def generate_tracker(
         # mid-output and no retry will help — fail fast with a clear message.
         if getattr(message, "stop_reason", None) == "max_tokens":
             raise TrackerGenerationError(
-                "AI response was truncated (hit the 16000-token output cap). "
-                "This usually means the repo has very rich docs and the model "
-                "tried to emit a too-large tracker in one shot. Options: "
-                "(1) switch to Sonnet in Settings — it has a much larger "
-                "output budget; (2) trim PRODUCT_SPEC.md / SESSION_NOTES.md "
-                "in the source repo to give the model more room; "
-                f"(3) try again — output size varies run to run. "
+                "AI response was truncated (hit the 32000-token output cap) "
+                "despite hard caps in the prompt. The model ignored the "
+                "scope limits. Try: (1) switch to Sonnet in Settings; "
+                "(2) regenerate — output varies run to run and the next "
+                "attempt often fits. "
                 f"Tokens used: input={usage['input_tokens']}, "
                 f"output={usage['output_tokens']}."
             )
