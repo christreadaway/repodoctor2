@@ -5,8 +5,8 @@
     <h1>Firestore Setup</h1>
     <div class="page-actions">
         {% if scan_results %}
-        <form method="POST" action="{{ url_for('firestore_scan') }}" class="inline-form">
-            <button type="submit" class="btn btn-primary" id="firestore-scan-btn">
+        <form method="POST" action="{{ url_for('firestore_scan') }}" class="inline-form scan-form">
+            <button type="submit" class="btn btn-primary" id="firestore-scan-btn" data-loading-text="SCANNING…">
                 {% if has_data %}RE-SCAN{% else %}SCAN FOR FIRESTORE{% endif %}
             </button>
         </form>
@@ -29,8 +29,8 @@
         <p class="text-secondary">The scan only reads files. It does not deploy or modify anything.</p>
     </div>
     <div class="onboarding-action">
-        <form method="POST" action="{{ url_for('firestore_scan') }}" class="inline-form">
-            <button type="submit" class="btn btn-primary btn-large">SCAN FOR FIRESTORE</button>
+        <form method="POST" action="{{ url_for('firestore_scan') }}" class="inline-form scan-form">
+            <button type="submit" class="btn btn-primary btn-large" data-loading-text="SCANNING…">SCAN FOR FIRESTORE</button>
         </form>
     </div>
 </div>
@@ -68,7 +68,7 @@
     </div>
     {% if scanned_at %}
     <div class="firestore-scanned-at">
-        Last scanned {{ scanned_at[:10] }}
+        Last updated: {{ scanned_at | central_time }}
     </div>
     {% endif %}
 </div>
