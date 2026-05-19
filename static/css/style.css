@@ -3832,6 +3832,35 @@ kbd {
   gap: 0.6rem;
 }
 
+.tracker-model-hint {
+  flex-basis: 100%;
+  margin-top: 0.55rem;
+  padding-top: 0.55rem;
+  border-top: 1px dashed var(--border);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+}
+
+.tracker-model-hint code {
+  color: var(--tk-cyan-fg);
+  background: var(--tk-cyan-bg);
+  border: 1px solid var(--tk-cyan-bd);
+  padding: 0.05rem 0.45rem;
+  border-radius: 3px;
+  margin: 0 0.35rem;
+}
+
+.tracker-model-hint a {
+  color: var(--text-secondary);
+  text-decoration: underline;
+  margin-left: 0.4rem;
+}
+
+.tracker-model-hint a:hover {
+  color: var(--tk-cyan-fg);
+}
+
 .tracker-codes-hint {
   margin-top: 1rem;
   color: var(--text-secondary);

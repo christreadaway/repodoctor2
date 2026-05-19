@@ -41,6 +41,11 @@
         <a href="{{ url_for('repo_detail', owner=selected_owner, name=selected_name) }}" class="btn btn-ghost btn-sm">REPO DETAIL →</a>
     </div>
     {% endif %}
+
+    <div class="tracker-model-hint">
+        Using <code>{{ preferences.ai_model }}</code>
+        <a href="{{ url_for('settings') }}#ai-model">change in Settings</a>
+    </div>
 </div>
 {% endif %}
 
