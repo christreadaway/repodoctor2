@@ -217,18 +217,23 @@ During the lightweight scan, each repo also receives a single call to `/repos/{o
 
 Per-repo deep view that turns each project's docs + code into a structured, navigable map of where the project stands and what to build next. Implemented per `CODEBASE_TRACKER_PRD.md` and adapted from the PRD's repo-agnostic React/TS reference to RepoDoctor's Flask + Jinja2 stack.
 
-**Eight tabs:**
+**Nine tabs:**
 
 | Tab | What it shows |
 |---|---|
 | **Overview** | Open P0 next actions, last 3 changes, recommended build & rollout sequences |
 | **Recent** | Newest-first changelog with kind chip (shipped / unblocked / doc / fix / blocked) |
-| **Next Actions** | Copy-paste-ready Claude Code prompts, filterable by priority + status (hides shipped by default) |
-| **Modules** | Grouped by category, status chip (functional / prototype / visual / missing), with route paths |
-| **Infra Gaps** | Pieces of infrastructure that block ≥2 modules |
-| **Features** | Proposed/shipped feature specs with separate build vs. rollout priorities |
-| **External Systems** | Third-party deps with mode (Core / Integrate / Replace / Optional) |
+| **Next Actions** | Copy-paste-ready Claude Code prompts, filterable by priority + status. Each card carries a status form (dropdown + note + UPDATE) so a user can mark items blocked / dismissed / in-progress / shipped without leaving the page. Open filter excludes shipped + dismissed by default; new filter chips for Blocked-only and Dismissed. |
+| **Shipped** | Completed next-actions, kept as a record. Items flow here automatically when a user flips an action to "shipped." |
+| **Modules** | Grouped by category, status chip (functional / prototype / visual / missing), with route paths. Each module carries a COPY PROMPT button generating a context-aware Claude Code prompt to advance that module. |
+| **Infra Gaps** | Pieces of infrastructure that block ≥2 modules. Each gap carries a COPY PROMPT button. |
+| **Features** | Proposed/shipped feature specs with separate build vs. rollout priorities. Each feature carries a COPY PROMPT button. |
+| **External Systems** | Third-party deps with mode (Core / Integrate / Replace / Optional). Each system carries a COPY PROMPT button. |
 | **Questions** | Open questions the code can't answer |
+
+**Clickable headline stats.** The page header shows Functional / Prototype / Visual / Missing module counts plus P0-open and Infra-gap counts. Each is a button — click it and the tracker jumps to the relevant tab with the matching filter pre-applied (e.g. "9 P0 open" → Next Actions filtered to P0 priority + Open status).
+
+**User-driven next-action statuses (PRD §6 extension).** Six values: `todo`, `in_progress`, `awaiting_deploy`, `shipped`, `blocked`, `dismissed`. The two new ones are user-set only — the AI is instructed to preserve them across regeneration along with the user's `status_note`. Visual treatment: blocked cards get a red left-rule + tinted background; dismissed cards ghost-fade; shipped cards live in their own tab.
 
 **Stable ID system** (PRD §5.1): every row carries a permanent two-character prefix + integer (`M*` module, `I*` infra gap, `F*` feature, `E*` external system, `Q*` question, `N*` next action). IDs never get renumbered — once `M7` exists it stays `M7` across every regeneration. Each prefix has its own monotonic counter; new rows pick `max + 1` even when older rows are deleted.
 
@@ -270,6 +275,7 @@ Per-repo deep view that turns each project's docs + code into a structured, navi
 - `POST /tracker/<owner>/<name>/generate` — run AI generation, save, redirect back to view.
 - `GET /tracker/<owner>/<name>/debug` — live integrity check + tracker meta + tail-100 of the event log + Copy-for-Claude-Code formatter.
 - `POST /api/tracker/<owner>/<name>/copy-event` — fire-and-forget client beacon logging copy-prompt events.
+- `POST /tracker/<owner>/<name>/action/<action_id>/status` — update a single next-action's status + status_note (used by the per-card status form).
 
 **Logging** (per CLAUDE.md mandate): every generation start / done / error, validation pass / fail, render warning, and copy-prompt event lands in `data/logs/tracker.log` as one JSON object per line. The debug surface's "Copy for Claude Code" button formats the tail-100 buffer as a markdown block for paste-back debugging.
 
@@ -426,6 +432,7 @@ Flask Application (app.py)
 | POST | `/tracker/<owner>/<name>/generate` | Active | Run AI generation, validate, save |
 | GET | `/tracker/<owner>/<name>/debug` | Active | Live integrity check + log tail + Copy-for-Claude-Code |
 | POST | `/api/tracker/<owner>/<name>/copy-event` | Active | Client beacon for copy-prompt events |
+| POST | `/tracker/<owner>/<name>/action/<id>/status` | Active | Update one next-action's status + status_note |
 | GET | `/mac-setup` | Active | Setup instructions page |
 | GET/POST | `/settings` | Active | Preferences, specs, credential management |
 | GET | `/api/session-cost` | Active | JSON: token counts and cost for current session |
@@ -503,7 +510,7 @@ Coverage areas:
 | Refreshed top nav with pulsing user pill | Working |
 | Settings | Working |
 | Cost tracking | Working |
-| Tests (136 total: 97 from Session 13 + 39 new tracker tests) | Passing |
+| Tests (144 total: 97 from Session 13 + 47 tracker tests through Session 14d) | Passing |
 | Netlify deployment (Node.js) | Working — behind Flask version (groups, recursive search, stats, whats-next not ported yet) |
 | AI project summaries via Claude Haiku | Working |
 | AI branch analysis | Built, inactive |

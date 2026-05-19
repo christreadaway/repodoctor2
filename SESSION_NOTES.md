@@ -1,9 +1,9 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 14 (14 + 14b + 14c same-day continuation)
+**Total Sessions Logged:** 14 (14 + 14b + 14c + 14d same-day continuation)
 **Date Range:** 2025-02-14 to 2026-05-19
-**Last Updated:** 2026-05-19 (Session 14c)
+**Last Updated:** 2026-05-19 (Session 14d)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
 
@@ -86,6 +86,55 @@ Also fixed a long-standing dashboard spacing bug surfaced this session: the summ
 
 - Branch: `claude/add-project-tracker-L4awW`
 - Status: pushed, second merge to `main` needed after Session 14b production hardening
+
+---
+
+## Session 14d — 2026-05-19 (Tracker UX: clickable stats, block/dismiss, Shipped tab, row prompts)
+
+First real-use feedback after the tracker rendered cleanly for parentpoint. Chris flagged four enhancements that turned the tracker from a read-only view into something he could actually drive work from.
+
+### 1. Clickable headline stats
+
+Every chip in the page header (Functional / Prototype / Visual / Missing / P0 open / Infra gaps) is now a button. Click it and the tracker jumps to the relevant tab AND pre-applies the matching filter — so "9 P0 open" lands on Next Actions filtered to P0 + Open. No more "I see there are 9 P0s but where are they."
+
+### 2. Block / dismiss next actions
+
+The Next Actions list was including items Chris was actually blocked on (waiting for a decision, or where the AI misinterpreted something). Now each card carries a status form: dropdown (Todo / In progress / Awaiting deploy / Shipped / Blocked / Dismissed) + an optional note input + UPDATE button. The new statuses get distinct card treatments — blocked cards get a red left-rule + tinted background, dismissed cards ghost-fade. New filter chips for "Blocked only" and "Dismissed". The default Open filter now excludes both shipped and dismissed.
+
+The AI is told to preserve user-set statuses (blocked / dismissed / in_progress / awaiting_deploy) AND the existing status_note on regeneration. So when Chris marks N12 as "blocked — waiting on Chris to decide custody model," the next regenerate keeps that exact state. Otherwise the AI is free to flip todo→in_progress→shipped based on session notes evidence.
+
+### 3. Shipped tab
+
+Shipped next-actions move out of the Next Actions panel into a dedicated Shipped tab with its own count badge. The Next Actions count badge reflects open work only, which is what Chris actually cares about at a glance.
+
+### 4. Per-row Claude Code prompts on every actionable tab
+
+Modules / Infra Gaps / Features / External Systems each had no actionable next step. Now every row carries the same COPY PROMPT / SHOW PROMPT button pair Next Actions already had. The prompt is generated server-side by Jinja macros (`module_prompt`, `infra_prompt`, `feature_prompt`, `external_prompt`) — context-aware, references the row's ID + current state + the rows it touches, lists numbered steps, closes with an acceptance criterion. Same clipboard + server-side copy-event logging path Next Actions uses.
+
+### Technical details
+
+- `NEXT_ACTION_STATUSES` extended to 6 values (added `blocked`, `dismissed`).
+- New chip classes `chip-tone-blocked` / `chip-tone-dismissed` + per-card body treatments (`.tracker-next-card.status-blocked`, `.status-dismissed`).
+- New Flask route `POST /tracker/<owner>/<name>/action/<action_id>/status` updates one action's status + status_note, re-saves the tracker, logs `action_status_update` to the tracker log.
+- System prompt extended with rule 2a: "preserve user-set statuses." `_compact_prior` now includes `status_note` in keep_fields so the AI sees the human's reason on the next generation.
+- Filter logic scoped per-panel via `chip.closest('.tracker-panel')` so the new BLOCKED / DISMISSED filter chips on Next Actions don't fight the status filters on Modules.
+- Next Actions tab uses a Jinja `render_next_card(n)` macro so the same renderer powers both the Next Actions tab and the Shipped tab without duplication.
+
+### Tests
+
+- 47 unit tests pass (up from 43). 6 of those skip in the remote test env because anthropic SDK isn't installed there.
+- New tests: `blocked` and `dismissed` accepted by validator, unknown statuses still rejected, both new statuses registered in NEXT_ACTION_STATUS_META with correct labels.
+- Render stress test exercised a tracker containing all 6 next-action statuses + verified every new feature renders (clickable stats, shipped tab, status form, blocked note display, all four row-prompt macros).
+
+### Commits
+
+- `cf58ee9` — clickable stats + block/dismiss + Shipped tab + row prompts
+
+### Lessons
+
+- A view-only tracker is half a product. The minute the user can act on rows, "make progress" stops being friction.
+- Status enums on user-editable rows are user-facing. Naming them well (Todo / Blocked / Dismissed) > raw enum values (todo / blocked / dismissed) — used both via the META lookup.
+- AI regeneration must respect user decisions. Without rule 2a in the system prompt, the next regenerate would clobber every status_note Chris had set.
 
 ---
 
