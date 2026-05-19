@@ -409,6 +409,11 @@ def generate_tracker(
         tracker["branch_at_verification"] = default_branch
         tracker["ai_model"] = model
 
+        # Normalise things the model gets cosmetically wrong before we
+        # validate — sort recent_changes newest-first regardless of the
+        # order the model emitted them in.
+        td.sort_recent_changes(tracker)
+
         errors = td.validate_tracker(tracker)
         if not errors:
             tracker["_usage"] = usage

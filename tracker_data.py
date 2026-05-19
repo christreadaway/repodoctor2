@@ -211,9 +211,14 @@ def validate_tracker(tracker: dict) -> list[str]:
 
     module_ids = _ids_of(modules)
     action_ids = _ids_of(next_actions)
-    valid_related_ids = (
+    # related_ids / depends_on may point at ANY row type in this tracker.
+    # The PRD §5.5 narrows related_ids to M/F/I, but in practice the model
+    # also references Q (questions an action answers) and E (external
+    # systems an action touches) — both semantically reasonable. We accept
+    # any in-tracker ID rather than reject useful cross-references.
+    valid_any_id = (
         module_ids | _ids_of(infra_gaps) | _ids_of(features)
-        | _ids_of(external_systems) | action_ids
+        | _ids_of(external_systems) | _ids_of(questions) | action_ids
     )
 
     # Infra gaps: blocks point at real modules
@@ -254,35 +259,44 @@ def validate_tracker(tracker: dict) -> list[str]:
         _check(errors, isinstance(prompt, str) and len(prompt.strip()) >= 50,
                f"next_action {n.get('id')}: prompt must be ≥50 chars (got {len(prompt.strip())})")
         for rid in n.get("related_ids", []) or []:
-            _check(errors, rid in valid_related_ids,
-                   f"next_action {n.get('id')}: related_ids '{rid}' is not a real M/I/F/E/N ID")
+            _check(errors, rid in valid_any_id,
+                   f"next_action {n.get('id')}: related_ids '{rid}' is not a real ID in this tracker")
         for dep in n.get("depends_on", []) or []:
             _check(errors, dep != n.get("id"),
                    f"next_action {n.get('id')}: depends_on cannot self-reference")
-            _check(errors, dep in action_ids,
-                   f"next_action {n.get('id')}: depends_on '{dep}' is not a real next-action ID")
+            # depends_on may reference any row type — e.g. an N can depend on
+            # an I being resolved or an M being built. Cycle detection below
+            # still only walks N→N edges since other rows can't form cycles.
+            _check(errors, dep in valid_any_id,
+                   f"next_action {n.get('id')}: depends_on '{dep}' is not a real ID in this tracker")
 
     _check(errors, _no_cycles(next_actions),
            "next_actions: depends_on contains a cycle")
 
-    # Recent changes: date format + sort order + kind + relatedIds
-    last_date = None
+    # Recent changes: date format + kind + relatedIds.
+    # Note: we DO NOT enforce strict newest-first order in validation —
+    # the model occasionally interleaves dates. Sort order is fixed by
+    # sort_recent_changes() before the tracker is saved.
     for c in recent_changes:
         date = c.get("date", "")
         _check(errors, bool(DATE_PATTERN.match(date or "")),
                f"recent_change '{c.get('title', '')}': bad date '{date}' (must be YYYY-MM-DD)")
-        if last_date is not None and date:
-            _check(errors, date <= last_date,
-                   f"recent_change '{c.get('title', '')}': not in newest-first order")
-        if date:
-            last_date = date
         _check(errors, c.get("kind") in CHANGE_KINDS,
                f"recent_change '{c.get('title', '')}': kind '{c.get('kind')}' not in {CHANGE_KINDS}")
         for rid in c.get("related_ids", []) or []:
-            _check(errors, rid in valid_related_ids,
-                   f"recent_change '{c.get('title', '')}': related_ids '{rid}' is not a real M/I/F/E/N ID")
+            _check(errors, rid in valid_any_id,
+                   f"recent_change '{c.get('title', '')}': related_ids '{rid}' is not a real ID in this tracker")
 
     return errors
+
+
+def sort_recent_changes(tracker: dict) -> None:
+    """Sort tracker['recent_changes'] newest-first in place.
+    Called by the generator before saving so the model's ordering doesn't
+    matter — we just normalise it. Entries with no date sink to the end."""
+    rows = tracker.get("recent_changes") or []
+    rows.sort(key=lambda c: c.get("date") or "0000-00-00", reverse=True)
+    tracker["recent_changes"] = rows
 
 
 def _no_cycles(next_actions: list[dict]) -> bool:
