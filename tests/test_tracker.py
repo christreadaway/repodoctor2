@@ -317,6 +317,28 @@ class TestPromptBuilding(unittest.TestCase):
         self.assertIn("app.py", prompt)
         self.assertIn("2026-05-19", prompt)
 
+    def test_compact_prior_handles_malformed_sections(self):
+        try:
+            import tracker_generator as tg
+        except ImportError:
+            self.skipTest("anthropic not installed")
+            return
+        # Bad shapes a hand-edit could produce.
+        bad = {
+            "modules": "not a list",
+            "infra_gaps": None,
+            "features": [{"id": "F1", "name": "ok"}, "not a dict", 42],
+            "external_systems": [{"id": "E1"}],
+            "questions": [],
+            "next_actions": [{"id": "N1", "title": "ok"}],
+        }
+        compact = tg._compact_prior(bad)
+        self.assertEqual(compact["modules"], [])
+        self.assertEqual(compact["infra_gaps"], [])
+        # F1 should survive; the non-dict rows should be dropped.
+        self.assertEqual(len(compact["features"]), 1)
+        self.assertEqual(compact["features"][0]["id"], "F1")
+
 
 class TestStorageRoundTrip(unittest.TestCase):
     """Cover the per-repo tracker JSON storage helpers in models.py.
