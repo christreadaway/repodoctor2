@@ -1,8 +1,8 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-05-15 (Session 13)
-**Current Branch:** `claude/fix-flask-display-issue-1yxlq` (pushed) — needs merge to `main`
-**Overall Progress:** ~95%
+**Last Updated:** 2026-05-19 (Session 14)
+**Current Branch:** `claude/add-project-tracker-L4awW` (pushed) — needs merge to `main`
+**Overall Progress:** ~96%
 
 ---
 
@@ -13,6 +13,17 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 ---
 
 ## What's Working
+
+### Codebase Tracker (NEW 2026-05-19 Session 14)
+- Per-repo deep view at `/tracker` accessible from a dedicated nav link. Dropdown picks any scanned repo; landing page auto-redirects to the most recently generated tracker when one exists.
+- Eight tabs — Overview / Recent / Next Actions / Modules / Infra Gaps / Features / External Systems / Questions — each with color-coded chips (red P0, orange P1, amber prototype, sky visual, green functional, red missing) that depart from the all-green palette.
+- Stable monotonic IDs (`M*`, `I*`, `F*`, `E*`, `Q*`, `N*`) preserved across regenerations. The generator passes the prior tracker into Claude with "LOAD-BEARING IDS" instructions; new rows get max+1 per prefix.
+- AI generation reads PRODUCT_SPEC, PROJECT_STATUS, SESSION_NOTES, CLAUDE.md, README, the file tree (vendor dirs excluded), the last 30 days of commits, and the prior tracker if present. Uses the configured AI model (Haiku 4.5 default — ~$0.02-$0.05 per generation). Surfaced in the toolbar before clicking Generate.
+- §5.5 invariants validated at save time AND in unit tests (16 distinct rules: ID format + uniqueness, status / priority / effort / kind enums, infra blocks point at real modules, feature modules point at real modules, next-action `related_ids` point at real M/I/F/E/N IDs, `depends_on` is acyclic and never self-references, prompt ≥ 50 chars, recent_changes newest-first, dates `YYYY-MM-DD`). Invalid AI output triggers one retry with the validation errors fed back; second failure errors cleanly instead of saving corrupt data.
+- Copy/paste-ready Claude Code prompt on every next-action card, with optional inline preview before copying. Server-side event log at `data/logs/tracker.log` (one JSON event per line) captures every generation, validation pass/fail, render warning, and copy-prompt event.
+- Debug surface at `/tracker/<owner>/<name>/debug` shows a live integrity check, tracker meta, and the tail-100 event log with a **Copy for Claude Code** button formatting the buffer as a markdown block for paste-back debugging.
+- **Firestore auto-detection plumbed in:** when `firestore_detector` finds Firebase signals in a repo, the detection results (status, project ID, indicators, missing config) get fed to the prompt with instructions to emit a Firestore row in `external_systems` plus `infra_gaps` + `next_actions` rows for any missing config. The fleet-level Firestore page moved from main nav to **Settings → Tools** (still works at `/firestore`).
+- 39 new unit tests covering every invariant + storage round-trip + path-traversal safety + Firestore prompt inclusion.
 
 ### Core
 - **Auth & security:** Fernet + PBKDF2 credential encryption, 30-minute session auto-lock, GitHub PAT scope verification
@@ -66,13 +77,13 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 - Repo detail: Product Spec / Project Status / Session Notes panels, "What's Next" hero, conversation timeline
 - Activity log with color-coded messages
 - Netlify deployment (Node.js + Express + serverless-http) — older feature set
-- **Tests:** 97 passing (83 inherited + 9 new for `GitHubAuthError` handling + 5 new for henry-branch exclusion)
+- **Tests:** 136 passing (97 from Session 13 + 39 new for the Codebase Tracker). 5 of the 39 tracker tests skip in remote envs lacking the `anthropic` SDK; they run locally on Mac.
 
 ---
 
 ## What's In Progress
 
-Nothing actively in progress. All 2026-05-15 work (Sessions 12 and 13) is committed on `claude/fix-flask-display-issue-1yxlq` and pushed.
+Nothing actively in progress. All Session 14 work (Codebase Tracker + Firestore relocated to Settings + dashboard cellpadding fix) is committed on `claude/add-project-tracker-L4awW` and pushed; needs merge to `main`.
 
 ---
 
@@ -97,12 +108,13 @@ Nothing actively in progress. All 2026-05-15 work (Sessions 12 and 13) is commit
 
 ## Next Steps (in priority order)
 
-1. **Chris rotates his GitHub PAT.** The 2026-05-15 session was triggered by his old PAT being rejected. New PAT needed at github.com/settings/tokens (must have `repo` scope), then RESET CREDENTIALS on the login page (after merging) or `rm config/credentials.enc` and re-launch.
-2. **Merge `claude/fix-flask-display-issue-1yxlq` into `main`** from Chris's local machine.
-3. **Rescan + regenerate summaries** once the new PAT is in place.
-4. **Port April/May features to Netlify** — auth-error handling, Stats (with group filter + rollup), What's Next, groups persistence, recursive search, Size column, refreshed nav, recent-updated sort, business-spec aliasing, unassigned-projects list.
-5. **Parallelize initial scan** using `ThreadPoolExecutor` (same pattern as `/stats`).
-6. **Verify Anthropic key at login** the same way GitHub PAT is verified, so bad keys are caught up front.
+1. **Merge `claude/add-project-tracker-L4awW` into `main`** from Chris's local machine. (Supersedes the pending Session 13 merge — Session 14 branched off that work, so a single merge picks up both.)
+2. **Try the tracker against a real repo.** Pull, restart Flask, click Tracker in the nav, pick a repo (e.g. parentpoint, catholicevents), click GENERATE TRACKER. Verify the eight tabs populate and the next-actions prompts copy cleanly into Claude Code.
+3. **Generate trackers across the portfolio** to seed the load-bearing IDs. Re-generations from this point on will preserve those IDs.
+4. **Wire tracker `next_actions` into What's Next** so open P0/P1 actions show up in the simple aggregated inbox alongside the project-summary bullets (Roadmap item 1).
+5. **Port April/May features to Netlify** — auth-error handling, Stats (with group filter + rollup), What's Next, groups persistence, recursive search, Size column, refreshed nav, recent-updated sort, business-spec aliasing, unassigned-projects list. (Tracker stays Flask-only by design — local JSON storage doesn't fit serverless.)
+6. **Parallelize initial scan** using `ThreadPoolExecutor` (same pattern as `/stats`).
+7. **Verify Anthropic key at login** the same way GitHub PAT is verified, so bad keys are caught up front.
 
 ---
 
