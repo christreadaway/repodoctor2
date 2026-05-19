@@ -305,16 +305,24 @@ def build_user_prompt(
 
 def _compact_prior(prior: dict) -> dict:
     """Return a smaller prior-tracker view focusing on the load-bearing
-    fields: IDs, names, statuses, priorities. Saves prompt tokens."""
+    fields: IDs, names, statuses, priorities. Saves prompt tokens.
+    Defensively skips non-list sections or non-dict rows in case a
+    hand-edited tracker file got into a weird state."""
     compact: dict = {}
+    keep_fields = {"id", "name", "title", "text", "status",
+                   "priority", "build_priority", "roll_priority",
+                   "mode", "category"}
     for key in ("modules", "infra_gaps", "features", "external_systems",
                 "questions", "next_actions"):
+        section = prior.get(key) or []
+        if not isinstance(section, list):
+            compact[key] = []
+            continue
         rows = []
-        for r in prior.get(key, []) or []:
-            rows.append({k: v for k, v in r.items()
-                         if k in {"id", "name", "title", "text", "status",
-                                  "priority", "build_priority", "roll_priority",
-                                  "mode", "category"}})
+        for r in section:
+            if not isinstance(r, dict):
+                continue
+            rows.append({k: v for k, v in r.items() if k in keep_fields})
         compact[key] = rows
     return compact
 
@@ -394,13 +402,27 @@ def generate_tracker(
                            attempt, e)
             continue
 
-        # Compose final tracker dict and validate
+        # Compose final tracker dict and validate.
+        # Type-guard each section: if the model returns something other than
+        # a list for a list-typed field (rare but happens with malformed
+        # output), fall back to the empty default rather than crashing the
+        # validator's iteration loop downstream.
         tracker = td.empty_tracker(owner, repo)
+        if not isinstance(parsed, dict):
+            last_error = f"AI returned a non-object top-level value: {type(parsed).__name__}"
+            logger.warning("tracker.generate %s/%s: %s", owner, repo, last_error)
+            continue
         for key in ("modules", "infra_gaps", "features", "external_systems",
                     "questions", "next_actions", "recent_changes",
                     "build_sequence", "rollout_sequence"):
             value = parsed.get(key)
             if value is None:
+                continue
+            if not isinstance(value, list):
+                logger.warning(
+                    "tracker.generate %s/%s: '%s' was %s, expected list — using empty",
+                    owner, repo, key, type(value).__name__,
+                )
                 continue
             tracker[key] = value
 
@@ -408,6 +430,11 @@ def generate_tracker(
             datetime.timezone.utc).isoformat()
         tracker["branch_at_verification"] = default_branch
         tracker["ai_model"] = model
+
+        # Normalise things the model gets cosmetically wrong before we
+        # validate — sort recent_changes newest-first regardless of the
+        # order the model emitted them in.
+        td.sort_recent_changes(tracker)
 
         errors = td.validate_tracker(tracker)
         if not errors:

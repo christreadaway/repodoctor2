@@ -173,6 +173,28 @@ class TestValidationNegative(unittest.TestCase):
         errs = td.validate_tracker(t)
         self.assertTrue(any("M99" in e for e in errs))
 
+    def test_next_action_related_ids_accepts_questions(self):
+        """An N can reference a Q (action answers question) — lenient
+        from PRD's strict M/F/I read; matches model output in practice."""
+        t = _valid_tracker()
+        t["next_actions"][0]["related_ids"] = ["Q1"]
+        errs = td.validate_tracker(t)
+        self.assertFalse(any("Q1" in e for e in errs))
+
+    def test_depends_on_accepts_non_action_ids(self):
+        """An N may depend on an I being fixed or an M being built, not
+        just another N. Cycle detection still only walks N→N edges."""
+        t = _valid_tracker()
+        t["next_actions"][0]["depends_on"] = ["I1", "M1"]
+        errs = td.validate_tracker(t)
+        self.assertFalse(any("depends_on" in e for e in errs))
+
+    def test_depends_on_rejects_unknown_id(self):
+        t = _valid_tracker()
+        t["next_actions"][0]["depends_on"] = ["X999"]
+        errs = td.validate_tracker(t)
+        self.assertTrue(any("X999" in e for e in errs))
+
     def test_next_action_self_dep(self):
         t = _valid_tracker()
         t["next_actions"][0]["depends_on"] = ["N1"]
@@ -198,7 +220,9 @@ class TestValidationNegative(unittest.TestCase):
         errs = td.validate_tracker(t)
         self.assertTrue(any("bad date" in e for e in errs))
 
-    def test_recent_changes_out_of_order(self):
+    def test_recent_changes_sort_order_auto_fixed(self):
+        """Validation no longer rejects out-of-order recent_changes.
+        sort_recent_changes() normalises them newest-first before save."""
         t = _valid_tracker()
         t["recent_changes"] = [
             {"date": "2026-05-01", "title": "older", "kind": "fix",
@@ -206,8 +230,13 @@ class TestValidationNegative(unittest.TestCase):
             {"date": "2026-05-19", "title": "newer", "kind": "shipped",
              "related_ids": [], "description": "d"},
         ]
+        # Validation passes even out-of-order.
         errs = td.validate_tracker(t)
-        self.assertTrue(any("not in newest-first order" in e for e in errs))
+        self.assertFalse(any("order" in e for e in errs))
+        # Sort flips it.
+        td.sort_recent_changes(t)
+        self.assertEqual(t["recent_changes"][0]["title"], "newer")
+        self.assertEqual(t["recent_changes"][1]["title"], "older")
 
     def test_recent_changes_unknown_kind(self):
         t = _valid_tracker()
@@ -287,6 +316,28 @@ class TestPromptBuilding(unittest.TestCase):
         self.assertIn("PRODUCT SPEC CONTENT", prompt)
         self.assertIn("app.py", prompt)
         self.assertIn("2026-05-19", prompt)
+
+    def test_compact_prior_handles_malformed_sections(self):
+        try:
+            import tracker_generator as tg
+        except ImportError:
+            self.skipTest("anthropic not installed")
+            return
+        # Bad shapes a hand-edit could produce.
+        bad = {
+            "modules": "not a list",
+            "infra_gaps": None,
+            "features": [{"id": "F1", "name": "ok"}, "not a dict", 42],
+            "external_systems": [{"id": "E1"}],
+            "questions": [],
+            "next_actions": [{"id": "N1", "title": "ok"}],
+        }
+        compact = tg._compact_prior(bad)
+        self.assertEqual(compact["modules"], [])
+        self.assertEqual(compact["infra_gaps"], [])
+        # F1 should survive; the non-dict rows should be dropped.
+        self.assertEqual(len(compact["features"]), 1)
+        self.assertEqual(compact["features"][0]["id"], "F1")
 
 
 class TestStorageRoundTrip(unittest.TestCase):

@@ -1,9 +1,9 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 14
+**Total Sessions Logged:** 14 (14 + 14b + 14c same-day continuation)
 **Date Range:** 2025-02-14 to 2026-05-19
-**Last Updated:** 2026-05-19
+**Last Updated:** 2026-05-19 (Session 14c)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
 
@@ -85,8 +85,88 @@ Also fixed a long-standing dashboard spacing bug surfaced this session: the summ
 ### Branch Info
 
 - Branch: `claude/add-project-tracker-L4awW`
-- Latest commits: `0a06b7a` (bug fixes), `93d5b5c` (Firestore relocated), `7a4d304` (model hint), `6dcfed5` (tracker), `ddec5f9` (dashboard spacing)
-- Status: pushed, needs merge to `main`
+- Status: pushed, second merge to `main` needed after Session 14b production hardening
+
+---
+
+## Session 14c — 2026-05-19 (Validation leniency + type guards)
+
+The Session 14b streaming + 32K bump fixed truncation but exposed a different problem on parentpoint: the validator was too strict for what Claude actually emits. Three categories of failure surfaced, all of them my over-strict reads of the PRD, not real data problems.
+
+### What Was Wrong
+
+1. **`next_action.related_ids` rejected Q-IDs.** Claude was emitting `"related_ids": ["Q1"]` to mean "this action answers question Q1," which is semantically sensible. The PRD §5.5 says M/F/I-only, but in practice the model has a richer mental model. Validation kept failing on perfectly good output.
+
+2. **`next_action.depends_on` rejected anything but N-IDs.** Same story — Claude emits `"depends_on": ["I3"]` to mean "can't ship N5 until I3 is fixed." Architecturally that's true; the validator was just narrow.
+
+3. **`recent_changes` order rejected when the model interleaved dates.** When grouping commits into themes, Claude sometimes emits 2026-05-19, 2026-05-08, 2026-05-12 (i.e., not strictly newest-first). The validator treated this as an error. It's a cosmetic issue — fixable by sorting server-side.
+
+### What We Fixed
+
+1. **`related_ids` and `recent_changes.related_ids`** now accept any in-tracker ID type (M / I / F / E / Q / N). Still rejects IDs that don't exist anywhere in the tracker.
+2. **`depends_on`** accepts any row type, not just N. Cycle detection still walks only N→N edges (other row types can't form action cycles).
+3. **`recent_changes` order** is no longer a validation failure. New `sort_recent_changes()` helper sorts newest-first in place; the generator calls it after parsing and before validating, so save data is always clean.
+
+### Bonus Robustness (audit-found)
+
+A comprehensive audit pass also caught two robustness gaps unrelated to the validation leniency work:
+
+4. **Type-guard AI output.** If Claude ever returned a non-list for a list-typed section (`modules: 42` or `modules: "string"`), the validator would crash on iteration. Now each section is type-checked; a non-list value falls back to the empty default and is logged at warn level. A non-dict top-level response (rare but possible) fails the attempt cleanly with a clear error.
+
+5. **Type-guard `_compact_prior`.** The prior-tracker compaction (which feeds existing IDs to the next generation so they stay stable) was iterating whatever shape was in the loaded tracker file. A hand-edited tracker file with a malformed section would crash here. Now defensively skips non-list sections and non-dict rows.
+
+### Tests
+
+- 43 unit tests pass (up from 39 in Session 14, +1 from 14b). 6 of those skip in the remote test env because the anthropic SDK isn't installed there.
+- New tests cover: Q-IDs in related_ids, mixed-type depends_on, cycle detection across mixed-type graphs, sort idempotency, sort with missing dates, type-guard on malformed sections, _compact_prior on malformed input.
+- Comprehensive audit script (29 checks) exercises validator edge cases, lenient cases, cycle detection, sort helper, and a full storage roundtrip — all green.
+- Template stress test renders a 20-module / 15-action / 18-change tracker (the prompt caps in 14b) cleanly at 91K chars.
+
+### Commits
+
+- `a43a2a2` — validation leniency (related_ids accepts Q/E, depends_on accepts any type, recent_changes auto-sort)
+- `78bf2da` — type guards on AI output and `_compact_prior`
+
+### Lessons
+
+- A strict validator wastes API tokens on retries the model can't satisfy. Lenient where the data is semantically reasonable; strict where it's actually broken.
+- "Cosmetic" issues (sort order, formatting) should be auto-fixed server-side, not bounced back at the user.
+- AI outputs can be malformed in low-frequency but real ways. Type-guarding the parse step costs nothing and prevents 500s.
+
+---
+
+## Session 14b — 2026-05-19 (Production hardening after first real generation)
+
+After merging Session 14 to main and trying the tracker against parentpoint, three real-world failures surfaced. None of them showed up in unit tests because they were all about the AI's behavior under load.
+
+### What Broke
+
+1. **Output truncation.** First generation against parentpoint came back with "Unbalanced braces in AI response" — the JSON cut off mid-content. Root cause: `max_tokens=8000` was way too tight for a repo with a dense PRODUCT_SPEC and many modules. The model wanted to emit ~12K tokens of output.
+2. **Streaming-required error.** Bumping `max_tokens` to 32K triggered "Streaming is required for operations that may take longer than 10 minutes." The Anthropic SDK refuses non-streaming calls at high token counts because the HTTP connection could time out.
+3. **Silent loading state.** Clicking GENERATE TRACKER did nothing visible for 20-90 seconds. The button had a `data-loading-text` attribute but no JS to read it. Users wondered if anything was happening.
+
+### What We Fixed
+
+1. **Bumped output budget 8K → 16K → 32K** in two steps (Haiku 4.5 supports up to 64K; 32K is safe headroom).
+2. **Added hard scope caps to the system prompt** — max 25 modules, 8 infra_gaps, 12 features, 12 external_systems, 15 questions, 15 next_actions, 20 recent_changes. Plus a priority order for when the model can't fit everything: P0/P1 actions over P2/P3, non-functional modules over functional, infra blocking more modules over fewer. Prose fields capped at 1-3 sentences.
+3. **Switched to the streaming API.** `client.messages.stream()` accumulates chunks via `stream.text_stream`, then pulls usage + stop_reason off `stream.get_final_message()`. Same cost as non-streaming — just a transport change.
+4. **Per-generation model override dropdown** on the toolbar. Pick Haiku / Sonnet / Opus for one specific generation without touching global Settings. Whitelisted server-side so a bad form submission falls back to the default. Useful when parentpoint specifically needs Sonnet while everything else stays on cheaper Haiku.
+5. **Fail-fast on truncation.** Detect `stop_reason == "max_tokens"` after the stream completes; raise immediately instead of retrying (the next call would truncate the same way). Error message includes token counts so the user sees how close they got, and points at the model dropdown.
+6. **Loading overlay.** Centered card with an animated cyan spinner, "ANALYZING…" with pulsing dots, repo name, model in use, live elapsed-time counter, and a "Typical: 20-90 seconds. Don't close this tab." footer. Triggers on form submit, stays until the page reloads with the result.
+
+### Commits
+
+- `ea1560a` — truncation detection + slimmer input budgets + 16K cap
+- `86ccd83` — hard scope caps in prompt + 32K cap
+- `773bb53` — per-generation model override dropdown
+- `8939c27` — streaming API
+- (pending) — loading overlay + docs update
+
+### Lessons
+
+- AI-driven features need production debugging time, not just unit tests. Real repos surface output sizes that synthetic test data never will.
+- A `data-loading-text` attribute without JS to read it is a lie. Either wire it up everywhere or remove it.
+- The Anthropic SDK's streaming threshold isn't obvious — bumping max_tokens past ~16K silently changes the required API surface. Worth documenting.
 
 ---
 
