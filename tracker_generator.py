@@ -352,19 +352,30 @@ def generate_tracker(
         # Haiku 4.5 supports up to 64K output tokens; 32K gives enough room
         # for any reasonable tracker even on complex repos like parentpoint
         # while still failing fast if the model starts writing essays.
-        message = client.messages.create(
+        #
+        # Streaming is REQUIRED for large max_tokens: the Anthropic SDK
+        # refuses non-streaming requests that could exceed a ~10-minute
+        # wall-clock budget. We accumulate the text chunks, then pull
+        # usage + stop_reason off the final message.
+        with client.messages.stream(
             model=model,
             max_tokens=32000,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
-        )
-        last_raw = message.content[0].text.strip()
-        usage["input_tokens"] += message.usage.input_tokens
-        usage["output_tokens"] += message.usage.output_tokens
+        ) as stream:
+            chunks: list[str] = []
+            for piece in stream.text_stream:
+                chunks.append(piece)
+            final = stream.get_final_message()
+
+        last_raw = ("".join(chunks)).strip()
+        usage["input_tokens"] += final.usage.input_tokens
+        usage["output_tokens"] += final.usage.output_tokens
+        stop_reason = getattr(final, "stop_reason", None)
 
         # Truncation: stop_reason == "max_tokens" means the JSON is cut off
         # mid-output and no retry will help — fail fast with a clear message.
-        if getattr(message, "stop_reason", None) == "max_tokens":
+        if stop_reason == "max_tokens":
             raise TrackerGenerationError(
                 "AI response was truncated (hit the 32000-token output cap) "
                 "despite hard caps in the prompt. The model ignored the "
