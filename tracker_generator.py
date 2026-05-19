@@ -22,6 +22,7 @@ from typing import Any
 import anthropic
 
 import tracker_data as td
+import firestore_detector
 from ai_analyzer import extract_json_object
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,7 @@ def gather_repo_inputs(
         "file_tree": [],
         "recent_commits": [],
         "readme": "",
+        "firestore": None,
     }
 
     # Documents the user mandates in PRODUCT_SPEC §4.3
@@ -178,6 +180,25 @@ def gather_repo_inputs(
     except Exception as e:
         logger.warning("tracker: get_commits_since failed for %s/%s: %s", owner, repo, e)
 
+    # Firestore / Firebase auto-detection. Quietly skipped if the repo
+    # doesn't use Firebase. When it does, the AI receives status +
+    # indicators + missing config so it can emit an E* row for Firestore
+    # and I* rows for any missing setup.
+    try:
+        fs = firestore_detector.detect_firestore_status(
+            client, owner, repo, default_branch,
+        )
+        if fs and fs.get("status") != "not_using":
+            inputs["firestore"] = {
+                "status": fs.get("status"),
+                "project_id": fs.get("project_id"),
+                "site_domain": fs.get("site_domain"),
+                "indicators": fs.get("indicators", []),
+                "missing": fs.get("missing", []),
+            }
+    except Exception as e:
+        logger.warning("tracker: firestore detect failed for %s/%s: %s", owner, repo, e)
+
     return inputs
 
 
@@ -234,6 +255,32 @@ def build_user_prompt(
         for c in commits:
             date = c.get("date") or "????-??-??"
             parts.append(f"  {date} — {c.get('title', '')}")
+
+    # Firestore auto-detection — fed in only when the repo uses Firebase.
+    fs = inputs.get("firestore")
+    if fs:
+        parts.append("\n--- FIRESTORE / FIREBASE DETECTION ---")
+        parts.append(f"  Status: {fs.get('status', 'unknown')}")
+        if fs.get("project_id"):
+            parts.append(f"  Project ID: {fs['project_id']}")
+        if fs.get("site_domain"):
+            parts.append(f"  Hosting site: {fs['site_domain']}")
+        if fs.get("indicators"):
+            parts.append("  Indicators:")
+            for ind in fs["indicators"]:
+                parts.append(f"    - {ind}")
+        if fs.get("missing"):
+            parts.append("  Missing config:")
+            for m in fs["missing"]:
+                parts.append(f"    - {m}")
+        parts.append(
+            "  REQUIRED: emit a Firestore/Firebase row in `external_systems` "
+            "(name: 'Firestore', mode: 'Core' if status=configured else 'Integrate', "
+            "migration: summarise what's already set up vs. needs setup). "
+            "For each item in 'Missing config', emit a corresponding `infra_gaps` row "
+            "(priority P0 if status=needs_setup, otherwise P2), and have at least one "
+            "`next_actions` entry per gap with a copy/paste Claude Code prompt to fix it."
+        )
 
     parts.append(
         "\nProduce the tracker JSON now. Return ONLY the JSON object. "

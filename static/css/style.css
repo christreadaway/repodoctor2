@@ -1443,6 +1443,33 @@ tbody tr:hover {
   margin-top: var(--space-md);
 }
 
+.settings-tools-list {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.settings-tools-list li {
+  padding: 0.5rem 0.7rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+}
+
+.settings-tools-list a {
+  color: var(--green-100);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.settings-tools-list a:hover {
+  text-decoration: underline;
+}
+
 /* Danger zone */
 .settings-danger {
   border-color: rgba(255, 64, 64, 0.2);
