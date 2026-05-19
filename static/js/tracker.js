@@ -1,0 +1,235 @@
+/* ============================================================
+   Codebase Tracker — client-side behaviour.
+
+   Responsibilities:
+   - Tab switching (8 tabs).
+   - Filters on Next Actions (priority + status) and Modules (status + search).
+   - Show/hide prompt body, copy prompt to clipboard with server-side event log.
+   - Cross-tab jumps (Overview CTAs → other tabs; row anchors).
+   - Debug surface "Copy for Claude Code" formatter.
+
+   Buffers events in window.__trackerLog so the debug surface can render
+   the in-session timeline even without server log access.
+   ============================================================ */
+
+(function () {
+  "use strict";
+
+  if (window.__trackerLog === undefined) {
+    window.__trackerLog = [];
+  }
+  function logEvent(verb, fields) {
+    var entry = Object.assign({ ts: new Date().toISOString(), event: verb }, fields || {});
+    window.__trackerLog.push(entry);
+    if (window.__trackerLog.length > 200) {
+      window.__trackerLog.splice(0, window.__trackerLog.length - 200);
+    }
+  }
+
+  // ---------- Tabs ----------
+  function switchTab(name) {
+    document.querySelectorAll(".tracker-tab").forEach(function (btn) {
+      btn.classList.toggle("active", btn.dataset.tab === name);
+    });
+    document.querySelectorAll(".tracker-panel").forEach(function (p) {
+      p.classList.toggle("active", p.dataset.panel === name);
+    });
+    logEvent("tab_view", { tab: name });
+  }
+  window.trackerSwitchTab = switchTab;
+
+  document.addEventListener("click", function (e) {
+    var tab = e.target.closest(".tracker-tab");
+    if (tab) {
+      switchTab(tab.dataset.tab);
+      return;
+    }
+
+    var jump = e.target.closest(".tracker-jump");
+    if (jump) {
+      e.preventDefault();
+      var t = jump.dataset.tab;
+      if (t) switchTab(t);
+      var row = jump.dataset.row;
+      if (row) {
+        setTimeout(function () {
+          var el = document.getElementById("row-" + row);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+            el.classList.add("tracker-row-flash");
+            setTimeout(function () { el.classList.remove("tracker-row-flash"); }, 1600);
+          }
+        }, 30);
+      }
+      return;
+    }
+
+    var toggle = e.target.closest(".tracker-toggle-prompt");
+    if (toggle) {
+      var target = document.getElementById(toggle.dataset.target);
+      if (target) {
+        target.hidden = !target.hidden;
+        toggle.textContent = target.hidden ? "SHOW PROMPT" : "HIDE PROMPT";
+      }
+      return;
+    }
+
+    var copyBtn = e.target.closest(".tracker-copy-btn");
+    if (copyBtn) {
+      var actionId = copyBtn.dataset.actionId;
+      var preId = "prompt-" + actionId;
+      var pre = document.getElementById(preId);
+      var text = pre ? pre.textContent : "";
+      if (!text) return;
+
+      var done = function (ok) {
+        copyBtn.textContent = ok ? "COPIED!" : "COPY FAILED";
+        setTimeout(function () { copyBtn.textContent = "COPY PROMPT"; }, 1500);
+        logEvent(ok ? "copy_prompt" : "copy_prompt_failed", { actionId: actionId });
+        var owner = copyBtn.dataset.owner;
+        var repo = copyBtn.dataset.repo;
+        if (owner && repo) {
+          fetch("/api/tracker/" + owner + "/" + repo + "/copy-event", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action_id: actionId, ok: ok })
+          }).catch(function () {});
+        }
+      };
+
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+      } else {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = false;
+        try { ok = document.execCommand("copy"); } catch (err) { ok = false; }
+        document.body.removeChild(ta);
+        done(ok);
+      }
+      return;
+    }
+  });
+
+  // ---------- Next-action filters ----------
+  function applyNextFilters() {
+    var prioBtn = document.querySelector('.tracker-filter-chip.active[data-filter="priority"]');
+    var statusBtn = document.querySelector('.tracker-filter-chip.active[data-filter="status"]');
+    var prio = prioBtn ? prioBtn.dataset.value : "ALL";
+    var stat = statusBtn ? statusBtn.dataset.value : "OPEN";
+    document.querySelectorAll(".tracker-next-card").forEach(function (card) {
+      var rowPrio = card.dataset.priority;
+      var rowStat = card.dataset.status;
+      var prioOk = prio === "ALL" || rowPrio === prio;
+      var statOk = true;
+      if (stat === "OPEN") statOk = rowStat !== "shipped";
+      else if (stat === "SHIPPED") statOk = rowStat === "shipped";
+      // ALL → show everything
+      card.style.display = (prioOk && statOk) ? "" : "none";
+    });
+  }
+
+  function applyModuleFilters() {
+    var btn = document.querySelector('.tracker-filter-chip.active[data-filter="mod-status"]');
+    var status = btn ? btn.dataset.value : "ALL";
+    var search = document.getElementById("tracker-module-search");
+    var q = search ? search.value.trim().toLowerCase() : "";
+    document.querySelectorAll(".tracker-module-card").forEach(function (card) {
+      var s = card.dataset.status;
+      var n = card.dataset.name || "";
+      var statusOk = status === "ALL" || s === status;
+      var qOk = !q || n.indexOf(q) !== -1;
+      card.style.display = (statusOk && qOk) ? "" : "none";
+    });
+    document.querySelectorAll(".tracker-module-group").forEach(function (g) {
+      var anyVisible = Array.prototype.some.call(
+        g.querySelectorAll(".tracker-module-card"),
+        function (c) { return c.style.display !== "none"; }
+      );
+      g.style.display = anyVisible ? "" : "none";
+    });
+  }
+
+  document.addEventListener("click", function (e) {
+    var chip = e.target.closest(".tracker-filter-chip");
+    if (!chip) return;
+    var group = chip.dataset.filter;
+    document.querySelectorAll('.tracker-filter-chip[data-filter="' + group + '"]')
+      .forEach(function (c) { c.classList.remove("active"); });
+    chip.classList.add("active");
+    logEvent("filter_change", { filter: group, value: chip.dataset.value });
+    if (group === "priority" || group === "status") applyNextFilters();
+    if (group === "mod-status") applyModuleFilters();
+  });
+
+  var search = document.getElementById("tracker-module-search");
+  if (search) {
+    search.addEventListener("input", function () {
+      applyModuleFilters();
+      logEvent("filter_change", { filter: "module-search", value: search.value });
+    });
+  }
+
+  // ---------- Debug copy-for-Claude-Code ----------
+  window.trackerCopyDebug = function () {
+    var pre = document.getElementById("tracker-debug-log");
+    var meta = document.querySelector(".tracker-meta-list");
+    var errsBlock = document.querySelector(".tracker-debug-errors");
+    var lines = ["```text", "[tracker debug — " + new Date().toISOString() + "]"];
+    if (meta) {
+      meta.querySelectorAll("li").forEach(function (li) {
+        lines.push("- " + li.textContent.replace(/\s+/g, " ").trim());
+      });
+    }
+    if (errsBlock) {
+      lines.push("");
+      lines.push("Integrity errors:");
+      errsBlock.querySelectorAll("li").forEach(function (li) {
+        lines.push("- " + li.textContent.trim());
+      });
+    }
+    lines.push("");
+    lines.push("Last events:");
+    if (pre && pre.textContent) {
+      lines.push(pre.textContent.trim());
+    } else {
+      lines.push("(no server-side log events)");
+    }
+    lines.push("```");
+    var text = lines.join("\n");
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text);
+    } else {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(ta);
+    }
+    var btn = document.querySelector(".tracker-log-actions .btn");
+    if (btn) {
+      var orig = btn.textContent;
+      btn.textContent = "COPIED!";
+      setTimeout(function () { btn.textContent = orig; }, 1500);
+    }
+  };
+
+  // ---------- Init ----------
+  // If URL has a hash like #row-N5, scroll there once the panel is correct.
+  if (window.location.hash) {
+    var id = window.location.hash.slice(1);
+    var el = document.getElementById(id);
+    if (el) {
+      var panel = el.closest(".tracker-panel");
+      if (panel) switchTab(panel.dataset.panel);
+      setTimeout(function () { el.scrollIntoView({ block: "center" }); }, 50);
+    }
+  }
+
+  logEvent("page_ready");
+})();

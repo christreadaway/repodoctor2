@@ -1,11 +1,92 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 13
-**Date Range:** 2025-02-14 to 2026-05-15
-**Last Updated:** 2026-05-15
+**Total Sessions Logged:** 14
+**Date Range:** 2025-02-14 to 2026-05-19
+**Last Updated:** 2026-05-19
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 14 — 2026-05-19 (Codebase Tracker + Firestore relocated to Settings)
+
+### What We Built
+
+A per-repo Codebase Tracker page at `/tracker`, accessible from a new top-nav link. Pick any of your scanned repos from a dropdown, click Generate, and Claude reads the repo's docs + file tree + last 30 days of commits and produces a structured tracker with eight tabs:
+
+- **Overview** — what's open right now (P0 next actions) + what changed recently + recommended build & rollout sequences
+- **Recent** — newest-first changelog with kind chips (shipped / unblocked / doc / fix / blocked)
+- **Next Actions** — copy-paste-ready Claude Code prompts, filterable by priority + status (hides shipped by default)
+- **Modules** — grouped by category, status chip (functional / prototype / visual / missing), with route paths
+- **Infra Gaps** — pieces of infrastructure that block ≥2 modules
+- **Features** — proposed/shipped feature specs with separate build vs. rollout priorities
+- **External Systems** — third-party deps with mode (Core / Integrate / Replace / Optional)
+- **Questions** — open questions the code can't answer
+
+Every row carries a stable monotonic ID (`M*`, `I*`, `F*`, `E*`, `Q*`, `N*`) preserved across regenerations. The generator passes the prior tracker into the model with explicit "LOAD-BEARING IDS" instructions; new rows get max+1 per prefix.
+
+### Codes — what each prefix means
+
+- **M\*** — Module. A real surface in the app (a route, a domain, a page).
+- **I\*** — Infra gap. Missing infrastructure that blocks two or more modules.
+- **F\*** — Feature spec. Something proposed or recently shipped, with a doc.
+- **E\*** — External system. Third-party services (Anthropic, Firebase, Stripe).
+- **Q\*** — Open question. A decision the code can't make on its own.
+- **N\*** — Next action. One Claude Code session's worth of work, with copy-paste prompt.
+
+### Technical Details
+
+- **8 files added / changed:**
+  - New: `tracker_data.py` (schema constants + §5.5 integrity validation + monotonic ID minting)
+  - New: `tracker_generator.py` (Anthropic prompt construction, retry loop, prior-tracker context for ID preservation)
+  - New: `templates/tracker.html` (single 8-tab template handling index / view / debug modes)
+  - New: `static/js/tracker.js` (tab switching, filters, copy-prompt with server-side event logging)
+  - New: `tests/test_tracker.py` (39 tests covering every PRD §5.5 invariant + storage round-trip + path safety + template render edge cases)
+  - Modified: `models.py` (per-repo tracker storage at `data/trackers/<owner>__<repo>.json` + structured event log at `data/logs/tracker.log`)
+  - Modified: `app.py` (5 new routes: `/tracker`, `/tracker/<owner>/<name>`, `/tracker/<owner>/<name>/generate`, `/tracker/<owner>/<name>/debug`, `/api/tracker/<owner>/<name>/copy-event`)
+  - Modified: `templates/base.html` (nav link), `templates/settings.html` (Tools card), `static/css/style.css` (~500 lines of tracker styles)
+
+- **AI model:** uses configured `ai_model` preference (Haiku 4.5 default, $0.02-$0.05 per generation depending on repo size). Surfaced in the tracker toolbar before clicking Generate.
+
+- **Validation runs at save time AND in unit tests.** Invalid AI output triggers one retry with the validation errors fed back to the model; if it still fails, generation fails cleanly with a flash message instead of saving a corrupt tracker.
+
+- **Firestore detection auto-runs during generation.** When `firestore_detector` finds Firebase signals in a repo, the detection (status, project ID, indicators, missing config) gets fed to the prompt with explicit instructions to emit an E-row for Firestore + I-rows for any missing config + N-rows with copy-paste fix prompts. No more manual Firestore page needed for per-project setup — it's surfaced automatically in each project's tracker.
+
+- **Firestore page moved from main nav to Settings → Tools.** The page still works at `/firestore` for the fleet view, just no longer crowding the nav.
+
+- **Logging infrastructure** per CLAUDE.md mandate: `data/logs/tracker.log` captures generation start/done/error, validation pass/fail, copy-prompt events. The debug surface at `/tracker/<owner>/<name>/debug` shows a live integrity check + tail-100 of the log + a "Copy for Claude Code" button that formats the buffer as a markdown block for paste-back debugging.
+
+### Bugs Found and Fixed (Mid-Session Audit)
+
+After initial implementation, a comprehensive test pass surfaced three bugs:
+
+1. **(Critical)** Template rendered status counts with a direct dict subscript — any module status outside the four known values (e.g. typoed AI response) crashed the page with UndefinedError → 500. Fixed by guarded `.get()` lookup; unknown statuses simply don't contribute to the headline counts and the validation banner still flags them.
+2. **(UX)** `/tracker` landing page didn't auto-route to the most recently generated tracker. Now redirects when at least one tracker is saved.
+3. **(UX)** Repo dropdown only listed scanned repos. After a fresh Flask restart with no in-memory scan, you couldn't reach a saved tracker via the dropdown. Now merges saved trackers in.
+
+Test count grew from 28 to 39 covering the fixes + storage round-trip + path-traversal safety + Firestore prompt inclusion / omission.
+
+### Dashboard Cellpadding Fix (Pre-Tracker)
+
+Also fixed a long-standing dashboard spacing bug surfaced this session: the summary-stats div (`40 Repositories / 48 Total Branches / 29 Missing Required Files`) and the file-legend chip row beneath it had no CSS — they rendered as raw blocks with no gap, colliding visually. Added a proper flex card with explicit margins.
+
+### Current Status
+
+- ✅ Tracker generates from docs + code + commits + (optional) prior tracker
+- ✅ 8 tabs render with color-coded chips (red/orange/amber/sky/slate departing from all-green palette per user feedback)
+- ✅ ID stability across regenerations
+- ✅ Firestore auto-detection plumbed into tracker generation
+- ✅ Debug surface with copy-for-Claude-Code formatter
+- ✅ 39/39 tracker tests passing (5 skipped — anthropic SDK not in remote env, runs locally)
+- ✅ Dashboard cellpadding bug fixed
+- ⚠️ Netlify version still behind Flask (per Session 13 backlog)
+
+### Branch Info
+
+- Branch: `claude/add-project-tracker-L4awW`
+- Latest commits: `0a06b7a` (bug fixes), `93d5b5c` (Firestore relocated), `7a4d304` (model hint), `6dcfed5` (tracker), `ddec5f9` (dashboard spacing)
+- Status: pushed, needs merge to `main`
 
 ---
 

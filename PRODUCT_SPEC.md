@@ -1,6 +1,6 @@
 # RepoDoctor2 — Product Specification
 
-**Version:** 8.0 | **Date:** 2026-04-24 | **Repo:** github.com/christreadaway/repodoctor2
+**Version:** 9.0 | **Date:** 2026-05-19 | **Repo:** github.com/christreadaway/repodoctor2
 
 ---
 
@@ -211,6 +211,64 @@ Aggregated next-step bullets across every repo whose project summary has been ge
 
 During the lightweight scan, each repo also receives a single call to `/repos/{o}/{r}/languages`. The returned `{language: bytes}` map is stored on the repo as `code_size_bytes` (sum) and `languages` (breakdown). This byte total is displayed on the dashboard, in the Stats view, and can back future per-language charts. It is a proxy for "how much code" — not literal line count — and is labeled accordingly.
 
+### 4.7e Codebase Tracker
+
+**Files:** `tracker_data.py`, `tracker_generator.py`, `templates/tracker.html`, `static/js/tracker.js`, `app.py` (tracker routes), `models.py` (tracker storage + event log)
+
+Per-repo deep view that turns each project's docs + code into a structured, navigable map of where the project stands and what to build next. Implemented per `CODEBASE_TRACKER_PRD.md` and adapted from the PRD's repo-agnostic React/TS reference to RepoDoctor's Flask + Jinja2 stack.
+
+**Eight tabs:**
+
+| Tab | What it shows |
+|---|---|
+| **Overview** | Open P0 next actions, last 3 changes, recommended build & rollout sequences |
+| **Recent** | Newest-first changelog with kind chip (shipped / unblocked / doc / fix / blocked) |
+| **Next Actions** | Copy-paste-ready Claude Code prompts, filterable by priority + status (hides shipped by default) |
+| **Modules** | Grouped by category, status chip (functional / prototype / visual / missing), with route paths |
+| **Infra Gaps** | Pieces of infrastructure that block ≥2 modules |
+| **Features** | Proposed/shipped feature specs with separate build vs. rollout priorities |
+| **External Systems** | Third-party deps with mode (Core / Integrate / Replace / Optional) |
+| **Questions** | Open questions the code can't answer |
+
+**Stable ID system** (PRD §5.1): every row carries a permanent two-character prefix + integer (`M*` module, `I*` infra gap, `F*` feature, `E*` external system, `Q*` question, `N*` next action). IDs never get renumbered — once `M7` exists it stays `M7` across every regeneration. Each prefix has its own monotonic counter; new rows pick `max + 1` even when older rows are deleted.
+
+**AI generation:**
+
+- Per-repo, on-demand. Click GENERATE TRACKER on the toolbar; first generation takes 20-60 seconds.
+- Uses the configured `ai_model` preference (Haiku 4.5 default — ~$0.02-$0.05 per generation). Surfaced in the toolbar before clicking Generate.
+- Inputs: PRODUCT_SPEC.md, PROJECT_STATUS.md, SESSION_NOTES.md, CLAUDE.md, README, file tree (vendor dirs excluded, capped at 250 paths), last 30 days of commit titles (capped at 50), prior tracker if one exists, Firestore detection results when the repo uses Firebase.
+- Regeneration preserves IDs: the prior tracker is passed in with a "LOAD-BEARING IDS that MUST appear in output" directive, plus a compact view of every existing row's id + name + status.
+- Output is validated against the §5.5 invariants. Invalid AI output triggers one retry with the validation errors fed back to the model; second failure errors cleanly instead of saving a corrupt tracker.
+
+**Integrity validation (PRD §5.5)** — enforced both at save time AND in unit tests:
+
+- Every row ID matches its prefix regex (`/^M\d+$/`, etc.), is unique within its array.
+- Every enum value (status, priority, effort, feature status, change kind, external mode, next-action status) is one of the known constants.
+- Every cross-reference (`infra_gap.blocks`, `feature.modules`, `next_action.related_ids`, `recent_change.related_ids`) points at a real row ID in the same tracker.
+- `next_action.depends_on` is acyclic, never self-references, and points at real next-action IDs.
+- `next_action.prompt` is ≥ 50 chars.
+- `recent_change.date` matches `YYYY-MM-DD` and entries are sorted newest-first.
+
+**Color-coded chips** (departing from the all-green retro palette):
+
+- Status: green = functional · amber = prototype · sky = visual · red = missing
+- Priority: red = P0 · orange = P1 · amber = P2 · slate = P3 · ghost = —
+- Tabs use cyan as the active accent so they read as a distinct surface; code-IDs (`M1`, `I3`, etc.) get cyan pill-rectangles for legibility against any chip.
+
+**Storage:** one JSON file per repo at `data/trackers/<owner>__<repo>.json`. Path sanitisation rejects `..` segments and `/` characters. Corrupted JSON falls under the existing `_load_json` recovery path (renames to `.corrupt` and starts fresh).
+
+**Routes:**
+
+- `GET /tracker` — landing; auto-redirects to the most recently generated tracker when one exists, otherwise renders the onboarding screen with a repo dropdown.
+- `GET /tracker/<owner>/<name>` — full 8-tab view for one repo.
+- `POST /tracker/<owner>/<name>/generate` — run AI generation, save, redirect back to view.
+- `GET /tracker/<owner>/<name>/debug` — live integrity check + tracker meta + tail-100 of the event log + Copy-for-Claude-Code formatter.
+- `POST /api/tracker/<owner>/<name>/copy-event` — fire-and-forget client beacon logging copy-prompt events.
+
+**Logging** (per CLAUDE.md mandate): every generation start / done / error, validation pass / fail, render warning, and copy-prompt event lands in `data/logs/tracker.log` as one JSON object per line. The debug surface's "Copy for Claude Code" button formats the tail-100 buffer as a markdown block for paste-back debugging.
+
+**Firestore auto-detection:** when generation runs against a Firebase-using repo, `firestore_detector` is invoked and its output (status / project ID / indicators / missing config) is fed to the prompt with explicit instructions to emit a Firestore row in `external_systems`, an `infra_gaps` row for each missing config item, and a `next_actions` entry with a copy/paste fix prompt. The standalone Firestore fleet view moved from main nav to **Settings → Tools** (still works at `/firestore`).
+
 ### 4.8 Settings & Preferences
 
 **Files:** `app.py` (settings route), `models.py`, `templates/settings.html`
@@ -238,6 +296,8 @@ All data stored as local JSON files — no database dependency.
 | Action log | `data/action_log.json` | Permanent |
 | Product specs | `data/specs/[repo].md` | Permanent |
 | Project summaries (powers What's Next) | `data/project_summaries.json` | Regenerated on demand |
+| Codebase trackers (per-repo) | `data/trackers/<owner>__<repo>.json` | Permanent; regenerated on demand with ID preservation |
+| Tracker event log | `data/logs/tracker.log` | Append-only; one JSON event per line |
 | Conversation mappings | `config.json` | Permanent |
 | Parsed conversations | `projects/conversations.json` | Until re-import |
 | Stats cache | In-memory only (keyed by scan identity) | Until next scan or `?refresh=1` |
@@ -315,12 +375,27 @@ Flask Application (app.py)
     |       +-- map_conversations_to_repos() (3-tier matching)
     |       +-- assign/dismiss/get_conversations_for_repo()
     |
+    +-- tracker_data.py      Codebase Tracker schema + validation
+    |       +-- Status / Priority / Effort / Kind enum tables
+    |       +-- validate_tracker() (§5.5 integrity invariants)
+    |       +-- next_id() (monotonic ID minting per prefix)
+    |       +-- *_META visual chip metadata
+    |
+    +-- tracker_generator.py Codebase Tracker AI pipeline
+    |       +-- gather_repo_inputs() (docs + file tree + commits + firestore)
+    |       +-- build_user_prompt() (with prior-tracker ID-preservation directive)
+    |       +-- generate_tracker() (validation + retry loop)
+    |
+    +-- firestore_detector.py Firestore / Firebase setup status detector
+    |       +-- detect_firestore_status() (deps + config files → status + missing list)
+    |
     +-- models.py            Local JSON storage
     |       +-- Preferences, scan history, analysis cache, action log, specs, cost tracking
+    |       +-- Tracker storage (data/trackers/<owner>__<repo>.json) + event log (data/logs/tracker.log)
     |
-    +-- templates/ (8)       Jinja2 HTML templates
-    +-- static/css/          Retro terminal stylesheet
-    +-- static/js/           Vanilla JS (no frameworks)
+    +-- templates/ (15)      Jinja2 HTML templates (includes templates/tracker.html)
+    +-- static/css/          Retro terminal stylesheet (extended with color-coded tracker chips)
+    +-- static/js/           Vanilla JS (no frameworks); tracker.js handles tabs / filters / copy-prompt
 ```
 
 ---
@@ -340,6 +415,11 @@ Flask Application (app.py)
 | POST | `/projects/groups/delete` | Active | Delete a group (prefers hidden `original_name` field) |
 | GET | `/stats` | Active | Commits / Size / Lines-Added bar charts with period selector |
 | GET | `/whats-next` | Active | Aggregated next-steps across all repos |
+| GET | `/tracker` | Active | Tracker landing — redirects to most recent tracker or shows onboarding + dropdown |
+| GET | `/tracker/<owner>/<name>` | Active | Full 8-tab per-repo tracker view |
+| POST | `/tracker/<owner>/<name>/generate` | Active | Run AI generation, validate, save |
+| GET | `/tracker/<owner>/<name>/debug` | Active | Live integrity check + log tail + Copy-for-Claude-Code |
+| POST | `/api/tracker/<owner>/<name>/copy-event` | Active | Client beacon for copy-prompt events |
 | GET | `/mac-setup` | Active | Setup instructions page |
 | GET/POST | `/settings` | Active | Preferences, specs, credential management |
 | GET | `/api/session-cost` | Active | JSON: token counts and cost for current session |
@@ -400,7 +480,7 @@ Coverage areas:
 
 ---
 
-## 11. Current Status (April 2026)
+## 11. Current Status (May 2026)
 
 | Area | Status |
 |---|---|
@@ -412,10 +492,12 @@ Coverage areas:
 | Project Groups (filter + manage) | Working |
 | Stats view (Commits / Code Size / Lines Added) | Working |
 | What's Next aggregated view | Working |
+| Codebase Tracker (per-repo, 8 tabs, ID preservation, validation, debug surface) | Working |
+| Firestore auto-detection inside tracker generation | Working |
 | Refreshed top nav with pulsing user pill | Working |
 | Settings | Working |
 | Cost tracking | Working |
-| Tests (60/60) | Passing |
+| Tests (136 total: 97 from Session 13 + 39 new tracker tests) | Passing |
 | Netlify deployment (Node.js) | Working — behind Flask version (groups, recursive search, stats, whats-next not ported yet) |
 | AI project summaries via Claude Haiku | Working |
 | AI branch analysis | Built, inactive |
@@ -429,21 +511,24 @@ Coverage areas:
 ## 12. Roadmap
 
 ### Near Term
-1. Port Project Groups + recursive spec search + Stats + What's Next to the Netlify Node.js version
-2. Parallelize the initial scan (languages call doubled API traffic; `ThreadPoolExecutor` on `scan_repo_lite` like `/stats` does)
-3. Wire `project_mapper.py` into Flask routes and add conversation import UI (drag-and-drop ZIP + mapping review screen)
-4. Re-enable commented-out features: AI analysis, archive, action log, setup guide
-5. Build branch detail cards with AI summary display, risk badges, and action buttons
+1. Surface tracker `next_actions` (open P0/P1) into the What's Next aggregated view so the single-page inbox includes them alongside the project-summary bullets
+2. Port Project Groups + recursive spec search + Stats + What's Next to the Netlify Node.js version (Tracker is Flask-only by design — relies on local JSON storage)
+3. Parallelize the initial scan (languages call doubled API traffic; `ThreadPoolExecutor` on `scan_repo_lite` like `/stats` does)
+4. Wire `project_mapper.py` into Flask routes and add conversation import UI (drag-and-drop ZIP + mapping review screen)
+5. Re-enable commented-out features: AI analysis, archive, action log, setup guide
+6. Build branch detail cards with AI summary display, risk badges, and action buttons
 
 ### Medium Term
-6. Per-language bar-chart breakdown on the Stats page (we already fetch `languages` during scan)
-7. Quick "group assign" toggle directly on each project card (instead of only in the Manage Groups panel)
-8. Timeline view merging GitHub events + Claude conversations per repo
-9. Batch branch operations (select multiple, merge/delete/archive)
-10. Docker deployment option
+7. Tracker: commit option that mirrors the tracker JSON back to the host repo as `docs/tracker.json` so trackers survive a RepoDoctor wipe
+8. Tracker: optional cost-preview confirm step before generation (token estimate via existing `ai_analyzer.estimate_cost`)
+9. Per-language bar-chart breakdown on the Stats page (we already fetch `languages` during scan)
+10. Quick "group assign" toggle directly on each project card (instead of only in the Manage Groups panel)
+11. Timeline view merging GitHub events + Claude conversations per repo
+12. Batch branch operations (select multiple, merge/delete/archive)
+13. Docker deployment option
 
 ### Long Term
-11. GitHub webhook integration for real-time branch event tracking
-12. Team/org support with shared dashboards
-13. Scheduled branch cleanup automation
-14. GitHub App authentication (replace PAT)
+14. GitHub webhook integration for real-time branch event tracking
+15. Team/org support with shared dashboards
+16. Scheduled branch cleanup automation
+17. GitHub App authentication (replace PAT)

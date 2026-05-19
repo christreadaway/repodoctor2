@@ -28,6 +28,8 @@ import models
 import spec_cleaner
 import project_mapper
 import firestore_detector
+import tracker_data
+import tracker_generator
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
@@ -1178,6 +1180,234 @@ def firestore_scan():
 @_require_auth
 def mac_setup():
     return render_template("mac_setup.html")
+
+
+# --- Codebase Tracker ---
+#
+# Per-repo deep view: modules + infra gaps + features + external systems
+# + open questions + next actions + recent changes. Generated on demand
+# via Claude; IDs (M1, I1, F1, ...) preserved across regenerations.
+# See CODEBASE_TRACKER_PRD.md for the full spec.
+
+def _resolve_repo(owner: str, name: str) -> dict | None:
+    """Find a repo in the most recent scan, by owner+name."""
+    if not _scan_results:
+        return None
+    for r in _scan_results.get("repos", []):
+        if r["owner"] == owner and r["name"] == name:
+            return r
+    return None
+
+
+def _tracker_repo_list() -> list[dict]:
+    """[{owner, name, full_name, has_tracker, generated_at}] for the dropdown.
+    Includes every scanned repo PLUS any repo that has a saved tracker
+    (so a fresh Flask restart with no in-memory scan still lets you reach
+    your existing trackers via the dropdown)."""
+    out: list[dict] = []
+    saved = models.list_trackers()
+    seen: set[str] = set()
+
+    if _scan_results:
+        for r in _scan_results.get("repos", []):
+            key = f"{r['owner']}/{r['name']}"
+            existing = saved.get(key)
+            out.append({
+                "owner": r["owner"],
+                "name": r["name"],
+                "full_name": r.get("full_name", key),
+                "has_tracker": bool(existing),
+                "generated_at": (existing or {}).get("generated_at", ""),
+            })
+            seen.add(key)
+
+    # Saved trackers for repos that aren't in the current scan (e.g. excluded,
+    # deleted on GitHub, or scan_results not yet populated this session).
+    for key, t in saved.items():
+        if key in seen:
+            continue
+        owner, name = key.split("/", 1)
+        out.append({
+            "owner": owner,
+            "name": name,
+            "full_name": key,
+            "has_tracker": True,
+            "generated_at": t.get("generated_at", ""),
+        })
+
+    out.sort(key=lambda r: r["name"].lower())
+    return out
+
+
+@app.route("/tracker")
+@_require_auth
+def tracker_index():
+    """Landing page — auto-routes to the most-recently-generated tracker
+    if one exists, otherwise renders the onboarding view with a dropdown."""
+    saved = models.list_trackers()
+
+    # If any tracker is saved, jump straight to the most-recent one so
+    # the user lands on data, not a blank dropdown.
+    recent_key = ""
+    recent_ts = ""
+    for key, t in saved.items():
+        ts = t.get("generated_at", "")
+        if ts and ts > recent_ts:
+            recent_ts = ts
+            recent_key = key
+    if recent_key:
+        owner, name = recent_key.split("/", 1)
+        return redirect(url_for("tracker_view", owner=owner, name=name))
+
+    return render_template(
+        "tracker.html",
+        mode="index",
+        scan_results=_scan_results,
+        repos=_tracker_repo_list(),
+        selected_owner="",
+        selected_name="",
+        tracker=None,
+        meta=tracker_data,
+    )
+
+
+@app.route("/tracker/<owner>/<name>")
+@_require_auth
+def tracker_view(owner, name):
+    """Render the full 8-tab tracker for one repo."""
+    repos = _tracker_repo_list()
+    repo_info = _resolve_repo(owner, name)
+    tracker = models.get_tracker(owner, name)
+    errors: list[str] = []
+    if tracker:
+        errors = tracker_data.validate_tracker(tracker)
+        if errors:
+            models.log_tracker_event(
+                "render_validation_warn",
+                owner=owner, repo=name, errors=errors[:5],
+            )
+    return render_template(
+        "tracker.html",
+        mode="view",
+        scan_results=_scan_results,
+        repos=repos,
+        selected_owner=owner,
+        selected_name=name,
+        repo_info=repo_info,
+        tracker=tracker,
+        validation_errors=errors,
+        meta=tracker_data,
+    )
+
+
+@app.route("/tracker/<owner>/<name>/generate", methods=["POST"])
+@_require_auth
+def tracker_generate(owner, name):
+    """Run AI generation against the chosen repo and save the tracker JSON."""
+    client = _get_github_client()
+    creds = _get_credentials()
+    if not client or not creds:
+        flash("Not authenticated.", "error")
+        return redirect(url_for("tracker_view", owner=owner, name=name))
+
+    repo_info = _resolve_repo(owner, name)
+    if not repo_info:
+        flash("Repository not found in scan results. Run a scan first.", "error")
+        return redirect(url_for("tracker_index"))
+
+    default_branch = repo_info.get("default_branch", "main")
+    prior = models.get_tracker(owner, name)
+    prefs = models.get_preferences()
+    model = prefs.get("ai_model", "claude-haiku-4-5-20251001")
+
+    models.log_tracker_event(
+        "generate_start", owner=owner, repo=name, model=model,
+        had_prior=bool(prior),
+    )
+
+    try:
+        inputs = tracker_generator.gather_repo_inputs(
+            client, owner, name, default_branch,
+        )
+        tracker = tracker_generator.generate_tracker(
+            api_key=creds["anthropic_key"],
+            owner=owner, repo=name,
+            default_branch=default_branch,
+            inputs=inputs,
+            prior_tracker=prior,
+            model=model,
+        )
+    except tracker_generator.TrackerGenerationError as e:
+        models.log_tracker_event(
+            "generate_error", owner=owner, repo=name, error=str(e)[:500],
+        )
+        flash(f"Tracker generation failed: {e}", "error")
+        return redirect(url_for("tracker_view", owner=owner, name=name))
+    except Exception as e:
+        models.log_tracker_event(
+            "generate_exception", owner=owner, repo=name, error=str(e)[:500],
+        )
+        flash(f"Tracker generation failed: {type(e).__name__}: {e}", "error")
+        return redirect(url_for("tracker_view", owner=owner, name=name))
+
+    usage = tracker.pop("_usage", {})
+    if usage:
+        in_tok = usage.get("input_tokens", 0)
+        out_tok = usage.get("output_tokens", 0)
+        cost = ai.estimate_cost(in_tok, out_tok, model=model)
+        _session_cost.add(in_tok, out_tok, cost)
+
+    models.save_tracker(owner, name, tracker)
+    models.log_tracker_event(
+        "generate_done", owner=owner, repo=name,
+        n_modules=len(tracker.get("modules", [])),
+        n_next=len(tracker.get("next_actions", [])),
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+    )
+    models.log_action("generate_tracker", name, default_branch,
+                      f"{len(tracker.get('modules', []))} modules, "
+                      f"{len(tracker.get('next_actions', []))} next actions")
+    flash("Tracker generated.", "success")
+    return redirect(url_for("tracker_view", owner=owner, name=name))
+
+
+@app.route("/tracker/<owner>/<name>/debug")
+@_require_auth
+def tracker_debug(owner, name):
+    """Debug surface: live integrity check + recent log events.
+    Copy-for-Claude-Code text block surfaced in the template."""
+    tracker = models.get_tracker(owner, name)
+    errors: list[str] = []
+    if tracker:
+        errors = tracker_data.validate_tracker(tracker)
+    log_events = models.tail_tracker_log(100)
+    return render_template(
+        "tracker.html",
+        mode="debug",
+        scan_results=_scan_results,
+        repos=_tracker_repo_list(),
+        selected_owner=owner,
+        selected_name=name,
+        tracker=tracker,
+        validation_errors=errors,
+        log_events=log_events,
+        meta=tracker_data,
+    )
+
+
+@app.route("/api/tracker/<owner>/<name>/copy-event", methods=["POST"])
+@_require_auth
+def tracker_copy_event(owner, name):
+    """Log a copy-prompt event from the client so the debug surface
+    can reflect activity. Fire-and-forget — never blocks the UI."""
+    action_id = (request.json or {}).get("action_id") if request.is_json else None
+    ok = (request.json or {}).get("ok", True) if request.is_json else True
+    models.log_tracker_event(
+        "copy_prompt", owner=owner, repo=name,
+        action_id=action_id, ok=bool(ok),
+    )
+    return jsonify({"ok": True})
 
 
 # =====================================================================
