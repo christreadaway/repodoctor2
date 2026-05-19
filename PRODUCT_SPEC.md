@@ -234,11 +234,15 @@ Per-repo deep view that turns each project's docs + code into a structured, navi
 
 **AI generation:**
 
-- Per-repo, on-demand. Click GENERATE TRACKER on the toolbar; first generation takes 20-60 seconds.
-- Uses the configured `ai_model` preference (Haiku 4.5 default — ~$0.02-$0.05 per generation). Surfaced in the toolbar before clicking Generate.
-- Inputs: PRODUCT_SPEC.md, PROJECT_STATUS.md, SESSION_NOTES.md, CLAUDE.md, README, file tree (vendor dirs excluded, capped at 250 paths), last 30 days of commit titles (capped at 50), prior tracker if one exists, Firestore detection results when the repo uses Firebase.
+- Per-repo, on-demand. Click GENERATE TRACKER on the toolbar; first generation takes 20-90 seconds depending on repo size.
+- **Per-generation model override:** a dropdown next to the GENERATE button lets you pick Haiku / Sonnet / Opus for that one generation without changing the global Settings default. Useful when a dense repo (e.g. parentpoint) needs Sonnet's larger output budget while everything else stays on Haiku for cost.
+- Default model comes from the configured `ai_model` preference (Haiku 4.5 default — ~$0.02-$0.05 per generation; Sonnet ~$0.15-$0.30; Opus ~$0.50-$1.00). Surfaced in the toolbar before clicking Generate.
+- **Streaming output** (required by the Anthropic SDK for `max_tokens` ≥ ~16K): generation accumulates chunks from `client.messages.stream()` and pulls final usage + stop_reason off `get_final_message()`. Same cost as non-streaming — purely a transport change to keep the HTTP connection alive while large responses generate.
+- Inputs: PRODUCT_SPEC.md, PROJECT_STATUS.md, SESSION_NOTES.md, CLAUDE.md, README (each capped at 6000 chars), file tree (vendor dirs excluded, capped at 200 paths), last 30 days of commit titles (capped at 40), prior tracker if one exists (compact view, capped at 8000 chars), Firestore detection results when the repo uses Firebase.
+- **Hard scope caps in the prompt** force the model to be selective on rich repos: max 25 modules, 8 infra_gaps, 12 features, 12 external_systems, 15 questions, 15 next_actions, 20 recent_changes, 8 each in build/rollout sequences. Explicit priority order for when it can't fit everything (P0/P1 actions over P2/P3, non-functional modules over functional, infra gaps blocking more modules over fewer). Prose fields are 1-3 sentences max.
 - Regeneration preserves IDs: the prior tracker is passed in with a "LOAD-BEARING IDS that MUST appear in output" directive, plus a compact view of every existing row's id + name + status.
 - Output is validated against the §5.5 invariants. Invalid AI output triggers one retry with the validation errors fed back to the model; second failure errors cleanly instead of saving a corrupt tracker.
+- **Truncation handling:** if the model hits the 32K output cap (`stop_reason == "max_tokens"`), generation aborts immediately (no retry, since the next call truncates the same way) with a clear error message suggesting Sonnet or a retry. Token counts surface in the error so the user can see how close they got.
 
 **Integrity validation (PRD §5.5)** — enforced both at save time AND in unit tests:
 

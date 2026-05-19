@@ -219,6 +219,70 @@
     }
   };
 
+  // ---------- Generation loading overlay ----------
+  // GENERATE TRACKER takes 20-90 seconds. Without feedback the page just sits
+  // there and the user wonders if anything's happening. We show a centered
+  // overlay with the repo name, an animated "ANALYZING" pulse, and a live
+  // elapsed-time counter. The form still submits normally; the overlay stays
+  // until the page reloads with the result.
+  function showGenerateOverlay(repo, model) {
+    if (document.getElementById("tracker-overlay")) return;
+    var overlay = document.createElement("div");
+    overlay.id = "tracker-overlay";
+    overlay.className = "tracker-overlay";
+    overlay.innerHTML =
+      '<div class="tracker-overlay-card">' +
+        '<div class="tracker-overlay-spinner"></div>' +
+        '<h2 class="tracker-overlay-title">ANALYZING<span class="tracker-overlay-dots"><span>.</span><span>.</span><span>.</span></span></h2>' +
+        '<p class="tracker-overlay-repo">' + repo + '</p>' +
+        '<p class="tracker-overlay-detail">Reading docs + file tree + recent commits, then asking ' +
+          '<code>' + (model || "the configured model") + '</code> to produce the tracker JSON.</p>' +
+        '<p class="tracker-overlay-elapsed">Elapsed: <span id="tracker-overlay-time">0s</span></p>' +
+        '<p class="tracker-overlay-foot">Typical: 20-90 seconds. Don\'t close this tab.</p>' +
+      '</div>';
+    document.body.appendChild(overlay);
+
+    var t0 = Date.now();
+    var timeEl = document.getElementById("tracker-overlay-time");
+    var iv = setInterval(function () {
+      if (!timeEl || !document.body.contains(overlay)) {
+        clearInterval(iv);
+        return;
+      }
+      var s = Math.floor((Date.now() - t0) / 1000);
+      timeEl.textContent = s + "s";
+    }, 1000);
+  }
+
+  document.addEventListener("submit", function (e) {
+    var form = e.target.closest(".tracker-gen-form");
+    if (!form) return;
+    var btn = form.querySelector("button[type=submit]");
+    if (btn) {
+      btn.disabled = true;
+      btn.dataset._origText = btn.textContent;
+      var lt = btn.getAttribute("data-loading-text");
+      if (lt) btn.textContent = lt;
+    }
+    var modelSelect = form.querySelector(".tracker-model-select");
+    var modelLabel = "";
+    if (modelSelect) {
+      var opt = modelSelect.options[modelSelect.selectedIndex];
+      modelLabel = opt ? opt.textContent.replace(/^—.*?—\s*/, "").trim() : "";
+    }
+    // Pull the repo name from the page so the overlay is specific.
+    var repoSel = document.getElementById("tracker-pick");
+    var repoLabel = "this repo";
+    if (repoSel && repoSel.value) {
+      repoLabel = repoSel.value;
+    } else {
+      var titleEl = document.querySelector(".page-header h1");
+      if (titleEl) repoLabel = titleEl.textContent.trim();
+    }
+    showGenerateOverlay(repoLabel, modelLabel);
+    logEvent("generate_start_clicked", { repo: repoLabel, model: modelLabel });
+  });
+
   // ---------- Init ----------
   // If URL has a hash like #row-N5, scroll there once the panel is correct.
   if (window.location.hash) {

@@ -1,9 +1,9 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 14
+**Total Sessions Logged:** 14 (14 + 14b same-day continuation)
 **Date Range:** 2025-02-14 to 2026-05-19
-**Last Updated:** 2026-05-19
+**Last Updated:** 2026-05-19 (Session 14b)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
 
@@ -85,8 +85,42 @@ Also fixed a long-standing dashboard spacing bug surfaced this session: the summ
 ### Branch Info
 
 - Branch: `claude/add-project-tracker-L4awW`
-- Latest commits: `0a06b7a` (bug fixes), `93d5b5c` (Firestore relocated), `7a4d304` (model hint), `6dcfed5` (tracker), `ddec5f9` (dashboard spacing)
-- Status: pushed, needs merge to `main`
+- Status: pushed, second merge to `main` needed after Session 14b production hardening
+
+---
+
+## Session 14b — 2026-05-19 (Production hardening after first real generation)
+
+After merging Session 14 to main and trying the tracker against parentpoint, three real-world failures surfaced. None of them showed up in unit tests because they were all about the AI's behavior under load.
+
+### What Broke
+
+1. **Output truncation.** First generation against parentpoint came back with "Unbalanced braces in AI response" — the JSON cut off mid-content. Root cause: `max_tokens=8000` was way too tight for a repo with a dense PRODUCT_SPEC and many modules. The model wanted to emit ~12K tokens of output.
+2. **Streaming-required error.** Bumping `max_tokens` to 32K triggered "Streaming is required for operations that may take longer than 10 minutes." The Anthropic SDK refuses non-streaming calls at high token counts because the HTTP connection could time out.
+3. **Silent loading state.** Clicking GENERATE TRACKER did nothing visible for 20-90 seconds. The button had a `data-loading-text` attribute but no JS to read it. Users wondered if anything was happening.
+
+### What We Fixed
+
+1. **Bumped output budget 8K → 16K → 32K** in two steps (Haiku 4.5 supports up to 64K; 32K is safe headroom).
+2. **Added hard scope caps to the system prompt** — max 25 modules, 8 infra_gaps, 12 features, 12 external_systems, 15 questions, 15 next_actions, 20 recent_changes. Plus a priority order for when the model can't fit everything: P0/P1 actions over P2/P3, non-functional modules over functional, infra blocking more modules over fewer. Prose fields capped at 1-3 sentences.
+3. **Switched to the streaming API.** `client.messages.stream()` accumulates chunks via `stream.text_stream`, then pulls usage + stop_reason off `stream.get_final_message()`. Same cost as non-streaming — just a transport change.
+4. **Per-generation model override dropdown** on the toolbar. Pick Haiku / Sonnet / Opus for one specific generation without touching global Settings. Whitelisted server-side so a bad form submission falls back to the default. Useful when parentpoint specifically needs Sonnet while everything else stays on cheaper Haiku.
+5. **Fail-fast on truncation.** Detect `stop_reason == "max_tokens"` after the stream completes; raise immediately instead of retrying (the next call would truncate the same way). Error message includes token counts so the user sees how close they got, and points at the model dropdown.
+6. **Loading overlay.** Centered card with an animated cyan spinner, "ANALYZING…" with pulsing dots, repo name, model in use, live elapsed-time counter, and a "Typical: 20-90 seconds. Don't close this tab." footer. Triggers on form submit, stays until the page reloads with the result.
+
+### Commits
+
+- `ea1560a` — truncation detection + slimmer input budgets + 16K cap
+- `86ccd83` — hard scope caps in prompt + 32K cap
+- `773bb53` — per-generation model override dropdown
+- `8939c27` — streaming API
+- (pending) — loading overlay + docs update
+
+### Lessons
+
+- AI-driven features need production debugging time, not just unit tests. Real repos surface output sizes that synthetic test data never will.
+- A `data-loading-text` attribute without JS to read it is a lie. Either wire it up everywhere or remove it.
+- The Anthropic SDK's streaming threshold isn't obvious — bumping max_tokens past ~16K silently changes the required API surface. Worth documenting.
 
 ---
 
