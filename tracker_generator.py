@@ -51,6 +51,7 @@ Hard rules:
 
 1. Return ONLY valid JSON. No markdown fences, no leading prose, no trailing commentary. The first character is `{`.
 2. IDs are stable. If the user supplies a "prior_tracker" object, every ID it contains MUST appear in your response with the same prefix+integer. Add NEW rows with the next unused integer per prefix (e.g. if prior has M1..M7, new modules start at M8).
+2a. USER-DRIVEN STATUSES — preserve exactly. If a prior next_action has status "blocked", "dismissed", "in_progress", or "awaiting_deploy", keep that exact value AND the existing `status_note`. The human set those manually; do not override. You may freely update status from "todo" → other states based on SESSION_NOTES evidence.
 3. Never reuse a deleted integer. Always pick max(prefix)+1 for new rows.
 4. Every `next_actions[].prompt` is a complete copy/paste-ready instruction to Claude Code: opens with a one-sentence goal, then numbered steps, then acceptance criteria. Minimum 50 characters, aim for 200-600 characters — concise but complete. Reference the M/I/F IDs the action touches.
 5. Every `next_actions[].related_ids`, every `infra_gaps[].blocks`, every `features[].modules`, every `recent_changes[].related_ids` must point at IDs you actually defined in this same response. No dangling references.
@@ -311,7 +312,7 @@ def _compact_prior(prior: dict) -> dict:
     compact: dict = {}
     keep_fields = {"id", "name", "title", "text", "status",
                    "priority", "build_priority", "roll_priority",
-                   "mode", "category"}
+                   "mode", "category", "status_note"}
     for key in ("modules", "infra_gaps", "features", "external_systems",
                 "questions", "next_actions"):
         section = prior.get(key) or []

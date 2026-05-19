@@ -3941,6 +3941,32 @@ kbd {
   gap: 0.45rem;
 }
 
+/* Clickable variant — header stats that jump to a tab + filter. */
+button.tracker-stat-jump {
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 0.3rem 0.55rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+}
+
+button.tracker-stat-jump:hover {
+  background: var(--bg-panel);
+  border-color: var(--tk-cyan-bd);
+  transform: translateY(-1px);
+}
+
+button.tracker-stat-jump:active {
+  transform: translateY(0);
+}
+
+button.tracker-stat-jump:focus {
+  outline: none;
+  border-color: var(--tk-cyan-fg);
+}
+
 .tracker-stat-label {
   color: var(--text-secondary);
   font-size: 0.78rem;
@@ -4245,11 +4271,89 @@ kbd {
   border-color: var(--tk-cyan-bd);
 }
 
-.tracker-next-card.is-shipped {
+/* Per-status card treatments. Shipped is faded with strikethrough so the
+   Shipped tab still feels like a record, not a working list. Blocked has
+   a left-rule in the missing-red so it visually pops in a long list of
+   open actions. Dismissed is faded but with no strikethrough — like a
+   ghost behind everything. */
+.tracker-next-card.status-shipped {
   opacity: 0.55;
 }
-.tracker-next-card.is-shipped .tracker-next-title {
+.tracker-next-card.status-shipped .tracker-next-title {
   text-decoration: line-through;
+}
+
+.tracker-next-card.status-blocked {
+  border-left: 3px solid var(--tk-red-fg);
+  background: rgba(255, 64, 64, 0.04);
+}
+
+.tracker-next-card.status-dismissed {
+  opacity: 0.45;
+  background: var(--bg-panel);
+}
+.tracker-next-card.status-dismissed .tracker-next-title {
+  color: var(--text-secondary);
+}
+
+/* Per-card status update form */
+.tracker-action-status-form {
+  margin-top: 0.85rem;
+  padding-top: 0.7rem;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tracker-action-status-label {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 0.2rem;
+}
+
+.tracker-action-status-select {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.tracker-action-status-note {
+  flex: 1 1 240px;
+  min-width: 200px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.tracker-action-status-note:focus,
+.tracker-action-status-select:focus {
+  outline: none;
+  border-color: var(--tk-cyan-bd);
+}
+
+/* Per-row Claude Code prompt block for modules / infra / features / external */
+.tracker-row-prompt {
+  margin-top: 0.7rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--border);
+}
+
+.tracker-row-prompt-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
 }
 
 .tracker-next-header { margin-bottom: 0.5rem; }

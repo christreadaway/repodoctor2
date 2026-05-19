@@ -45,7 +45,10 @@ FEATURE_STATUSES = (
     "Proposed", "In Discussion", "In Progress", "Shipped", "Abandoned"
 )
 EFFORTS = ("XS", "S", "M", "L", "XL")
-NEXT_ACTION_STATUSES = ("todo", "in_progress", "awaiting_deploy", "shipped")
+NEXT_ACTION_STATUSES = (
+    "todo", "in_progress", "awaiting_deploy", "shipped",
+    "blocked", "dismissed",
+)
 CHANGE_KINDS = ("shipped", "unblocked", "doc", "fix", "blocked")
 EXTERNAL_MODES = ("Core", "Integrate", "Replace", "Optional")
 
@@ -101,9 +104,11 @@ EFFORT_META = {
 
 NEXT_ACTION_STATUS_META = {
     "todo":            {"label": "Todo",            "chip": "chip-p2"},
-    "in_progress":     {"label": "In progress",    "chip": "chip-prototype"},
-    "awaiting_deploy": {"label": "Awaiting deploy","chip": "chip-visual"},
-    "shipped":         {"label": "Shipped",        "chip": "chip-functional"},
+    "in_progress":     {"label": "In progress",     "chip": "chip-prototype"},
+    "awaiting_deploy": {"label": "Awaiting deploy", "chip": "chip-visual"},
+    "shipped":         {"label": "Shipped",         "chip": "chip-functional"},
+    "blocked":         {"label": "Blocked",         "chip": "chip-missing"},
+    "dismissed":       {"label": "Dismissed",       "chip": "chip-p3"},
 }
 
 CHANGE_KIND_META = {

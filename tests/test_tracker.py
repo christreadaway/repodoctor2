@@ -195,6 +195,34 @@ class TestValidationNegative(unittest.TestCase):
         errs = td.validate_tracker(t)
         self.assertTrue(any("X999" in e for e in errs))
 
+    def test_next_action_status_accepts_blocked(self):
+        """`blocked` is a real status now — user-driven, preserved
+        across regeneration."""
+        t = _valid_tracker()
+        t["next_actions"][0]["status"] = "blocked"
+        errs = td.validate_tracker(t)
+        self.assertFalse(any("status" in e and "blocked" in e for e in errs))
+
+    def test_next_action_status_accepts_dismissed(self):
+        t = _valid_tracker()
+        t["next_actions"][0]["status"] = "dismissed"
+        errs = td.validate_tracker(t)
+        self.assertFalse(any("status" in e and "dismissed" in e for e in errs))
+
+    def test_next_action_status_rejects_unknown(self):
+        t = _valid_tracker()
+        t["next_actions"][0]["status"] = "wat"
+        errs = td.validate_tracker(t)
+        self.assertTrue(any("wat" in e for e in errs))
+
+    def test_blocked_dismissed_in_status_meta(self):
+        # Template uses NEXT_ACTION_STATUS_META.get(status, {}).get('label')
+        # so both new statuses must be registered with display labels.
+        self.assertIn("blocked", td.NEXT_ACTION_STATUS_META)
+        self.assertIn("dismissed", td.NEXT_ACTION_STATUS_META)
+        self.assertEqual(td.NEXT_ACTION_STATUS_META["blocked"]["label"], "Blocked")
+        self.assertEqual(td.NEXT_ACTION_STATUS_META["dismissed"]["label"], "Dismissed")
+
     def test_next_action_self_dep(self):
         t = _valid_tracker()
         t["next_actions"][0]["depends_on"] = ["N1"]
