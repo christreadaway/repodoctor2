@@ -10,7 +10,7 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # Make the project root importable.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -375,8 +375,11 @@ class TestBriefingRoutes(unittest.TestCase):
         for path in ("/briefing", "/briefing/export.md"):
             resp = self.client.get(path)
             self.assertEqual(resp.status_code, 302, path)
-        resp = self.client.post("/briefing/generate")
-        self.assertEqual(resp.status_code, 302)
+
+    def test_unauthenticated_api_returns_401_json(self):
+        resp = self.client.post("/api/briefing/generate/demo")
+        self.assertEqual(resp.status_code, 401)
+        self.assertIn("error", resp.get_json())
 
     def test_briefing_renders_onboarding_without_scan(self):
         self._login()
@@ -403,11 +406,107 @@ class TestBriefingRoutes(unittest.TestCase):
         self.assertIn("portfolio-chat-briefing", resp.headers["Content-Disposition"])
         self.assertIn(b"# Portfolio Chat Briefing", resp.data)
 
-    def test_generate_without_client_flashes_error(self):
+    def test_generate_without_client_returns_401(self):
         self._login()
-        resp = self.client.post("/briefing/generate", follow_redirects=False)
-        self.assertEqual(resp.status_code, 302)
-        self.assertIn("/briefing", resp.headers["Location"])
+        resp = self.client.post("/api/briefing/generate/demo")
+        self.assertEqual(resp.status_code, 401)
+        self.assertIn("Log out and back in", resp.get_json()["error"])
+
+
+class TestGenerationEndpoints(unittest.TestCase):
+    """Per-repo generation endpoints driven by the client-side queue."""
+
+    def setUp(self):
+        import app as app_module
+        self.app_module = app_module
+        app_module.app.config["TESTING"] = True
+        app_module.app.config["SECRET_KEY"] = "test-secret"
+        self.client = app_module.app.test_client()
+        self._orig_scan = app_module._scan_results
+        self._orig_gh = app_module._github_client
+        self._orig_creds = app_module._credentials
+        app_module._scan_results = {"repos": [_repo()]}
+        app_module._github_client = MagicMock()
+        app_module._credentials = {"github_pat": "p", "anthropic_key": "k"}
+
+        self._tmp = tempfile.mkdtemp()
+        self._orig_paths = (models.BRIEFS_PATH, models.BRIEFING_LOG_PATH,
+                            models.ACTION_LOG_PATH, models.SUMMARIES_PATH)
+        models.BRIEFS_PATH = os.path.join(self._tmp, "briefs.json")
+        models.BRIEFING_LOG_PATH = os.path.join(self._tmp, "briefing.log")
+        models.ACTION_LOG_PATH = os.path.join(self._tmp, "action_log.json")
+        models.SUMMARIES_PATH = os.path.join(self._tmp, "summaries.json")
+
+        with self.client.session_transaction() as sess:
+            sess["authenticated"] = True
+            sess["github_user"] = "alice"
+
+    def tearDown(self):
+        self.app_module._scan_results = self._orig_scan
+        self.app_module._github_client = self._orig_gh
+        self.app_module._credentials = self._orig_creds
+        (models.BRIEFS_PATH, models.BRIEFING_LOG_PATH,
+         models.ACTION_LOG_PATH, models.SUMMARIES_PATH) = self._orig_paths
+
+    def test_brief_unknown_repo_404(self):
+        resp = self.client.post("/api/briefing/generate/nope", json={})
+        self.assertEqual(resp.status_code, 404)
+
+    def test_brief_skips_fresh(self):
+        # Brief generated after the repo's last push → server skips it.
+        models.save_brief("demo", _brief())  # _generated_at = now
+        resp = self.client.post("/api/briefing/generate/demo", json={})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json().get("skipped"), "fresh")
+
+    def test_brief_force_regenerates_fresh(self):
+        models.save_brief("demo", _brief())
+        with patch.object(self.app_module.briefing, "gather_brief_inputs", return_value="ctx"), \
+             patch.object(self.app_module.briefing, "generate_brief",
+                          return_value=dict(_brief(), _usage={"input_tokens": 10, "output_tokens": 5})):
+            resp = self.client.post("/api/briefing/generate/demo", json={"force": True})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["stage"], "Building")
+        events = models.tail_briefing_log(5)
+        self.assertEqual(events[-1]["event"], "generate_done")
+
+    def test_brief_generation_failure_keeps_existing(self):
+        models.save_brief("demo", _brief(what_it_is="KEEP ME"))
+        with patch.object(self.app_module.briefing, "gather_brief_inputs", return_value="ctx"), \
+             patch.object(self.app_module.briefing, "generate_brief",
+                          side_effect=RuntimeError("api down")):
+            resp = self.client.post("/api/briefing/generate/demo", json={"force": True})
+        self.assertEqual(resp.status_code, 502)
+        self.assertIn("api down", resp.get_json()["error"])
+        self.assertEqual(models.get_briefs()["demo"]["what_it_is"], "KEEP ME")
+        events = models.tail_briefing_log(5)
+        self.assertEqual(events[-1]["event"], "generate_error")
+
+    def test_summary_unknown_repo_404(self):
+        resp = self.client.post("/api/projects/summary/nope", json={})
+        self.assertEqual(resp.status_code, 404)
+
+    def test_summary_success(self):
+        with patch.object(self.app_module, "_generate_summary_for_repo",
+                          return_value={"what_it_does": "x"}):
+            resp = self.client.post("/api/projects/summary/demo", json={})
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.get_json()["ok"])
+
+    def test_summary_failure_returns_502(self):
+        with patch.object(self.app_module, "_generate_summary_for_repo",
+                          side_effect=RuntimeError("parse failed")):
+            resp = self.client.post("/api/projects/summary/demo", json={})
+        self.assertEqual(resp.status_code, 502)
+        self.assertIn("parse failed", resp.get_json()["error"])
+
+    def test_summary_unauthenticated_401(self):
+        with self.client.session_transaction() as sess:
+            sess.clear()
+        resp = self.client.post("/api/projects/summary/demo")
+        self.assertEqual(resp.status_code, 401)
 
 
 if __name__ == "__main__":

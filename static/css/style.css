@@ -4915,3 +4915,21 @@ button.tracker-stat-jump:focus {
 }
 
 .briefing-card { display: flex; flex-direction: column; }
+
+/* Generation-queue overlay additions (shared by Briefing + Projects). */
+.gen-overlay-errors {
+  margin: 10px 0 0;
+  max-height: 180px;
+  overflow-y: auto;
+  text-align: left;
+  font-size: 0.75rem;
+  color: var(--tk-red-fg);
+  border: 1px solid var(--tk-red-bd);
+  background: var(--tk-red-bg);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+.gen-overlay-errors div { padding: 2px 0; }
+
+.gen-overlay-actions { margin-top: 12px; }

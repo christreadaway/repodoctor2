@@ -7,16 +7,11 @@
         {% if scan_results and projects %}
         <button type="button" class="btn btn-primary" id="copy-briefing-btn">COPY FOR CLAUDE CHAT</button>
         <a href="{{ url_for('briefing_export', group=active_group or None) }}" class="btn btn-secondary">DOWNLOAD .MD</a>
-        <form method="POST" action="{{ url_for('briefing_generate', group=active_group or None) }}" class="inline-form briefing-generate-form">
-            <button type="submit" class="btn btn-secondary">
-                {% if missing_count == projects|length %}GENERATE BRIEFS{% else %}UPDATE STALE + MISSING{% endif %}
-            </button>
-        </form>
-        <form method="POST" action="{{ url_for('briefing_generate', group=active_group or None) }}" class="inline-form briefing-generate-form"
-              onsubmit="return confirm('Regenerate AI briefs for all {{ projects|length }} project(s) in view? Uses the API for every repo.');">
-            <input type="hidden" name="force" value="1">
-            <button type="submit" class="btn btn-secondary">REGENERATE ALL</button>
-        </form>
+        <button type="button" class="btn btn-secondary" id="generate-needs-btn"
+                {% if not targets_needs %}disabled title="Every brief in view is current."{% endif %}>
+            {% if missing_count == projects|length %}GENERATE BRIEFS ({{ targets_needs|length }}){% else %}UPDATE STALE + MISSING ({{ targets_needs|length }}){% endif %}
+        </button>
+        <button type="button" class="btn btn-secondary" id="generate-all-btn">REGENERATE ALL ({{ targets_all|length }})</button>
         {% endif %}
     </div>
 </div>
@@ -152,6 +147,7 @@
 </div>
 {% endif %}
 
+<script type="application/json" id="briefing-targets">{{ {"all": targets_all or [], "needs": targets_needs or []}|tojson }}</script>
 <script>
 (function () {
     var copyAll = document.getElementById('copy-briefing-btn');
@@ -169,39 +165,37 @@
         });
     });
 
-    // Full-screen overlay while briefs generate (same pattern as the
-    // Tracker page) — generation walks every repo in view and can take
-    // a few minutes on a full portfolio.
-    function showOverlay() {
-        if (document.getElementById('briefing-overlay')) return;
-        var overlay = document.createElement('div');
-        overlay.id = 'briefing-overlay';
-        overlay.className = 'tracker-overlay';
-        overlay.innerHTML =
-            '<div class="tracker-overlay-card">' +
-              '<div class="tracker-overlay-spinner"></div>' +
-              '<h2 class="tracker-overlay-title">BRIEFING<span class="tracker-overlay-dots"><span>.</span><span>.</span><span>.</span></span></h2>' +
-              '<p class="tracker-overlay-detail">Reading each repo’s docs + tracker, then writing its chat brief. Repos already current are skipped.</p>' +
-              '<p class="tracker-overlay-elapsed">Elapsed: <span id="briefing-overlay-time">0s</span></p>' +
-              '<p class="tracker-overlay-foot">Typical: 5–15 seconds per project that needs a brief. Don’t close this tab.</p>' +
-            '</div>';
-        document.body.appendChild(overlay);
-        var start = Date.now();
-        var timeEl = document.getElementById('briefing-overlay-time');
-        var timer = setInterval(function () {
-            if (!timeEl || !document.body.contains(overlay)) { clearInterval(timer); return; }
-            var s = Math.floor((Date.now() - start) / 1000);
-            timeEl.textContent = s >= 60 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : s + 's';
-        }, 1000);
+    // Generation runs one repo per request via the shared queue (app.js),
+    // with live "3 of 12" progress. The server re-checks staleness, so a
+    // repo that became current is skipped, not re-billed.
+    var targetsEl = document.getElementById('briefing-targets');
+    var targets = targetsEl ? JSON.parse(targetsEl.textContent) : {all: [], needs: []};
+    var detail = 'Reading each repo’s docs + tracker, then writing its chat brief. Typical: 5–15 seconds per project.';
+
+    function urlFor(name) {
+        return '/api/briefing/generate/' + encodeURIComponent(name);
     }
 
-    document.querySelectorAll('.briefing-generate-form').forEach(function (form) {
-        form.addEventListener('submit', function () {
-            // confirm() handlers run before submit fires, so a cancelled
-            // REGENERATE ALL never reaches here.
-            setTimeout(showOverlay, 0);
+    var needsBtn = document.getElementById('generate-needs-btn');
+    if (needsBtn) {
+        needsBtn.addEventListener('click', function () {
+            window.runGenerationQueue({
+                targets: targets.needs, urlFor: urlFor, body: {},
+                title: 'BRIEFING', detail: detail,
+            });
         });
-    });
+    }
+
+    var allBtn = document.getElementById('generate-all-btn');
+    if (allBtn) {
+        allBtn.addEventListener('click', function () {
+            if (!confirm('Regenerate AI briefs for all ' + targets.all.length + ' project(s) in view? Uses the API for every repo.')) return;
+            window.runGenerationQueue({
+                targets: targets.all, urlFor: urlFor, body: {force: true},
+                title: 'BRIEFING', detail: detail,
+            });
+        });
+    }
 })();
 </script>
 {% endblock %}

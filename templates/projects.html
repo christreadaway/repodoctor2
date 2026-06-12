@@ -4,12 +4,10 @@
 <div class="page-header">
     <h1>Project Summaries</h1>
     <div class="page-actions">
-        {% if scan_results %}
-        <form method="POST" action="{{ url_for('generate_project_summaries') }}" class="inline-form">
-            <button type="submit" class="btn btn-primary" id="generate-btn">
-                {% if summaries %}REGENERATE SUMMARIES{% else %}GENERATE SUMMARIES{% endif %}
-            </button>
-        </form>
+        {% if scan_results and repos %}
+        <button type="button" class="btn btn-primary" id="generate-btn">
+            {% if summaries %}REGENERATE SUMMARIES ({{ repos|length }}){% else %}GENERATE SUMMARIES ({{ repos|length }}){% endif %}
+        </button>
         {% endif %}
     </div>
 </div>
@@ -198,15 +196,35 @@
 </div>
 {% endif %}
 
+<script type="application/json" id="projects-targets">{{ repos|map(attribute='name')|list|tojson }}</script>
 <script>
 (function() {
     var btn = document.getElementById('toggle-manage-groups');
     var panel = document.getElementById('manage-groups');
-    if (!btn || !panel) return;
-    btn.addEventListener('click', function() {
-        panel.hidden = !panel.hidden;
-        btn.textContent = panel.hidden ? 'MANAGE GROUPS' : 'HIDE GROUP EDITOR';
-    });
+    if (btn && panel) {
+        btn.addEventListener('click', function() {
+            panel.hidden = !panel.hidden;
+            btn.textContent = panel.hidden ? 'MANAGE GROUPS' : 'HIDE GROUP EDITOR';
+        });
+    }
+
+    // Summaries generate one repo per request (shared queue in app.js)
+    // with live progress, scoped to the group in view — replacing the old
+    // single POST that regenerated the whole portfolio in one request.
+    var genBtn = document.getElementById('generate-btn');
+    var targetsEl = document.getElementById('projects-targets');
+    if (genBtn && targetsEl) {
+        var targets = JSON.parse(targetsEl.textContent);
+        genBtn.addEventListener('click', function () {
+            window.runGenerationQueue({
+                targets: targets,
+                urlFor: function (name) { return '/api/projects/summary/' + encodeURIComponent(name); },
+                body: {},
+                title: 'SUMMARIZING',
+                detail: 'Reading each repo’s specs, then writing a short summary. A few seconds per project.',
+            });
+        });
+    }
 })();
 </script>
 {% endblock %}

@@ -107,6 +107,36 @@ def _require_auth(f):
     return wrapper
 
 
+def _require_auth_api(f):
+    """Decorator for JSON endpoints: 401 + JSON error instead of a login
+    redirect, so client-side generation queues can show a clear message."""
+    from functools import wraps
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("authenticated"):
+            return jsonify({"error": "Session expired — reload the page and log in again."}), 401
+        return f(*args, **kwargs)
+    return wrapper
+
+
+NOT_CONNECTED_REMEDY = (
+    "Not connected to GitHub — the app restarted since you logged in. "
+    "Log out and back in, then retry."
+)
+
+
+def _find_repo_by_name(name: str) -> dict | None:
+    """Find a repo in the most recent scan by name alone (repo names are
+    unique within the scanned account)."""
+    if not _scan_results:
+        return None
+    for r in _scan_results.get("repos", []):
+        if r["name"] == name:
+            return r
+    return None
+
+
 def _get_github_client() -> gh.GitHubClient | None:
     global _github_client
     return _github_client
@@ -559,102 +589,104 @@ def delete_group_route():
     return redirect(url_for("projects"))
 
 
-@app.route("/projects/generate", methods=["POST"])
-@_require_auth
-def generate_project_summaries():
-    global _scan_results
+def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
+    """Generate + save the Projects-page summary for one repo. Returns the
+    saved summary. Raises on AI failure — callers decide how to surface it
+    (an existing good summary is never overwritten with an error)."""
+    owner = repo["owner"]
+    name = repo["name"]
+    ref = repo.get("default_branch", "main")
+
+    # Recursive search so specs in subfolders are found.
+    _, actual_paths = client.check_required_files(owner, name, ref=ref)
+    spec_lookup = {
+        "product_spec": actual_paths.get("PRODUCT_SPEC.md"),
+        "project_status": actual_paths.get("PROJECT_STATUS.md"),
+        "session_notes": actual_paths.get("SESSION_NOTES.md"),
+        "claude": actual_paths.get("CLAUDE.md"),
+    }
+
+    spec_content = {}
+    for key, path in spec_lookup.items():
+        if not path:
+            continue
+        content = client.get_file_content(owner, name, path, ref=ref)
+        if content:
+            # Truncate to keep prompt small
+            spec_content[key] = content[:5000]
+
+    # Build context for AI
+    context_parts = []
+    if repo.get("description"):
+        context_parts.append(f"GitHub description: {repo['description']}")
+    for key, content in spec_content.items():
+        context_parts.append(f"--- {key.upper()} ---\n{content}")
+
+    if not context_parts:
+        # No specs or description — save a minimal summary
+        summary = {
+            "what_it_does": f"{name} — no spec files or description available.",
+            "how_finished": "Unknown — no spec files found.",
+            "next_steps": ["Add PRODUCT_SPEC.md with project description", "Add SESSION_NOTES.md with session tracking"],
+        }
+        models.save_project_summary(name, summary)
+        return summary
+
+    context_text = "\n\n".join(context_parts)
+
+    ai_client = anthropic.Anthropic(api_key=creds["anthropic_key"])
+    response = ai_client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=500,
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Project: {name}\n\n{context_text}\n\n"
+                "Based on the above, return ONLY valid JSON with:\n"
+                '1. "what_it_does": 1-2 sentence description of what this project does\n'
+                '2. "how_finished": 1-2 sentence assessment of how complete/finished the project is\n'
+                '3. "next_steps": array of up to 5 short bullet strings for what needs to be built or tested next\n'
+                "Return raw JSON only, no markdown fencing."
+            ),
+        }],
+    )
+    raw = response.content[0].text.strip()
+    summary = ai.extract_json_object(raw)
+    # Ensure next_steps is capped at 5
+    if "next_steps" in summary and len(summary["next_steps"]) > 5:
+        summary["next_steps"] = summary["next_steps"][:5]
+    models.save_project_summary(name, summary)
+
+    in_tok = response.usage.input_tokens
+    out_tok = response.usage.output_tokens
+    _session_cost.add(in_tok, out_tok, ai.estimate_cost(in_tok, out_tok))
+    return summary
+
+
+@app.route("/api/projects/summary/<name>", methods=["POST"])
+@_require_auth_api
+def generate_project_summary_one(name):
+    """Generate the summary for ONE repo. The Projects page drives this
+    sequentially per repo in view, with live progress — replacing the old
+    whole-portfolio POST that blocked one request for minutes."""
     client = _get_github_client()
     creds = _get_credentials()
     if not client or not creds:
-        flash("Not authenticated.", "error")
-        return redirect(url_for("projects"))
+        return jsonify({"error": NOT_CONNECTED_REMEDY}), 401
+    repo = _find_repo_by_name(name)
+    if not repo:
+        return jsonify({"error": f"Repo '{name}' not in the latest scan. Run a scan first."}), 404
 
-    if not _scan_results:
-        flash("Run a scan first from the Dashboard.", "error")
-        return redirect(url_for("projects"))
+    try:
+        _generate_summary_for_repo(client, creds, repo)
+    except gh.GitHubAuthError:
+        return jsonify({"error": GITHUB_AUTH_REMEDY}), 401
+    except Exception as e:
+        models.log_action("generate_summary_error", name, "all", str(e)[:200])
+        return jsonify({"error": f"{type(e).__name__}: {str(e)[:200]}"}), 502
 
-    repos = _scan_results.get("repos", [])
-    generated = 0
-    skipped = 0
-
-    for repo in repos:
-        owner = repo["owner"]
-        name = repo["name"]
-        ref = repo.get("default_branch", "main")
-
-        # Recursive search so specs in subfolders are found.
-        _, actual_paths = client.check_required_files(owner, name, ref=ref)
-        spec_lookup = {
-            "product_spec": actual_paths.get("PRODUCT_SPEC.md"),
-            "project_status": actual_paths.get("PROJECT_STATUS.md"),
-            "session_notes": actual_paths.get("SESSION_NOTES.md"),
-            "claude": actual_paths.get("CLAUDE.md"),
-        }
-
-        spec_content = {}
-        for key, path in spec_lookup.items():
-            if not path:
-                continue
-            content = client.get_file_content(owner, name, path, ref=ref)
-            if content:
-                # Truncate to keep prompt small
-                spec_content[key] = content[:5000]
-
-        # Build context for AI
-        context_parts = []
-        if repo.get("description"):
-            context_parts.append(f"GitHub description: {repo['description']}")
-        for key, content in spec_content.items():
-            context_parts.append(f"--- {key.upper()} ---\n{content}")
-
-        if not context_parts:
-            # No specs or description — generate a minimal summary
-            models.save_project_summary(name, {
-                "what_it_does": f"{name} — no spec files or description available.",
-                "how_finished": "Unknown — no spec files found.",
-                "next_steps": ["Add PRODUCT_SPEC.md with project description", "Add SESSION_NOTES.md with session tracking"],
-            })
-            skipped += 1
-            continue
-
-        context_text = "\n\n".join(context_parts)
-
-        # Call Claude Haiku for a concise summary
-        try:
-            ai_client = anthropic.Anthropic(api_key=creds["anthropic_key"])
-            response = ai_client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=500,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"Project: {name}\n\n{context_text}\n\n"
-                        "Based on the above, return ONLY valid JSON with:\n"
-                        '1. "what_it_does": 1-2 sentence description of what this project does\n'
-                        '2. "how_finished": 1-2 sentence assessment of how complete/finished the project is\n'
-                        '3. "next_steps": array of up to 5 short bullet strings for what needs to be built or tested next\n'
-                        "Return raw JSON only, no markdown fencing."
-                    ),
-                }],
-            )
-            raw = response.content[0].text.strip()
-            summary = ai.extract_json_object(raw)
-            # Ensure next_steps is capped at 5
-            if "next_steps" in summary and len(summary["next_steps"]) > 5:
-                summary["next_steps"] = summary["next_steps"][:5]
-            models.save_project_summary(name, summary)
-            generated += 1
-        except Exception as e:
-            models.save_project_summary(name, {
-                "what_it_does": repo.get("description") or f"{name} — summary generation failed.",
-                "how_finished": "Unknown — AI summary could not be generated.",
-                "next_steps": [f"Error: {str(e)[:100]}"],
-            })
-            skipped += 1
-
-    flash(f"Generated summaries for {generated} projects ({skipped} skipped/fallback).", "success")
-    models.log_action("generate_summaries", "all", "all", f"Generated {generated}, skipped {skipped}")
-    return redirect(url_for("projects"))
+    models.log_action("generate_summary", name, "all", "ok")
+    return jsonify({"ok": True, "repo": name})
 
 
 # --- Henry Branches ---
@@ -1105,6 +1137,11 @@ def briefing_view():
     stale = sum(1 for p in projects if p["stale"])
     sections_md = {p["name"]: briefing.project_section_markdown(p) for p in projects}
 
+    # Target lists for the client-side generation queue: one POST per repo
+    # so progress is visible and one failure never kills the batch.
+    targets_all = [p["name"] for p in projects]
+    targets_needs = [p["name"] for p in projects if not p["brief"] or p["stale"]]
+
     return render_template(
         "briefing.html",
         scan_results=_scan_results,
@@ -1117,6 +1154,8 @@ def briefing_view():
         briefed_count=briefed,
         stale_count=stale,
         missing_count=len(projects) - briefed,
+        targets_all=targets_all,
+        targets_needs=targets_needs,
     )
 
 
@@ -1139,92 +1178,60 @@ def briefing_export():
     )
 
 
-@app.route("/briefing/generate", methods=["POST"])
-@_require_auth
-def briefing_generate():
-    """Generate AI chat briefs for the repos in the current group view.
-    Default: only repos with no brief or a stale one (pushed since last
-    generation). force=1 regenerates everything in view."""
+@app.route("/api/briefing/generate/<name>", methods=["POST"])
+@_require_auth_api
+def briefing_generate_one(name):
+    """Generate the chat brief for ONE repo. The Briefing page drives this
+    sequentially per repo with live progress; the server re-checks
+    staleness so a fresh brief is never paid for twice (force overrides)."""
     client = _get_github_client()
     creds = _get_credentials()
     if not client or not creds:
-        flash("Not authenticated.", "error")
-        return redirect(url_for("briefing_view"))
-    if not _scan_results:
-        flash("Run a scan first from the Dashboard.", "error")
-        return redirect(url_for("briefing_view"))
+        return jsonify({"error": NOT_CONNECTED_REMEDY}), 401
+    repo = _find_repo_by_name(name)
+    if not repo:
+        return jsonify({"error": f"Repo '{name}' not in the latest scan. Run a scan first."}), 404
 
-    force = request.form.get("force") == "1"
-    groups = models.get_groups()
-    active_group = _resolve_active_group(groups, persist=False)
-    all_repos = _scan_results.get("repos", [])
-    if active_group:
-        in_group = set(groups.get(active_group, []))
-        repos = [r for r in all_repos if r["name"] in in_group]
-    else:
-        repos = all_repos
+    force = bool((request.json or {}).get("force")) if request.is_json else False
+    existing = models.get_briefs().get(name)
+    if existing and not force and not briefing.is_brief_stale(existing, repo):
+        return jsonify({"ok": True, "repo": name, "skipped": "fresh"})
 
-    briefs = models.get_briefs()
-    trackers = models.list_trackers()
     prefs = models.get_preferences()
     model = prefs.get("ai_model", "claude-haiku-4-5-20251001")
+    tracker = models.get_tracker(repo["owner"], name)
 
-    models.log_briefing_event(
-        "generate_start", scope=active_group or "all",
-        n_repos=len(repos), force=force, model=model,
-    )
-
-    generated = 0
-    skipped_fresh = 0
-    failed = 0
-    for repo in repos:
-        name = repo["name"]
-        existing = briefs.get(name)
-        if existing and not force and not briefing.is_brief_stale(existing, repo):
-            skipped_fresh += 1
-            continue
-        tracker = trackers.get(f"{repo['owner']}/{name}")
-        try:
-            context_text = briefing.gather_brief_inputs(client, repo, tracker)
-            brief = briefing.generate_brief(
-                api_key=creds["anthropic_key"],
-                repo_name=name,
-                context_text=context_text,
-                model=model,
-            )
-        except gh.GitHubAuthError:
-            raise
-        except Exception as e:
-            # Keep any existing good brief; log and move to the next repo.
-            failed += 1
-            models.log_briefing_event(
-                "generate_error", repo=name, error=f"{type(e).__name__}: {str(e)[:300]}",
-            )
-            continue
-
-        usage = brief.pop("_usage", {})
-        if usage:
-            in_tok = usage.get("input_tokens", 0)
-            out_tok = usage.get("output_tokens", 0)
-            _session_cost.add(in_tok, out_tok,
-                              ai.estimate_cost(in_tok, out_tok, model=model))
-        models.save_brief(name, brief)
-        models.log_briefing_event(
-            "generate_done", repo=name, stage=brief.get("stage"),
-            input_tokens=usage.get("input_tokens", 0),
-            output_tokens=usage.get("output_tokens", 0),
+    try:
+        context_text = briefing.gather_brief_inputs(client, repo, tracker)
+        brief = briefing.generate_brief(
+            api_key=creds["anthropic_key"],
+            repo_name=name,
+            context_text=context_text,
+            model=model,
         )
-        generated += 1
+    except gh.GitHubAuthError:
+        return jsonify({"error": GITHUB_AUTH_REMEDY}), 401
+    except Exception as e:
+        # Keep any existing good brief; report the failure to the queue.
+        models.log_briefing_event(
+            "generate_error", repo=name, error=f"{type(e).__name__}: {str(e)[:300]}",
+        )
+        return jsonify({"error": f"{type(e).__name__}: {str(e)[:200]}"}), 502
 
-    models.log_action(
-        "generate_briefs", active_group or "all", "all",
-        f"Generated {generated}, {skipped_fresh} fresh, {failed} failed",
+    usage = brief.pop("_usage", {})
+    if usage:
+        in_tok = usage.get("input_tokens", 0)
+        out_tok = usage.get("output_tokens", 0)
+        _session_cost.add(in_tok, out_tok,
+                          ai.estimate_cost(in_tok, out_tok, model=model))
+    models.save_brief(name, brief)
+    models.log_briefing_event(
+        "generate_done", repo=name, stage=brief.get("stage"), force=force,
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
     )
-    msg = f"Briefs: {generated} generated, {skipped_fresh} already current"
-    if failed:
-        msg += f", {failed} failed (see data/logs/briefing.log)"
-    flash(msg + ".", "error" if failed and not generated else "success")
-    return redirect(url_for("briefing_view"))
+    models.log_action("generate_brief", name, "all", f"stage={brief.get('stage')}")
+    return jsonify({"ok": True, "repo": name, "stage": brief.get("stage")})
 
 
 # --- Firestore Setup ---

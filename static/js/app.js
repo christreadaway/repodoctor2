@@ -167,6 +167,124 @@
   };
 
   // ---------------------------------------------------------------------------
+  // 1b. Sequential generation queue (Briefing briefs, Projects summaries)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Run a sequence of per-repo POSTs with a full-screen progress overlay.
+   * One request at a time, so a 40-repo portfolio never blocks a single
+   * Flask request for minutes and one failure never kills the batch.
+   *
+   * opts:
+   *   targets - array of repo names, processed in order
+   *   urlFor  - function(name) -> POST url
+   *   body    - JSON body sent with every request (e.g. {force: true})
+   *   title   - overlay headline (e.g. "BRIEFING")
+   *   detail  - one-line explanation under the progress counter
+   *
+   * Reloads the page when every repo succeeded; if any failed, shows the
+   * errors in the overlay with a RELOAD button so they can be read (and
+   * copied) before the page refreshes. CANCEL stops after the in-flight
+   * repo. A session-expired error aborts the whole queue.
+   */
+  window.runGenerationQueue = function runGenerationQueue(opts) {
+    var targets = (opts && opts.targets) || [];
+    if (!targets.length) return;
+    if (document.getElementById("gen-overlay")) return;
+
+    var overlay = document.createElement("div");
+    overlay.id = "gen-overlay";
+    overlay.className = "tracker-overlay";
+    overlay.innerHTML =
+      '<div class="tracker-overlay-card">' +
+        '<div class="tracker-overlay-spinner"></div>' +
+        '<h2 class="tracker-overlay-title">' + escapeHtml(opts.title || "GENERATING") +
+          '<span class="tracker-overlay-dots"><span>.</span><span>.</span><span>.</span></span></h2>' +
+        '<p class="tracker-overlay-repo" id="gen-overlay-progress"></p>' +
+        (opts.detail ? '<p class="tracker-overlay-detail">' + escapeHtml(opts.detail) + "</p>" : "") +
+        '<p class="tracker-overlay-elapsed">Elapsed: <span id="gen-overlay-time">0s</span></p>' +
+        '<div class="gen-overlay-errors" id="gen-overlay-errors" hidden></div>' +
+        '<div class="gen-overlay-actions">' +
+          '<button type="button" class="btn btn-secondary btn-sm" id="gen-overlay-cancel">CANCEL</button>' +
+        '</div>' +
+        '<p class="tracker-overlay-foot">Don\'t close this tab.</p>' +
+      "</div>";
+    document.body.appendChild(overlay);
+
+    var progressEl = document.getElementById("gen-overlay-progress");
+    var errorsEl = document.getElementById("gen-overlay-errors");
+    var cancelBtn = document.getElementById("gen-overlay-cancel");
+    var start = Date.now();
+    var timer = setInterval(function () {
+      var timeEl = document.getElementById("gen-overlay-time");
+      if (!timeEl || !document.body.contains(overlay)) {
+        clearInterval(timer);
+        return;
+      }
+      var s = Math.floor((Date.now() - start) / 1000);
+      timeEl.textContent = s >= 60 ? Math.floor(s / 60) + "m " + (s % 60) + "s" : s + "s";
+    }, 1000);
+
+    var cancelled = false;
+    var errors = [];
+    var generated = 0;
+    var skipped = 0;
+
+    cancelBtn.addEventListener("click", function () {
+      if (cancelBtn.textContent === "RELOAD") {
+        window.location.reload();
+        return;
+      }
+      cancelled = true;
+      cancelBtn.textContent = "FINISHING…";
+      cancelBtn.disabled = true;
+    });
+
+    function step(i) {
+      if (cancelled || i >= targets.length) {
+        finish();
+        return;
+      }
+      var name = targets[i];
+      progressEl.textContent = (i + 1) + " of " + targets.length + " — " + name;
+      postJson(opts.urlFor(name), opts.body || {})
+        .then(function (data) {
+          if (data && data.skipped) skipped++;
+          else generated++;
+        })
+        .catch(function (err) {
+          errors.push(name + ": " + err.message);
+          // Auth problems will fail every remaining repo — stop now.
+          if (/session expired|log in|log out/i.test(err.message)) {
+            cancelled = true;
+          }
+        })
+        .then(function () {
+          step(i + 1);
+        });
+    }
+
+    function finish() {
+      clearInterval(timer);
+      if (!errors.length) {
+        window.location.reload();
+        return;
+      }
+      progressEl.textContent =
+        generated + " generated, " + skipped + " already current, " +
+        errors.length + " failed:";
+      errorsEl.hidden = false;
+      errorsEl.innerHTML = errors
+        .map(function (e) { return "<div>" + escapeHtml(e) + "</div>"; })
+        .join("");
+      cancelBtn.textContent = "RELOAD";
+      cancelBtn.disabled = false;
+    }
+
+    step(0);
+  };
+
+  // ---------------------------------------------------------------------------
   // 2. AI Analysis
   // ---------------------------------------------------------------------------
 
