@@ -24,7 +24,7 @@ import anthropic
 import github_client as gh
 import tracker_data as td
 import firestore_detector
-from ai_analyzer import extract_json_object
+from ai_analyzer import DEFAULT_MODEL, extract_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -324,7 +324,7 @@ def generate_tracker(
     default_branch: str,
     inputs: dict,
     prior_tracker: dict | None = None,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = DEFAULT_MODEL,
     max_attempts: int = 2,
 ) -> dict:
     """Run the AI generation. Returns a validated tracker dict + _usage."""

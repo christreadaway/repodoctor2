@@ -136,9 +136,9 @@ Acceptance: the external system is reachable from the app under realistic config
         <form method="POST" action="{{ url_for('tracker_generate', owner=selected_owner, name=selected_name) }}" class="inline-form tracker-gen-form">
             <select name="model" class="tracker-model-select" title="AI model for this generation (overrides Settings default)">
                 <option value="">— default ({{ preferences.ai_model.split('-')[1]|capitalize }}) —</option>
-                <option value="claude-haiku-4-5-20251001">Haiku 4.5 — cheap &amp; fast</option>
-                <option value="claude-sonnet-4-5-20250929">Sonnet 4.5 — bigger budget, richer output</option>
-                <option value="claude-opus-4-6">Opus 4.6 — maximum depth</option>
+                {% for model_id, label in model_choices %}
+                <option value="{{ model_id }}">{{ label }}</option>
+                {% endfor %}
             </select>
             <button type="submit" class="btn btn-primary" data-loading-text="ANALYZING…">
                 {% if tracker %}REGENERATE{% else %}GENERATE TRACKER{% endif %}

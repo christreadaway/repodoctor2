@@ -91,8 +91,12 @@ def _handle_github_auth_error(e):
 
 @app.context_processor
 def inject_preferences():
-    """Make preferences available in all templates."""
-    return {"preferences": models.get_preferences()}
+    """Make preferences + the model list available in all templates
+    (Settings dropdown, tracker per-generation override)."""
+    return {
+        "preferences": models.get_preferences(),
+        "model_choices": ai.MODEL_CHOICES,
+    }
 
 
 def _require_auth(f):
@@ -241,10 +245,6 @@ def _init_session(creds: dict, user_info: dict | None = None):
         user_info = _github_client.verify_token()
     if user_info:
         session["github_user"] = user_info.get("login", "")
-    # TEMPORARY: see DEFAULT_USER_GROUPS in models.py — remove on next rebuild.
-    seeded = models.seed_default_groups_if_missing()
-    if seeded:
-        models.log_action("seed_groups", "all", "all", f"Seeded default groups: {', '.join(seeded)}")
 
 
 @app.route("/login/reset", methods=["POST"])
@@ -425,7 +425,10 @@ def settings():
 
         if action == "save_preferences":
             prefs["local_root"] = request.form.get("local_root", "~/claudesync2")
-            prefs["ai_model"] = request.form.get("ai_model", "claude-haiku-4-5-20251001")
+            requested_model = request.form.get("ai_model", ai.DEFAULT_MODEL)
+            prefs["ai_model"] = (
+                requested_model if requested_model in ai.VALID_MODELS else ai.DEFAULT_MODEL
+            )
             prefs["display_mode"] = request.form.get("display_mode", "plain_english")
             excluded = request.form.get("excluded_repos", "")
             prefs["excluded_repos"] = [r.strip() for r in excluded.split(",") if r.strip()]
@@ -621,7 +624,7 @@ def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
 
     ai_client = anthropic.Anthropic(api_key=creds["anthropic_key"])
     response = ai_client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=ai.DEFAULT_MODEL,
         max_tokens=500,
         messages=[{
             "role": "user",
@@ -1183,7 +1186,7 @@ def briefing_generate_one(name):
         return jsonify({"ok": True, "repo": name, "skipped": "fresh"})
 
     prefs = models.get_preferences()
-    model = prefs.get("ai_model", "claude-haiku-4-5-20251001")
+    model = prefs.get("ai_model", ai.DEFAULT_MODEL)
     tracker = models.get_tracker(repo["owner"], name)
 
     try:
@@ -1481,15 +1484,10 @@ def tracker_generate(owner, name):
     # Per-generation model override from the toolbar dropdown (form field
     # "model"); falls back to the global Settings preference.
     requested_model = (request.form.get("model") or "").strip()
-    valid_models = {
-        "claude-haiku-4-5-20251001",
-        "claude-sonnet-4-5-20250929",
-        "claude-opus-4-6",
-    }
-    if requested_model and requested_model in valid_models:
+    if requested_model and requested_model in ai.VALID_MODELS:
         model = requested_model
     else:
-        model = prefs.get("ai_model", "claude-haiku-4-5-20251001")
+        model = prefs.get("ai_model", ai.DEFAULT_MODEL)
 
     models.log_tracker_event(
         "generate_start", owner=owner, repo=name, model=model,

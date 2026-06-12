@@ -20,7 +20,7 @@ import logging
 import anthropic
 
 import github_client as gh
-from ai_analyzer import extract_json_object
+from ai_analyzer import DEFAULT_MODEL, extract_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,7 @@ def generate_brief(
     api_key: str,
     repo_name: str,
     context_text: str,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = DEFAULT_MODEL,
 ) -> dict:
     """Generate one repo's chat brief. Returns normalized dict + _usage."""
     client = anthropic.Anthropic(api_key=api_key)
