@@ -1,7 +1,7 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-06-12 (Session 15)
-**Current Branch:** `claude/gallant-clarke-k53wsj` (pushed) — needs merge to `main`
+**Last Updated:** 2026-06-12 (Session 15b)
+**Current Branch:** `main` — Session 15 + 15b merged 2026-06-12
 **Overall Progress:** ~96%
 
 ---
@@ -94,7 +94,7 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 
 ## What's In Progress
 
-Nothing actively in progress. All Session 15 work (Chat Briefing screen + 15b refactors: atomic writes, incremental per-repo generation with progress, shared doc-fetch path, centralized model constants, group-seeding removal) is committed on `claude/gallant-clarke-k53wsj` and pushed; needs merge to `main`.
+Nothing actively in progress. All Session 15 work (Chat Briefing screen + 15b refactors: atomic writes, incremental per-repo generation with progress, shared doc-fetch path, centralized model constants, group-seeding removal) is merged to `main` (2026-06-12).
 
 ---
 
@@ -119,13 +119,14 @@ Nothing actively in progress. All Session 15 work (Chat Briefing screen + 15b re
 
 ## Next Steps (in priority order)
 
-1. **Merge `claude/gallant-clarke-k53wsj` into `main`** from Chris's local machine. (Supersedes the pending Session 14 merge — Session 15 branched off that work, so a single merge picks up both.)
-2. **Try the tracker against a real repo.** Pull, restart Flask, click Tracker in the nav, pick a repo (e.g. parentpoint, catholicevents), click GENERATE TRACKER. Verify the eight tabs populate and the next-actions prompts copy cleanly into Claude Code.
-3. **Generate trackers across the portfolio** to seed the load-bearing IDs. Re-generations from this point on will preserve those IDs.
-4. **Wire tracker `next_actions` into What's Next** so open P0/P1 actions show up in the simple aggregated inbox alongside the project-summary bullets (Roadmap item 1).
-5. **Port April/May features to Netlify** — auth-error handling, Stats (with group filter + rollup), What's Next, groups persistence, recursive search, Size column, refreshed nav, recent-updated sort, business-spec aliasing, unassigned-projects list. (Tracker stays Flask-only by design — local JSON storage doesn't fit serverless.)
-6. **Parallelize initial scan** using `ThreadPoolExecutor` (same pattern as `/stats`).
-7. **Verify Anthropic key at login** the same way GitHub PAT is verified, so bad keys are caught up front.
+1. **Pull latest on each machine.** PC: `cd ~\repodoctor2; .\start.ps1` (pulls `main` automatically, then launches). Mac: `cd /Users/christreadaway/claudesync2/repodoctor2 && git pull origin main`, then restart Flask.
+2. **Generate chat briefs across the portfolio.** Briefing tab → GENERATE BRIEFS, watch the per-repo progress, then COPY FOR CLAUDE CHAT and paste into a Claude chat session.
+3. **Try the tracker against a real repo.** Click Tracker in the nav, pick a repo (e.g. parentpoint, catholicevents), click GENERATE TRACKER. Verify the eight tabs populate and the next-actions prompts copy cleanly into Claude Code.
+4. **Generate trackers across the portfolio** to seed the load-bearing IDs. Re-generations from this point on will preserve those IDs.
+5. **Wire tracker `next_actions` into What's Next** so open P0/P1 actions show up in the simple aggregated inbox alongside the project-summary bullets (Roadmap item 1).
+6. **Port April/May features to Netlify** — auth-error handling, Stats (with group filter + rollup), What's Next, groups persistence, recursive search, Size column, refreshed nav, recent-updated sort, business-spec aliasing, unassigned-projects list. (Tracker stays Flask-only by design — local JSON storage doesn't fit serverless.)
+7. **Parallelize initial scan** using `ThreadPoolExecutor` (same pattern as `/stats`).
+8. **Verify Anthropic key at login** the same way GitHub PAT is verified, so bad keys are caught up front.
 
 ---
 
