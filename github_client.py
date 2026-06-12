@@ -428,6 +428,74 @@ class GitHubClient:
         return "AHEAD ONLY"
 
 
+# The four spec docs every AI feature reads, mapped to the prompt keys
+# used by project summaries, the tracker generator, and chat briefs.
+DOC_KEYS = {
+    "PRODUCT_SPEC.md": "product_spec",
+    "PROJECT_STATUS.md": "project_status",
+    "SESSION_NOTES.md": "session_notes",
+    "CLAUDE.md": "claude",
+}
+
+README_VARIANTS = ("README.md", "readme.md", "README.rst", "README")
+
+
+def fetch_repo_docs(
+    client: GitHubClient,
+    owner: str,
+    repo: str,
+    ref: str,
+    max_chars: int,
+    actual_paths: dict | None = None,
+    include_readme: str = "never",
+) -> dict:
+    """Fetch the spec docs (and optionally the README) one repo at a time —
+    the single doc-fetch path shared by project summaries, the tracker
+    generator, and chat briefs, so truncation, recursive-path lookup, and
+    fallback behavior stay identical everywhere.
+
+    include_readme: "never" | "always" | "if_no_docs".
+    Returns {"docs": {key: text}, "readme": str} with each text truncated
+    to max_chars. Individual fetch failures are logged and skipped.
+    """
+    docs: dict[str, str] = {}
+
+    # Recursive search so specs in subfolders are found. Callers that
+    # already ran check_required_files pass actual_paths to skip the
+    # second tree walk.
+    if actual_paths is None:
+        _, actual_paths = client.check_required_files(owner, repo, ref=ref)
+
+    for filename, key in DOC_KEYS.items():
+        path = actual_paths.get(filename)
+        if not path:
+            continue
+        try:
+            content = client.get_file_content(owner, repo, path, ref=ref)
+        except GitHubAuthError:
+            raise
+        except Exception as e:
+            logger.warning("doc fetch failed: %s in %s/%s: %s", path, owner, repo, e)
+            continue
+        if content:
+            docs[key] = content[:max_chars]
+
+    readme = ""
+    if include_readme == "always" or (include_readme == "if_no_docs" and not docs):
+        for readme_name in README_VARIANTS:
+            try:
+                content = client.get_file_content(owner, repo, readme_name, ref=ref)
+            except GitHubAuthError:
+                raise
+            except Exception:
+                continue
+            if content:
+                readme = content[:max_chars]
+                break
+
+    return {"docs": docs, "readme": readme}
+
+
 def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
     """Lightweight scan: branch count, required file checks, code size."""
     owner = repo["owner"]["login"]

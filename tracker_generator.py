@@ -21,9 +21,10 @@ from typing import Any
 
 import anthropic
 
+import github_client as gh
 import tracker_data as td
 import firestore_detector
-from ai_analyzer import extract_json_object
+from ai_analyzer import DEFAULT_MODEL, extract_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -131,36 +132,15 @@ def gather_repo_inputs(
         "firestore": None,
     }
 
-    # Documents the user mandates in PRODUCT_SPEC §4.3
-    if actual_paths is None:
-        _, actual_paths = client.check_required_files(owner, repo, ref=default_branch)
-
-    doc_keys = {
-        "PRODUCT_SPEC.md": "product_spec",
-        "PROJECT_STATUS.md": "project_status",
-        "SESSION_NOTES.md": "session_notes",
-        "CLAUDE.md": "claude",
-    }
-    for filename, key in doc_keys.items():
-        path = actual_paths.get(filename)
-        if not path:
-            continue
-        try:
-            content = client.get_file_content(owner, repo, path, ref=default_branch)
-            if content:
-                inputs["docs"][key] = content[:MAX_DOC_CHARS]
-        except Exception as e:
-            logger.warning("tracker: failed to fetch %s for %s/%s: %s", path, owner, repo, e)
-
-    # README — try common variants at root
-    for readme_name in ("README.md", "readme.md", "README.rst", "README"):
-        try:
-            content = client.get_file_content(owner, repo, readme_name, ref=default_branch)
-            if content:
-                inputs["readme"] = content[:MAX_DOC_CHARS]
-                break
-        except Exception:
-            continue
+    # Documents the user mandates in PRODUCT_SPEC §4.3, plus README —
+    # via the shared doc-fetch path (github_client.fetch_repo_docs).
+    fetched = gh.fetch_repo_docs(
+        client, owner, repo, ref=default_branch,
+        max_chars=MAX_DOC_CHARS, actual_paths=actual_paths,
+        include_readme="always",
+    )
+    inputs["docs"] = fetched["docs"]
+    inputs["readme"] = fetched["readme"]
 
     # File tree
     try:
@@ -344,7 +324,7 @@ def generate_tracker(
     default_branch: str,
     inputs: dict,
     prior_tracker: dict | None = None,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = DEFAULT_MODEL,
     max_attempts: int = 2,
 ) -> dict:
     """Run the AI generation. Returns a validated tracker dict + _usage."""

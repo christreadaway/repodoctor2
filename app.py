@@ -17,7 +17,7 @@ except Exception:
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, flash, jsonify,
+    session, flash, jsonify, Response,
 )
 
 import security
@@ -30,6 +30,7 @@ import project_mapper
 import firestore_detector
 import tracker_data
 import tracker_generator
+import briefing
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
@@ -90,8 +91,12 @@ def _handle_github_auth_error(e):
 
 @app.context_processor
 def inject_preferences():
-    """Make preferences available in all templates."""
-    return {"preferences": models.get_preferences()}
+    """Make preferences + the model list available in all templates
+    (Settings dropdown, tracker per-generation override)."""
+    return {
+        "preferences": models.get_preferences(),
+        "model_choices": ai.MODEL_CHOICES,
+    }
 
 
 def _require_auth(f):
@@ -104,6 +109,36 @@ def _require_auth(f):
             return redirect(url_for("login"))
         return f(*args, **kwargs)
     return wrapper
+
+
+def _require_auth_api(f):
+    """Decorator for JSON endpoints: 401 + JSON error instead of a login
+    redirect, so client-side generation queues can show a clear message."""
+    from functools import wraps
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("authenticated"):
+            return jsonify({"error": "Session expired — reload the page and log in again."}), 401
+        return f(*args, **kwargs)
+    return wrapper
+
+
+NOT_CONNECTED_REMEDY = (
+    "Not connected to GitHub — the app restarted since you logged in. "
+    "Log out and back in, then retry."
+)
+
+
+def _find_repo_by_name(name: str) -> dict | None:
+    """Find a repo in the most recent scan by name alone (repo names are
+    unique within the scanned account)."""
+    if not _scan_results:
+        return None
+    for r in _scan_results.get("repos", []):
+        if r["name"] == name:
+            return r
+    return None
 
 
 def _get_github_client() -> gh.GitHubClient | None:
@@ -210,10 +245,6 @@ def _init_session(creds: dict, user_info: dict | None = None):
         user_info = _github_client.verify_token()
     if user_info:
         session["github_user"] = user_info.get("login", "")
-    # TEMPORARY: see DEFAULT_USER_GROUPS in models.py — remove on next rebuild.
-    seeded = models.seed_default_groups_if_missing()
-    if seeded:
-        models.log_action("seed_groups", "all", "all", f"Seeded default groups: {', '.join(seeded)}")
 
 
 @app.route("/login/reset", methods=["POST"])
@@ -394,7 +425,10 @@ def settings():
 
         if action == "save_preferences":
             prefs["local_root"] = request.form.get("local_root", "~/claudesync2")
-            prefs["ai_model"] = request.form.get("ai_model", "claude-haiku-4-5-20251001")
+            requested_model = request.form.get("ai_model", ai.DEFAULT_MODEL)
+            prefs["ai_model"] = (
+                requested_model if requested_model in ai.VALID_MODELS else ai.DEFAULT_MODEL
+            )
             prefs["display_mode"] = request.form.get("display_mode", "plain_english")
             excluded = request.form.get("excluded_repos", "")
             prefs["excluded_repos"] = [r.strip() for r in excluded.split(",") if r.strip()]
@@ -469,24 +503,30 @@ def debug_files(owner, name):
 
 # --- Projects Summary ---
 
+def _resolve_active_group(groups: dict, persist: bool = True) -> str:
+    """Shared group-filter resolution for Projects / What's Next / Briefing:
+    ?group=X wins (and is persisted unless persist=False); otherwise the
+    saved preference. A group that no longer exists resolves to '' (All)."""
+    prefs = models.get_preferences()
+    requested = request.args.get("group")
+    if requested is not None:
+        active_group = requested if requested in groups else ""
+        if persist and prefs.get("active_group", "") != active_group:
+            prefs["active_group"] = active_group
+            models.save_preferences(prefs)
+        return active_group
+    active_group = prefs.get("active_group", "")
+    if active_group and active_group not in groups:
+        return ""
+    return active_group
+
+
 @app.route("/projects")
 @_require_auth
 def projects():
     summaries = models.get_project_summaries()
     groups = models.get_groups()
-    prefs = models.get_preferences()
-
-    # Resolve active group: ?group=X wins and is persisted; otherwise use saved pref.
-    requested = request.args.get("group")
-    if requested is not None:
-        active_group = requested if requested in groups else ""
-        if prefs.get("active_group", "") != active_group:
-            prefs["active_group"] = active_group
-            models.save_preferences(prefs)
-    else:
-        active_group = prefs.get("active_group", "")
-        if active_group and active_group not in groups:
-            active_group = ""
+    active_group = _resolve_active_group(groups)
 
     all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
     # Most recently updated first; missing/blank dates sink to the bottom.
@@ -552,102 +592,89 @@ def delete_group_route():
     return redirect(url_for("projects"))
 
 
-@app.route("/projects/generate", methods=["POST"])
-@_require_auth
-def generate_project_summaries():
-    global _scan_results
+def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
+    """Generate + save the Projects-page summary for one repo. Returns the
+    saved summary. Raises on AI failure — callers decide how to surface it
+    (an existing good summary is never overwritten with an error)."""
+    owner = repo["owner"]
+    name = repo["name"]
+    ref = repo.get("default_branch", "main")
+
+    # Spec docs via the shared doc-fetch path (recursive lookup, truncated).
+    fetched = gh.fetch_repo_docs(client, owner, name, ref=ref, max_chars=5000)
+
+    # Build context for AI
+    context_parts = []
+    if repo.get("description"):
+        context_parts.append(f"GitHub description: {repo['description']}")
+    for key, content in fetched["docs"].items():
+        context_parts.append(f"--- {key.upper()} ---\n{content}")
+
+    if not context_parts:
+        # No specs or description — save a minimal summary
+        summary = {
+            "what_it_does": f"{name} — no spec files or description available.",
+            "how_finished": "Unknown — no spec files found.",
+            "next_steps": ["Add PRODUCT_SPEC.md with project description", "Add SESSION_NOTES.md with session tracking"],
+        }
+        models.save_project_summary(name, summary)
+        return summary
+
+    context_text = "\n\n".join(context_parts)
+
+    ai_client = anthropic.Anthropic(api_key=creds["anthropic_key"])
+    response = ai_client.messages.create(
+        model=ai.DEFAULT_MODEL,
+        max_tokens=500,
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Project: {name}\n\n{context_text}\n\n"
+                "Based on the above, return ONLY valid JSON with:\n"
+                '1. "what_it_does": 1-2 sentence description of what this project does\n'
+                '2. "how_finished": 1-2 sentence assessment of how complete/finished the project is\n'
+                '3. "next_steps": array of up to 5 short bullet strings for what needs to be built or tested next\n'
+                "Return raw JSON only, no markdown fencing."
+            ),
+        }],
+    )
+    raw = response.content[0].text.strip()
+    summary = ai.extract_json_object(raw)
+    # Ensure next_steps is capped at 5
+    if "next_steps" in summary and len(summary["next_steps"]) > 5:
+        summary["next_steps"] = summary["next_steps"][:5]
+    models.save_project_summary(name, summary)
+
+    in_tok = response.usage.input_tokens
+    out_tok = response.usage.output_tokens
+    _session_cost.add(in_tok, out_tok, ai.estimate_cost(in_tok, out_tok))
+    return summary
+
+
+@app.route("/api/projects/summary/<name>", methods=["POST"])
+@_require_auth_api
+def generate_project_summary_one(name):
+    """Generate the summary for ONE repo. The Projects page drives this
+    sequentially per repo in view, with live progress — replacing the old
+    whole-portfolio POST that blocked one request for minutes."""
     client = _get_github_client()
     creds = _get_credentials()
     if not client or not creds:
-        flash("Not authenticated.", "error")
-        return redirect(url_for("projects"))
+        return jsonify({"error": NOT_CONNECTED_REMEDY}), 401
+    repo = _find_repo_by_name(name)
+    if not repo:
+        return jsonify({"error": f"Repo '{name}' not in the latest scan. Run a scan first."}), 404
 
-    if not _scan_results:
-        flash("Run a scan first from the Dashboard.", "error")
-        return redirect(url_for("projects"))
+    try:
+        _generate_summary_for_repo(client, creds, repo)
+    except gh.GitHubAuthError:
+        return jsonify({"error": GITHUB_AUTH_REMEDY}), 401
+    except Exception as e:
+        models.log_action("generate_summary_error", name, "all", str(e)[:200])
+        return jsonify({"error": f"{type(e).__name__}: {str(e)[:200]}"}), 502
 
-    repos = _scan_results.get("repos", [])
-    generated = 0
-    skipped = 0
-
-    for repo in repos:
-        owner = repo["owner"]
-        name = repo["name"]
-        ref = repo.get("default_branch", "main")
-
-        # Recursive search so specs in subfolders are found.
-        _, actual_paths = client.check_required_files(owner, name, ref=ref)
-        spec_lookup = {
-            "product_spec": actual_paths.get("PRODUCT_SPEC.md"),
-            "project_status": actual_paths.get("PROJECT_STATUS.md"),
-            "session_notes": actual_paths.get("SESSION_NOTES.md"),
-            "claude": actual_paths.get("CLAUDE.md"),
-        }
-
-        spec_content = {}
-        for key, path in spec_lookup.items():
-            if not path:
-                continue
-            content = client.get_file_content(owner, name, path, ref=ref)
-            if content:
-                # Truncate to keep prompt small
-                spec_content[key] = content[:5000]
-
-        # Build context for AI
-        context_parts = []
-        if repo.get("description"):
-            context_parts.append(f"GitHub description: {repo['description']}")
-        for key, content in spec_content.items():
-            context_parts.append(f"--- {key.upper()} ---\n{content}")
-
-        if not context_parts:
-            # No specs or description — generate a minimal summary
-            models.save_project_summary(name, {
-                "what_it_does": f"{name} — no spec files or description available.",
-                "how_finished": "Unknown — no spec files found.",
-                "next_steps": ["Add PRODUCT_SPEC.md with project description", "Add SESSION_NOTES.md with session tracking"],
-            })
-            skipped += 1
-            continue
-
-        context_text = "\n\n".join(context_parts)
-
-        # Call Claude Haiku for a concise summary
-        try:
-            ai_client = anthropic.Anthropic(api_key=creds["anthropic_key"])
-            response = ai_client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=500,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"Project: {name}\n\n{context_text}\n\n"
-                        "Based on the above, return ONLY valid JSON with:\n"
-                        '1. "what_it_does": 1-2 sentence description of what this project does\n'
-                        '2. "how_finished": 1-2 sentence assessment of how complete/finished the project is\n'
-                        '3. "next_steps": array of up to 5 short bullet strings for what needs to be built or tested next\n'
-                        "Return raw JSON only, no markdown fencing."
-                    ),
-                }],
-            )
-            raw = response.content[0].text.strip()
-            summary = ai.extract_json_object(raw)
-            # Ensure next_steps is capped at 5
-            if "next_steps" in summary and len(summary["next_steps"]) > 5:
-                summary["next_steps"] = summary["next_steps"][:5]
-            models.save_project_summary(name, summary)
-            generated += 1
-        except Exception as e:
-            models.save_project_summary(name, {
-                "what_it_does": repo.get("description") or f"{name} — summary generation failed.",
-                "how_finished": "Unknown — AI summary could not be generated.",
-                "next_steps": [f"Error: {str(e)[:100]}"],
-            })
-            skipped += 1
-
-    flash(f"Generated summaries for {generated} projects ({skipped} skipped/fallback).", "success")
-    models.log_action("generate_summaries", "all", "all", f"Generated {generated}, skipped {skipped}")
-    return redirect(url_for("projects"))
+    models.log_action("generate_summary", name, "all", "ok")
+    return jsonify({"ok": True, "repo": name})
 
 
 # --- Henry Branches ---
@@ -1011,20 +1038,7 @@ def stats():
 def whats_next_all():
     summaries = models.get_project_summaries()
     groups = models.get_groups()
-    prefs = models.get_preferences()
-
-    # Same group-resolution behavior as /projects: ?group= wins and persists,
-    # otherwise fall back to the saved active_group pref.
-    requested = request.args.get("group")
-    if requested is not None:
-        active_group = requested if requested in groups else ""
-        if prefs.get("active_group", "") != active_group:
-            prefs["active_group"] = active_group
-            models.save_preferences(prefs)
-    else:
-        active_group = prefs.get("active_group", "")
-        if active_group and active_group not in groups:
-            active_group = ""
+    active_group = _resolve_active_group(groups)
 
     all_repos = _scan_results.get("repos", []) if _scan_results else []
     if active_group:
@@ -1058,6 +1072,154 @@ def whats_next_all():
         groups=groups,
         active_group=active_group,
     )
+
+
+# --- Chat Briefing ---
+#
+# One screen that summarizes every project comprehensively — what business
+# problem it solves, where it stands, what's built, what's left, open
+# decisions — and composes a single Markdown document to paste into a
+# Claude chat session (modeled on the CHAT_BRIEFING.md format). AI briefs
+# are cached in data/briefs.json and regenerated only when a repo has been
+# pushed to since its brief was generated (or on force-regenerate). Every
+# generation is logged to data/logs/briefing.log for paste-back debugging.
+
+def _briefing_projects(active_group: str) -> list[dict]:
+    """Assemble the per-project briefing dicts for the current scan +
+    group filter. Shared by the view, the export, and generation."""
+    groups = models.get_groups()
+    all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
+    if active_group:
+        in_group = set(groups.get(active_group, []))
+        repos = [r for r in all_repos if r["name"] in in_group]
+    else:
+        repos = all_repos
+    return briefing.assemble_projects(
+        repos,
+        briefs=models.get_briefs(),
+        summaries=models.get_project_summaries(),
+        trackers=models.list_trackers(),
+        groups=groups,
+    )
+
+
+def _briefing_markdown(projects: list[dict], active_group: str) -> str:
+    generated_label = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    return briefing.compose_markdown(
+        projects,
+        owner_login=session.get("github_user", ""),
+        active_group=active_group,
+        generated_label=generated_label,
+    )
+
+
+@app.route("/briefing")
+@_require_auth
+def briefing_view():
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups)
+    projects = _briefing_projects(active_group)
+    markdown = _briefing_markdown(projects, active_group)
+
+    briefed = sum(1 for p in projects if p["brief"])
+    stale = sum(1 for p in projects if p["stale"])
+    sections_md = {p["name"]: briefing.project_section_markdown(p) for p in projects}
+
+    # Target lists for the client-side generation queue: one POST per repo
+    # so progress is visible and one failure never kills the batch.
+    targets_all = [p["name"] for p in projects]
+    targets_needs = [p["name"] for p in projects if not p["brief"] or p["stale"]]
+
+    return render_template(
+        "briefing.html",
+        scan_results=_scan_results,
+        projects=projects,
+        markdown=markdown,
+        sections_md=sections_md,
+        groups=groups,
+        active_group=active_group,
+        all_repo_count=len(_scan_results.get("repos", [])) if _scan_results else 0,
+        briefed_count=briefed,
+        stale_count=stale,
+        missing_count=len(projects) - briefed,
+        targets_all=targets_all,
+        targets_needs=targets_needs,
+    )
+
+
+@app.route("/briefing/export.md")
+@_require_auth
+def briefing_export():
+    """The same document the COPY button produces, as a downloadable .md
+    file (handy for attaching to a Claude chat instead of pasting)."""
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups, persist=False)
+    projects = _briefing_projects(active_group)
+    markdown = _briefing_markdown(projects, active_group)
+    date_part = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    group_part = f"-{active_group.lower().replace(' ', '-')}" if active_group else ""
+    filename = f"portfolio-chat-briefing{group_part}-{date_part}.md"
+    return Response(
+        markdown,
+        mimetype="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.route("/api/briefing/generate/<name>", methods=["POST"])
+@_require_auth_api
+def briefing_generate_one(name):
+    """Generate the chat brief for ONE repo. The Briefing page drives this
+    sequentially per repo with live progress; the server re-checks
+    staleness so a fresh brief is never paid for twice (force overrides)."""
+    client = _get_github_client()
+    creds = _get_credentials()
+    if not client or not creds:
+        return jsonify({"error": NOT_CONNECTED_REMEDY}), 401
+    repo = _find_repo_by_name(name)
+    if not repo:
+        return jsonify({"error": f"Repo '{name}' not in the latest scan. Run a scan first."}), 404
+
+    force = bool((request.json or {}).get("force")) if request.is_json else False
+    existing = models.get_briefs().get(name)
+    if existing and not force and not briefing.is_brief_stale(existing, repo):
+        return jsonify({"ok": True, "repo": name, "skipped": "fresh"})
+
+    prefs = models.get_preferences()
+    model = prefs.get("ai_model", ai.DEFAULT_MODEL)
+    tracker = models.get_tracker(repo["owner"], name)
+
+    try:
+        context_text = briefing.gather_brief_inputs(client, repo, tracker)
+        brief = briefing.generate_brief(
+            api_key=creds["anthropic_key"],
+            repo_name=name,
+            context_text=context_text,
+            model=model,
+        )
+    except gh.GitHubAuthError:
+        return jsonify({"error": GITHUB_AUTH_REMEDY}), 401
+    except Exception as e:
+        # Keep any existing good brief; report the failure to the queue.
+        models.log_briefing_event(
+            "generate_error", repo=name, error=f"{type(e).__name__}: {str(e)[:300]}",
+        )
+        return jsonify({"error": f"{type(e).__name__}: {str(e)[:200]}"}), 502
+
+    usage = brief.pop("_usage", {})
+    if usage:
+        in_tok = usage.get("input_tokens", 0)
+        out_tok = usage.get("output_tokens", 0)
+        _session_cost.add(in_tok, out_tok,
+                          ai.estimate_cost(in_tok, out_tok, model=model))
+    models.save_brief(name, brief)
+    models.log_briefing_event(
+        "generate_done", repo=name, stage=brief.get("stage"), force=force,
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+    )
+    models.log_action("generate_brief", name, "all", f"stage={brief.get('stage')}")
+    return jsonify({"ok": True, "repo": name, "stage": brief.get("stage")})
 
 
 # --- Firestore Setup ---
@@ -1322,15 +1484,10 @@ def tracker_generate(owner, name):
     # Per-generation model override from the toolbar dropdown (form field
     # "model"); falls back to the global Settings preference.
     requested_model = (request.form.get("model") or "").strip()
-    valid_models = {
-        "claude-haiku-4-5-20251001",
-        "claude-sonnet-4-5-20250929",
-        "claude-opus-4-6",
-    }
-    if requested_model and requested_model in valid_models:
+    if requested_model and requested_model in ai.VALID_MODELS:
         model = requested_model
     else:
-        model = prefs.get("ai_model", "claude-haiku-4-5-20251001")
+        model = prefs.get("ai_model", ai.DEFAULT_MODEL)
 
     models.log_tracker_event(
         "generate_start", owner=owner, repo=name, model=model,

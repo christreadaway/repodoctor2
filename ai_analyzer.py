@@ -8,6 +8,17 @@ import os
 
 import anthropic
 
+# Single source of truth for selectable models. Everything that needs a
+# model id, a Settings/tracker dropdown, or validation reads from here —
+# a new Claude release is a one-line change.
+DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+MODEL_CHOICES = [
+    ("claude-haiku-4-5-20251001", "Haiku 4.5 — Fastest, cheapest (~$0.80/M input) — Recommended"),
+    ("claude-sonnet-4-5-20250929", "Sonnet 4.5 — Balanced quality & cost (~$3/M input)"),
+    ("claude-opus-4-6", "Opus 4.6 — Most capable, highest cost (~$15/M input)"),
+]
+VALID_MODELS = {model_id for model_id, _ in MODEL_CHOICES}
+
 SYSTEM_PROMPT = """You are a Git branch analyst helping a non-developer understand their repository branches. Your job is to analyze branch data and produce clear, actionable recommendations.
 
 Rules:
@@ -85,7 +96,7 @@ def estimate_tokens(branch_data: dict, spec_text: str | None = None) -> int:
     return len(text) // 4 + 500  # 500 for system prompt overhead
 
 
-def estimate_cost(input_tokens: int, output_tokens: int = 1000, model: str = "claude-haiku-4-5-20251001") -> float:
+def estimate_cost(input_tokens: int, output_tokens: int = 1000, model: str = DEFAULT_MODEL) -> float:
     """Estimate cost in USD. Rough estimates based on public pricing."""
     if "opus" in model:
         input_cost = input_tokens * 15.0 / 1_000_000
@@ -156,7 +167,7 @@ def analyze_branch(
     default_branch_commits: list[dict] | None = None,
     spec_text: str | None = None,
     local_path: str | None = None,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = DEFAULT_MODEL,
 ) -> dict:
     """Analyze a branch using the Anthropic API. Returns structured analysis."""
     client = anthropic.Anthropic(api_key=api_key)

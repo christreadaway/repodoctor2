@@ -830,58 +830,6 @@ class TestHenryBranchExclusion(unittest.TestCase):
             app_module._scan_results = None
 
 
-class TestDefaultGroupSeeding(unittest.TestCase):
-    """Covers seed_default_groups_if_missing (temporary login-time recovery)."""
-
-    def setUp(self):
-        self._orig_groups = models.GROUPS_PATH
-        self._orig_legacy = models._LEGACY_GROUPS_PATH
-        self._orig_prefs = models.PREFS_PATH
-        self._orig_log = models.ACTION_LOG_PATH
-        self.tmp = tempfile.mkdtemp()
-        models.GROUPS_PATH = os.path.join(self.tmp, "groups.json")
-        models._LEGACY_GROUPS_PATH = os.path.join(self.tmp, "legacy_groups.json")
-        models.PREFS_PATH = os.path.join(self.tmp, "prefs.json")
-        models.ACTION_LOG_PATH = os.path.join(self.tmp, "action_log.json")
-
-    def tearDown(self):
-        models.GROUPS_PATH = self._orig_groups
-        models._LEGACY_GROUPS_PATH = self._orig_legacy
-        models.PREFS_PATH = self._orig_prefs
-        models.ACTION_LOG_PATH = self._orig_log
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def test_seeds_all_five_when_empty(self):
-        added = models.seed_default_groups_if_missing()
-        self.assertEqual(
-            set(added),
-            {"School", "Church", "Catholic Games", "Infrastructure", "Fun"},
-        )
-        groups = models.get_groups()
-        self.assertIn("parentpoint", groups["School"])
-        self.assertIn("sacramentalrecords", groups["Church"])
-        self.assertIn("RCC_longwayhome", groups["Catholic Games"])
-        self.assertIn("repodoctor2", groups["Infrastructure"])
-        self.assertIn("polygraph", groups["Fun"])
-
-    def test_idempotent_after_first_seed(self):
-        models.seed_default_groups_if_missing()
-        self.assertEqual(models.seed_default_groups_if_missing(), [])
-
-    def test_preserves_user_edits(self):
-        """Hand-edited group with same name is never overwritten."""
-        models.set_group("School", ["only-this-one"])
-        added = models.seed_default_groups_if_missing()
-        self.assertNotIn("School", added)
-        self.assertEqual(models.get_groups()["School"], ["only-this-one"])
-
-    def test_seeded_groups_are_sorted_and_deduped(self):
-        models.seed_default_groups_if_missing()
-        for name, repos in models.get_groups().items():
-            self.assertEqual(repos, sorted(set(repos)),
-                             f"Group {name} not sorted/deduped")
-
-
 class TestLegacyGroupsMigration(unittest.TestCase):
     """Covers one-shot migration from config/groups.json to ~/.repodoctor/groups.json."""
 
@@ -1204,6 +1152,49 @@ class TestWhatsNextGroupFilter(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn(b"No open next-steps in", resp.data)
         self.assertIn(b"Empty", resp.data)
+
+
+class TestAtomicWrites(unittest.TestCase):
+    """_save_json writes via temp-file + rename so a crash mid-write can't
+    leave a truncated JSON file behind."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_round_trip_and_no_temp_leftovers(self):
+        path = os.path.join(self.tmp, "out.json")
+        models._save_json(path, {"a": 1, "nested": {"b": [1, 2]}})
+        self.assertEqual(models._load_json(path), {"a": 1, "nested": {"b": [1, 2]}})
+        leftovers = [f for f in os.listdir(self.tmp) if f.endswith(".tmp")]
+        self.assertEqual(leftovers, [])
+
+    def test_creates_missing_parent_dirs(self):
+        path = os.path.join(self.tmp, "deep", "er", "out.json")
+        models._save_json(path, [1, 2, 3])
+        self.assertEqual(models._load_json(path), [1, 2, 3])
+
+    def test_overwrite_replaces_content(self):
+        path = os.path.join(self.tmp, "out.json")
+        models._save_json(path, {"v": 1})
+        models._save_json(path, {"v": 2})
+        self.assertEqual(models._load_json(path), {"v": 2})
+
+    def test_failed_write_preserves_existing_file(self):
+        """If the new content can't be serialized, the old file survives
+        untouched (the temp file never replaces it)."""
+        path = os.path.join(self.tmp, "out.json")
+        models._save_json(path, {"v": 1})
+
+        class Unserializable:
+            def __str__(self):
+                raise RuntimeError("boom")
+
+        with self.assertRaises(Exception):
+            models._save_json(path, {"v": Unserializable()})
+        self.assertEqual(models._load_json(path), {"v": 1})
 
 
 if __name__ == "__main__":

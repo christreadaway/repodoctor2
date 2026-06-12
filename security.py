@@ -6,6 +6,7 @@ Handles credential encryption/decryption using Fernet + PBKDF2.
 import base64
 import json
 import os
+import tempfile
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
@@ -36,8 +37,23 @@ def encrypt_credentials(password: str, github_pat: str, anthropic_key: str) -> N
         "anthropic_key": anthropic_key,
     }).encode()
     encrypted = fernet.encrypt(payload)
-    with open(CREDENTIALS_PATH, "wb") as f:
-        f.write(salt + encrypted)
+    # Atomic write: a crash mid-write must never leave a truncated
+    # credentials file (which would lock the user out until a reset).
+    fd, tmp_path = tempfile.mkstemp(
+        dir=os.path.dirname(CREDENTIALS_PATH), suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(salt + encrypted)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, CREDENTIALS_PATH)
+    except OSError:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def decrypt_credentials(password: str) -> dict | None:

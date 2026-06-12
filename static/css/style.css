@@ -4843,3 +4843,93 @@ button.tracker-stat-jump:focus {
   .tracker-tab { white-space: nowrap; }
   .tracker-overlay-card { padding: 1.4rem 1.5rem; }
 }
+
+/* =====================================================================
+   CHAT BRIEFING
+   ===================================================================== */
+
+.briefing-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.briefing-stat {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  background: var(--tk-slate-bg);
+}
+
+.briefing-stat strong { color: var(--text-primary); }
+
+.briefing-stat-ok      { background: var(--tk-green-bg); border-color: var(--tk-green-bd); }
+.briefing-stat-warn    { background: var(--tk-amber-bg); border-color: var(--tk-amber-bd); }
+.briefing-stat-missing { background: var(--tk-red-bg);   border-color: var(--tk-red-bd); }
+
+/* Stage chips — one per pipeline stage, mapped onto the tracker palette. */
+.chip-stage-idea         { background: var(--tk-slate-bg);  color: var(--tk-slate-fg);  border-color: var(--tk-slate-bd); }
+.chip-stage-requirements { background: var(--tk-sky-bg);    color: var(--tk-sky-fg);    border-color: var(--tk-sky-bd); }
+.chip-stage-building     { background: var(--tk-amber-bg);  color: var(--tk-amber-fg);  border-color: var(--tk-amber-bd); }
+.chip-stage-testing      { background: var(--tk-orange-bg); color: var(--tk-orange-fg); border-color: var(--tk-orange-bd); }
+.chip-stage-live         { background: var(--tk-green-bg);  color: var(--tk-green-fg);  border-color: var(--tk-green-bd); }
+.chip-stage-paused       { background: var(--tk-red-bg);    color: var(--tk-red-fg);    border-color: var(--tk-red-bd); }
+.chip-stage-unknown      { background: transparent;         color: var(--text-secondary); border-color: var(--border); }
+
+.briefing-label-decisions { color: var(--tk-amber-fg); }
+
+.briefing-actions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.briefing-actions li {
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  padding: 3px 0;
+  line-height: 1.45;
+}
+
+.briefing-action-status { color: var(--text-secondary); font-size: 0.75rem; }
+
+.briefing-action-more { color: var(--text-secondary); font-style: italic; }
+
+.briefing-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.briefing-facts {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.briefing-card { display: flex; flex-direction: column; }
+
+/* Generation-queue overlay additions (shared by Briefing + Projects). */
+.gen-overlay-errors {
+  margin: 10px 0 0;
+  max-height: 180px;
+  overflow-y: auto;
+  text-align: left;
+  font-size: 0.75rem;
+  color: var(--tk-red-fg);
+  border: 1px solid var(--tk-red-bd);
+  background: var(--tk-red-bg);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+.gen-overlay-errors div { padding: 2px 0; }
+
+.gen-overlay-actions { margin-top: 12px; }

@@ -7,6 +7,9 @@ import datetime
 import json
 import logging
 import os
+import tempfile
+
+from ai_analyzer import DEFAULT_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +44,33 @@ def _load_json(path: str) -> dict | list:
         return {}
 
 
-def _save_json(path: str, data):
+def _atomic_write(path: str, write_fn, mode: str = "w"):
+    """Write a file atomically: write to a unique temp file in the same
+    directory, fsync, then rename over the target. A crash or full disk
+    mid-write can no longer leave a truncated file behind — which is the
+    exact corruption _load_json's .corrupt rename exists to clean up.
+    OSErrors are logged (not swallowed) so write failures surface."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2, default=str)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=os.path.dirname(path), prefix=os.path.basename(path) + ".", suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, mode) as f:
+            write_fn(f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception as e:
+        logger.error("Failed to save %s: %s", path, e)
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _save_json(path: str, data):
+    _atomic_write(path, lambda f: json.dump(data, f, indent=2, default=str))
 
 
 # --- Preferences ---
@@ -56,7 +82,7 @@ DEFAULT_PREFS = {
     "sort_repos_by": "branch_count",
     "sort_branches_by": "classification",
     "excluded_repos": [],
-    "ai_model": "claude-haiku-4-5-20251001",
+    "ai_model": DEFAULT_MODEL,
     "display_mode": "plain_english",
     "active_group": "",
 }
@@ -164,8 +190,7 @@ def get_spec(repo_name: str) -> str | None:
 def save_spec(repo_name: str, content: str):
     _ensure_dirs()
     path = os.path.join(DATA_DIR, "specs", f"{repo_name}.md")
-    with open(path, "w") as f:
-        f.write(content)
+    _atomic_write(path, lambda f: f.write(content))
 
 
 def list_specs() -> list[str]:
@@ -197,6 +222,26 @@ def save_project_summary(repo_name: str, summary: dict):
 
 def save_project_summaries(summaries: dict):
     _save_json(SUMMARIES_PATH, summaries)
+
+
+# --- Chat Briefs (Briefing screen) ---
+#
+# Keyed by repo name. One rich AI-generated brief per repo (what it is,
+# stage, what's built, what's left, open decisions, constraints) feeding
+# the cross-project Chat Briefing export.
+
+BRIEFS_PATH = os.path.join(DATA_DIR, "briefs.json")
+
+
+def get_briefs() -> dict:
+    return _load_json(BRIEFS_PATH) or {}
+
+
+def save_brief(repo_name: str, brief: dict):
+    briefs = get_briefs()
+    brief["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    briefs[repo_name] = brief
+    _save_json(BRIEFS_PATH, briefs)
 
 
 # --- Henry Branch Summaries ---
@@ -286,47 +331,6 @@ def get_groups() -> dict:
 
 def save_groups(groups: dict):
     _save_json(GROUPS_PATH, groups)
-
-
-# TEMPORARY (April 2026): one-shot recovery of Chris's existing groups after a
-# codebase wipe. seed_default_groups_if_missing() runs once on login and only
-# fills in groups that don't already exist — your edits are never overwritten.
-# NEXT REBUILD: delete DEFAULT_USER_GROUPS and seed_default_groups_if_missing,
-# and stop calling it from app._init_session. Groups now live in
-# ~/.repodoctor/groups.json and will simply persist there.
-DEFAULT_USER_GROUPS = {
-    "School": [
-        "audioscribe", "desmond", "grantfinder", "LA-pipeline", "lessonalign",
-        "missionIQ", "parentpoint", "parentpointmeals", "standardscollector",
-    ],
-    "Church": [
-        "catholicevents", "grantfinder", "ministryfair", "missionIQ",
-        "sacramentalrecords", "worshipaidcreator",
-    ],
-    "Catholic Games": ["RCC_letmypeoplego", "RCC_longwayhome"],
-    "Infrastructure": [
-        "audioscribe", "claudecodearchiver", "desmond", "personalcrm",
-        "personalfinance", "redmon", "repodoctor2", "vibecoach",
-    ],
-    "Fun": [
-        "C64_archon", "C64_loderunner", "C64_nflchallenge", "c64HOA-original",
-        "c64SFR-original", "c64mule-original", "nordstromshopper",
-        "personalcrm", "polygraph",
-    ],
-}
-
-
-def seed_default_groups_if_missing() -> list[str]:
-    """Add any of DEFAULT_USER_GROUPS that aren't present yet. Returns added names."""
-    groups = get_groups()
-    added: list[str] = []
-    for name, repos in DEFAULT_USER_GROUPS.items():
-        if name not in groups:
-            groups[name] = sorted(set(repos))
-            added.append(name)
-    if added:
-        save_groups(groups)
-    return added
 
 
 def set_group(name: str, repos: list[str]):
@@ -427,9 +431,10 @@ def delete_tracker(owner: str, repo: str) -> bool:
 # copy-paste-able into Claude Code for debugging (per CLAUDE.md).
 
 TRACKER_LOG_PATH = os.path.join(DATA_DIR, "logs", "tracker.log")
+BRIEFING_LOG_PATH = os.path.join(DATA_DIR, "logs", "briefing.log")
 
 
-def log_tracker_event(event: str, **fields):
+def _append_log_event(path: str, event: str, fields: dict):
     _ensure_dirs()
     record = {
         "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -437,18 +442,17 @@ def log_tracker_event(event: str, **fields):
     }
     record.update(fields)
     try:
-        with open(TRACKER_LOG_PATH, "a") as f:
+        with open(path, "a") as f:
             f.write(json.dumps(record, default=str) + "\n")
     except OSError as e:
-        logger.warning("tracker log write failed: %s", e)
+        logger.warning("event log write failed (%s): %s", path, e)
 
 
-def tail_tracker_log(n: int = 100) -> list[dict]:
-    """Return the last n events from the tracker log."""
-    if not os.path.exists(TRACKER_LOG_PATH):
+def _tail_log(path: str, n: int) -> list[dict]:
+    if not os.path.exists(path):
         return []
     try:
-        with open(TRACKER_LOG_PATH, "r") as f:
+        with open(path, "r") as f:
             lines = f.readlines()
     except OSError:
         return []
@@ -462,6 +466,24 @@ def tail_tracker_log(n: int = 100) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return out
+
+
+def log_tracker_event(event: str, **fields):
+    _append_log_event(TRACKER_LOG_PATH, event, fields)
+
+
+def tail_tracker_log(n: int = 100) -> list[dict]:
+    """Return the last n events from the tracker log."""
+    return _tail_log(TRACKER_LOG_PATH, n)
+
+
+def log_briefing_event(event: str, **fields):
+    _append_log_event(BRIEFING_LOG_PATH, event, fields)
+
+
+def tail_briefing_log(n: int = 100) -> list[dict]:
+    """Return the last n events from the briefing log."""
+    return _tail_log(BRIEFING_LOG_PATH, n)
 
 
 # --- Session Cost Tracking ---
