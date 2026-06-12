@@ -7,6 +7,7 @@ import datetime
 import json
 import logging
 import os
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +42,33 @@ def _load_json(path: str) -> dict | list:
         return {}
 
 
-def _save_json(path: str, data):
+def _atomic_write(path: str, write_fn, mode: str = "w"):
+    """Write a file atomically: write to a unique temp file in the same
+    directory, fsync, then rename over the target. A crash or full disk
+    mid-write can no longer leave a truncated file behind — which is the
+    exact corruption _load_json's .corrupt rename exists to clean up.
+    OSErrors are logged (not swallowed) so write failures surface."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2, default=str)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=os.path.dirname(path), prefix=os.path.basename(path) + ".", suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, mode) as f:
+            write_fn(f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception as e:
+        logger.error("Failed to save %s: %s", path, e)
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _save_json(path: str, data):
+    _atomic_write(path, lambda f: json.dump(data, f, indent=2, default=str))
 
 
 # --- Preferences ---
@@ -164,8 +188,7 @@ def get_spec(repo_name: str) -> str | None:
 def save_spec(repo_name: str, content: str):
     _ensure_dirs()
     path = os.path.join(DATA_DIR, "specs", f"{repo_name}.md")
-    with open(path, "w") as f:
-        f.write(content)
+    _atomic_write(path, lambda f: f.write(content))
 
 
 def list_specs() -> list[str]:

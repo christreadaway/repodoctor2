@@ -1206,5 +1206,48 @@ class TestWhatsNextGroupFilter(unittest.TestCase):
         self.assertIn(b"Empty", resp.data)
 
 
+class TestAtomicWrites(unittest.TestCase):
+    """_save_json writes via temp-file + rename so a crash mid-write can't
+    leave a truncated JSON file behind."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_round_trip_and_no_temp_leftovers(self):
+        path = os.path.join(self.tmp, "out.json")
+        models._save_json(path, {"a": 1, "nested": {"b": [1, 2]}})
+        self.assertEqual(models._load_json(path), {"a": 1, "nested": {"b": [1, 2]}})
+        leftovers = [f for f in os.listdir(self.tmp) if f.endswith(".tmp")]
+        self.assertEqual(leftovers, [])
+
+    def test_creates_missing_parent_dirs(self):
+        path = os.path.join(self.tmp, "deep", "er", "out.json")
+        models._save_json(path, [1, 2, 3])
+        self.assertEqual(models._load_json(path), [1, 2, 3])
+
+    def test_overwrite_replaces_content(self):
+        path = os.path.join(self.tmp, "out.json")
+        models._save_json(path, {"v": 1})
+        models._save_json(path, {"v": 2})
+        self.assertEqual(models._load_json(path), {"v": 2})
+
+    def test_failed_write_preserves_existing_file(self):
+        """If the new content can't be serialized, the old file survives
+        untouched (the temp file never replaces it)."""
+        path = os.path.join(self.tmp, "out.json")
+        models._save_json(path, {"v": 1})
+
+        class Unserializable:
+            def __str__(self):
+                raise RuntimeError("boom")
+
+        with self.assertRaises(Exception):
+            models._save_json(path, {"v": Unserializable()})
+        self.assertEqual(models._load_json(path), {"v": 1})
+
+
 if __name__ == "__main__":
     unittest.main()
