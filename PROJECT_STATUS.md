@@ -1,18 +1,25 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-05-19 (Session 14)
-**Current Branch:** `claude/add-project-tracker-L4awW` (pushed) — needs merge to `main`
+**Last Updated:** 2026-06-12 (Session 15)
+**Current Branch:** `claude/gallant-clarke-k53wsj` (pushed) — needs merge to `main`
 **Overall Progress:** ~96%
 
 ---
 
 ## Snapshot
 
-RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch counts, required-spec-file presence, code size, AI-generated project summaries, named groups for filtering, a Stats view with Commits / Code Size bar charts across time periods (aggregatable by group), and an aggregated What's Next view. Runs locally; also deployed on Netlify as a Node.js serverless app (Netlify lags Flask).
+RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch counts, required-spec-file presence, code size, AI-generated project summaries, named groups for filtering, a Stats view with Commits / Code Size bar charts across time periods (aggregatable by group), an aggregated What's Next view, a per-repo Codebase Tracker, and a Chat Briefing screen that composes a single portfolio document for pasting into a Claude chat session. Runs locally; also deployed on Netlify as a Node.js serverless app (Netlify lags Flask).
 
 ---
 
 ## What's Working
+
+### Chat Briefing (NEW 2026-06-12 Session 15)
+- `/briefing` (nav: Briefing) — one screen summarizing every project comprehensively, with one **COPY FOR CLAUDE CHAT** button producing a single Markdown document (purpose preamble + At-a-Glance table + one section per project, newest-push-first) so a chat session knows where every project stands in one paste. **DOWNLOAD .MD** serves the same document at `/briefing/export.md`; every card also has COPY SECTION.
+- Per-repo AI **chat briefs** (modeled on parentpoint's CHAT_BRIEFING.md): what it is (business problem first), stack, stage (Idea / Requirements / Building / Testing / Live / Paused + evidence sentence), where we are, what's built (by audience), what's left (sequenced), open decisions (owner), and constraints a chat session must respect. Generated from each repo's docs (recursive lookup) + README fallback + compact tracker facts; output normalized (stage enum enforced, bullet caps) before save.
+- Merged with hard data per project: last push, branches, docs X/5 (+ missing list), size, languages, groups, tracker open actions (P0-first, with status notes) and open questions. Repos without briefs still export via Projects-summary/description fallback, marked "No AI brief yet."
+- **Smart regeneration:** default generation skips repos not pushed-to since their brief (`STALE` badge when out of date); REGENERATE ALL forces the group in view. Briefs cached in `data/briefs.json`; every generation logged to `data/logs/briefing.log` (same one-JSON-per-line format as `tracker.log`).
+- 32 new unit tests (176 total). Group tabs filter screen, generation, and export alike.
 
 ### Codebase Tracker (NEW 2026-05-19 Session 14)
 - Per-repo deep view at `/tracker` accessible from a dedicated nav link. Dropdown picks any scanned repo; landing page auto-redirects to the most recently generated tracker when one exists.

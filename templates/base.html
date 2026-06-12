@@ -24,6 +24,7 @@
                 <a href="{{ url_for('henry') }}" class="nav-link {% if request.endpoint == 'henry' %}active{% endif %}">Henry</a>
                 <a href="{{ url_for('stats') }}" class="nav-link {% if request.endpoint == 'stats' %}active{% endif %}">Stats</a>
                 <a href="{{ url_for('whats_next_all') }}" class="nav-link {% if request.endpoint == 'whats_next_all' %}active{% endif %}">What's Next</a>
+                <a href="{{ url_for('briefing_view') }}" class="nav-link {% if request.endpoint == 'briefing_view' %}active{% endif %}">Briefing</a>
                 <a href="{{ url_for('tracker_index') }}" class="nav-link {% if request.endpoint in ['tracker_index', 'tracker_view', 'tracker_debug'] %}active{% endif %}">Tracker</a>
                 <a href="{{ url_for('mac_setup') }}" class="nav-link {% if request.endpoint == 'mac_setup' %}active{% endif %}">Mac Setup</a>
                 <a href="{{ url_for('settings') }}" class="nav-link {% if request.endpoint == 'settings' %}active{% endif %}">Settings</a>

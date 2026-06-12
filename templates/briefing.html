@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block title %}RepoDoctor — Chat Briefing{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Chat Briefing</h1>
+    <div class="page-actions">
+        {% if scan_results and projects %}
+        <button type="button" class="btn btn-primary" id="copy-briefing-btn">COPY FOR CLAUDE CHAT</button>
+        <a href="{{ url_for('briefing_export', group=active_group or None) }}" class="btn btn-secondary">DOWNLOAD .MD</a>
+        <form method="POST" action="{{ url_for('briefing_generate', group=active_group or None) }}" class="inline-form briefing-generate-form">
+            <button type="submit" class="btn btn-secondary">
+                {% if missing_count == projects|length %}GENERATE BRIEFS{% else %}UPDATE STALE + MISSING{% endif %}
+            </button>
+        </form>
+        <form method="POST" action="{{ url_for('briefing_generate', group=active_group or None) }}" class="inline-form briefing-generate-form"
+              onsubmit="return confirm('Regenerate AI briefs for all {{ projects|length }} project(s) in view? Uses the API for every repo.');">
+            <input type="hidden" name="force" value="1">
+            <button type="submit" class="btn btn-secondary">REGENERATE ALL</button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first, then come back here to build your portfolio briefing.</p>
+    </div>
+</div>
+{% else %}
+
+{% if groups %}
+<div class="group-bar">
+    <div class="group-tabs">
+        <a href="{{ url_for('briefing_view', group='') }}"
+           class="group-tab {% if not active_group %}active{% endif %}">
+           All <span class="group-count">{{ all_repo_count }}</span>
+        </a>
+        {% for gname, gRepos in groups.items() %}
+        <a href="{{ url_for('briefing_view', group=gname) }}"
+           class="group-tab {% if active_group == gname %}active{% endif %}">
+           {{ gname }} <span class="group-count">{{ gRepos|length }}</span>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<p class="projects-hint">One document that tells a Claude chat session where every project stands — the problem it solves, what's built, what's left, and the open decisions. <strong>COPY FOR CLAUDE CHAT</strong> grabs the whole thing; each card has a copy button for just that project. Generation uses your configured AI model (~$0.005&ndash;$0.01 per project on Haiku) and skips repos that haven't been pushed to since their last brief.</p>
+
+<div class="briefing-stats">
+    <span class="briefing-stat"><strong>{{ projects|length }}</strong> project{% if projects|length != 1 %}s{% endif %} in view</span>
+    <span class="briefing-stat briefing-stat-ok"><strong>{{ briefed_count }}</strong> briefed</span>
+    {% if stale_count %}<span class="briefing-stat briefing-stat-warn"><strong>{{ stale_count }}</strong> stale</span>{% endif %}
+    {% if missing_count %}<span class="briefing-stat briefing-stat-missing"><strong>{{ missing_count }}</strong> no brief yet</span>{% endif %}
+</div>
+
+<textarea id="briefing-markdown" hidden readonly>{{ markdown }}</textarea>
+
+{% if not projects %}
+<div class="projects-hint">
+    <p>No projects in group <strong>{{ active_group }}</strong>. Pick another group above.</p>
+</div>
+{% endif %}
+
+<div class="projects-grid">
+    {% for p in projects %}
+    <div class="project-card briefing-card {% if p.brief %}has-summary{% endif %}">
+        <div class="project-card-header">
+            <a href="{{ url_for('repo_detail', owner=p.owner, name=p.name) }}" class="project-name">{{ p.name }}</a>
+            <div class="project-meta">
+                <span class="chip chip-stage-{{ p.stage|lower }}">{{ p.stage|upper }}</span>
+                {% if p.stale %}<span class="badge badge-stale" title="Repo was pushed to after this brief was generated — regenerate to refresh.">STALE</span>{% endif %}
+            </div>
+        </div>
+
+        {% if p.brief %}
+        <div class="project-section">
+            <div class="project-section-label">What it is</div>
+            <p class="project-section-text">{{ p.brief.what_it_is }}</p>
+        </div>
+
+        {% set where = [p.brief.stage_note, p.brief.where_we_are]|select|join(' ') %}
+        {% if where %}
+        <div class="project-section">
+            <div class="project-section-label">Where we are</div>
+            <p class="project-section-text">{{ where }}</p>
+        </div>
+        {% endif %}
+
+        {% if p.brief.whats_left %}
+        <div class="project-section">
+            <div class="project-section-label">What's left</div>
+            <ul class="project-next-steps">
+                {% for item in p.brief.whats_left[:6] %}
+                <li>{{ item }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if p.brief.open_decisions %}
+        <div class="project-section">
+            <div class="project-section-label briefing-label-decisions">Open decisions (you)</div>
+            <ul class="project-next-steps">
+                {% for item in p.brief.open_decisions %}
+                <li>{{ item }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% else %}
+        <div class="project-section">
+            <p class="project-no-summary">
+                {% if p.summary and p.summary.what_it_does %}
+                {{ p.summary.what_it_does }}
+                {% elif p.description %}
+                {{ p.description }}
+                {% else %}
+                No brief yet — click GENERATE BRIEFS above.
+                {% endif %}
+            </p>
+        </div>
+        {% endif %}
+
+        {% if p.open_actions %}
+        <div class="project-section">
+            <div class="project-section-label">Open actions (tracker)</div>
+            <ul class="briefing-actions">
+                {% for a in p.open_actions[:4] %}
+                <li><span class="chip chip-{{ a.priority|lower|replace('—', 'pnone') }}">{{ a.priority }}</span> {{ a.title }} <span class="briefing-action-status">({{ a.status }})</span></li>
+                {% endfor %}
+                {% if p.open_actions|length > 4 %}
+                <li class="briefing-action-more">+ {{ p.open_actions|length - 4 }} more in the export</li>
+                {% endif %}
+            </ul>
+        </div>
+        {% endif %}
+
+        <div class="briefing-card-footer">
+            <span class="briefing-facts">
+                Pushed {{ p.last_push }} · docs {{ p.files_present }}/{{ p.files_total }}
+                {%- if p.brief_generated_at %} · brief {{ p.brief_generated_at[:10] }}{% endif %}
+            </span>
+            <button type="button" class="btn btn-secondary btn-sm briefing-copy-section" data-target="section-md-{{ p.name }}">COPY SECTION</button>
+        </div>
+        <textarea id="section-md-{{ p.name }}" hidden readonly>{{ sections_md[p.name] }}</textarea>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<script>
+(function () {
+    var copyAll = document.getElementById('copy-briefing-btn');
+    var source = document.getElementById('briefing-markdown');
+    if (copyAll && source) {
+        copyAll.addEventListener('click', function () {
+            window.copyToClipboard(source.value, copyAll);
+        });
+    }
+
+    document.querySelectorAll('.briefing-copy-section').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var el = document.getElementById(btn.getAttribute('data-target'));
+            if (el) window.copyToClipboard(el.value, btn);
+        });
+    });
+
+    // Full-screen overlay while briefs generate (same pattern as the
+    // Tracker page) — generation walks every repo in view and can take
+    // a few minutes on a full portfolio.
+    function showOverlay() {
+        if (document.getElementById('briefing-overlay')) return;
+        var overlay = document.createElement('div');
+        overlay.id = 'briefing-overlay';
+        overlay.className = 'tracker-overlay';
+        overlay.innerHTML =
+            '<div class="tracker-overlay-card">' +
+              '<div class="tracker-overlay-spinner"></div>' +
+              '<h2 class="tracker-overlay-title">BRIEFING<span class="tracker-overlay-dots"><span>.</span><span>.</span><span>.</span></span></h2>' +
+              '<p class="tracker-overlay-detail">Reading each repo’s docs + tracker, then writing its chat brief. Repos already current are skipped.</p>' +
+              '<p class="tracker-overlay-elapsed">Elapsed: <span id="briefing-overlay-time">0s</span></p>' +
+              '<p class="tracker-overlay-foot">Typical: 5–15 seconds per project that needs a brief. Don’t close this tab.</p>' +
+            '</div>';
+        document.body.appendChild(overlay);
+        var start = Date.now();
+        var timeEl = document.getElementById('briefing-overlay-time');
+        var timer = setInterval(function () {
+            if (!timeEl || !document.body.contains(overlay)) { clearInterval(timer); return; }
+            var s = Math.floor((Date.now() - start) / 1000);
+            timeEl.textContent = s >= 60 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : s + 's';
+        }, 1000);
+    }
+
+    document.querySelectorAll('.briefing-generate-form').forEach(function (form) {
+        form.addEventListener('submit', function () {
+            // confirm() handlers run before submit fires, so a cancelled
+            // REGENERATE ALL never reaches here.
+            setTimeout(showOverlay, 0);
+        });
+    });
+})();
+</script>
+{% endblock %}

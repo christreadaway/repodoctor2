@@ -17,7 +17,7 @@ except Exception:
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, flash, jsonify,
+    session, flash, jsonify, Response,
 )
 
 import security
@@ -30,6 +30,7 @@ import project_mapper
 import firestore_detector
 import tracker_data
 import tracker_generator
+import briefing
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
@@ -469,24 +470,30 @@ def debug_files(owner, name):
 
 # --- Projects Summary ---
 
+def _resolve_active_group(groups: dict, persist: bool = True) -> str:
+    """Shared group-filter resolution for Projects / What's Next / Briefing:
+    ?group=X wins (and is persisted unless persist=False); otherwise the
+    saved preference. A group that no longer exists resolves to '' (All)."""
+    prefs = models.get_preferences()
+    requested = request.args.get("group")
+    if requested is not None:
+        active_group = requested if requested in groups else ""
+        if persist and prefs.get("active_group", "") != active_group:
+            prefs["active_group"] = active_group
+            models.save_preferences(prefs)
+        return active_group
+    active_group = prefs.get("active_group", "")
+    if active_group and active_group not in groups:
+        return ""
+    return active_group
+
+
 @app.route("/projects")
 @_require_auth
 def projects():
     summaries = models.get_project_summaries()
     groups = models.get_groups()
-    prefs = models.get_preferences()
-
-    # Resolve active group: ?group=X wins and is persisted; otherwise use saved pref.
-    requested = request.args.get("group")
-    if requested is not None:
-        active_group = requested if requested in groups else ""
-        if prefs.get("active_group", "") != active_group:
-            prefs["active_group"] = active_group
-            models.save_preferences(prefs)
-    else:
-        active_group = prefs.get("active_group", "")
-        if active_group and active_group not in groups:
-            active_group = ""
+    active_group = _resolve_active_group(groups)
 
     all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
     # Most recently updated first; missing/blank dates sink to the bottom.
@@ -1011,20 +1018,7 @@ def stats():
 def whats_next_all():
     summaries = models.get_project_summaries()
     groups = models.get_groups()
-    prefs = models.get_preferences()
-
-    # Same group-resolution behavior as /projects: ?group= wins and persists,
-    # otherwise fall back to the saved active_group pref.
-    requested = request.args.get("group")
-    if requested is not None:
-        active_group = requested if requested in groups else ""
-        if prefs.get("active_group", "") != active_group:
-            prefs["active_group"] = active_group
-            models.save_preferences(prefs)
-    else:
-        active_group = prefs.get("active_group", "")
-        if active_group and active_group not in groups:
-            active_group = ""
+    active_group = _resolve_active_group(groups)
 
     all_repos = _scan_results.get("repos", []) if _scan_results else []
     if active_group:
@@ -1058,6 +1052,179 @@ def whats_next_all():
         groups=groups,
         active_group=active_group,
     )
+
+
+# --- Chat Briefing ---
+#
+# One screen that summarizes every project comprehensively — what business
+# problem it solves, where it stands, what's built, what's left, open
+# decisions — and composes a single Markdown document to paste into a
+# Claude chat session (modeled on the CHAT_BRIEFING.md format). AI briefs
+# are cached in data/briefs.json and regenerated only when a repo has been
+# pushed to since its brief was generated (or on force-regenerate). Every
+# generation is logged to data/logs/briefing.log for paste-back debugging.
+
+def _briefing_projects(active_group: str) -> list[dict]:
+    """Assemble the per-project briefing dicts for the current scan +
+    group filter. Shared by the view, the export, and generation."""
+    groups = models.get_groups()
+    all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
+    if active_group:
+        in_group = set(groups.get(active_group, []))
+        repos = [r for r in all_repos if r["name"] in in_group]
+    else:
+        repos = all_repos
+    return briefing.assemble_projects(
+        repos,
+        briefs=models.get_briefs(),
+        summaries=models.get_project_summaries(),
+        trackers=models.list_trackers(),
+        groups=groups,
+    )
+
+
+def _briefing_markdown(projects: list[dict], active_group: str) -> str:
+    generated_label = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    return briefing.compose_markdown(
+        projects,
+        owner_login=session.get("github_user", ""),
+        active_group=active_group,
+        generated_label=generated_label,
+    )
+
+
+@app.route("/briefing")
+@_require_auth
+def briefing_view():
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups)
+    projects = _briefing_projects(active_group)
+    markdown = _briefing_markdown(projects, active_group)
+
+    briefed = sum(1 for p in projects if p["brief"])
+    stale = sum(1 for p in projects if p["stale"])
+    sections_md = {p["name"]: briefing.project_section_markdown(p) for p in projects}
+
+    return render_template(
+        "briefing.html",
+        scan_results=_scan_results,
+        projects=projects,
+        markdown=markdown,
+        sections_md=sections_md,
+        groups=groups,
+        active_group=active_group,
+        all_repo_count=len(_scan_results.get("repos", [])) if _scan_results else 0,
+        briefed_count=briefed,
+        stale_count=stale,
+        missing_count=len(projects) - briefed,
+    )
+
+
+@app.route("/briefing/export.md")
+@_require_auth
+def briefing_export():
+    """The same document the COPY button produces, as a downloadable .md
+    file (handy for attaching to a Claude chat instead of pasting)."""
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups, persist=False)
+    projects = _briefing_projects(active_group)
+    markdown = _briefing_markdown(projects, active_group)
+    date_part = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    group_part = f"-{active_group.lower().replace(' ', '-')}" if active_group else ""
+    filename = f"portfolio-chat-briefing{group_part}-{date_part}.md"
+    return Response(
+        markdown,
+        mimetype="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.route("/briefing/generate", methods=["POST"])
+@_require_auth
+def briefing_generate():
+    """Generate AI chat briefs for the repos in the current group view.
+    Default: only repos with no brief or a stale one (pushed since last
+    generation). force=1 regenerates everything in view."""
+    client = _get_github_client()
+    creds = _get_credentials()
+    if not client or not creds:
+        flash("Not authenticated.", "error")
+        return redirect(url_for("briefing_view"))
+    if not _scan_results:
+        flash("Run a scan first from the Dashboard.", "error")
+        return redirect(url_for("briefing_view"))
+
+    force = request.form.get("force") == "1"
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups, persist=False)
+    all_repos = _scan_results.get("repos", [])
+    if active_group:
+        in_group = set(groups.get(active_group, []))
+        repos = [r for r in all_repos if r["name"] in in_group]
+    else:
+        repos = all_repos
+
+    briefs = models.get_briefs()
+    trackers = models.list_trackers()
+    prefs = models.get_preferences()
+    model = prefs.get("ai_model", "claude-haiku-4-5-20251001")
+
+    models.log_briefing_event(
+        "generate_start", scope=active_group or "all",
+        n_repos=len(repos), force=force, model=model,
+    )
+
+    generated = 0
+    skipped_fresh = 0
+    failed = 0
+    for repo in repos:
+        name = repo["name"]
+        existing = briefs.get(name)
+        if existing and not force and not briefing.is_brief_stale(existing, repo):
+            skipped_fresh += 1
+            continue
+        tracker = trackers.get(f"{repo['owner']}/{name}")
+        try:
+            context_text = briefing.gather_brief_inputs(client, repo, tracker)
+            brief = briefing.generate_brief(
+                api_key=creds["anthropic_key"],
+                repo_name=name,
+                context_text=context_text,
+                model=model,
+            )
+        except gh.GitHubAuthError:
+            raise
+        except Exception as e:
+            # Keep any existing good brief; log and move to the next repo.
+            failed += 1
+            models.log_briefing_event(
+                "generate_error", repo=name, error=f"{type(e).__name__}: {str(e)[:300]}",
+            )
+            continue
+
+        usage = brief.pop("_usage", {})
+        if usage:
+            in_tok = usage.get("input_tokens", 0)
+            out_tok = usage.get("output_tokens", 0)
+            _session_cost.add(in_tok, out_tok,
+                              ai.estimate_cost(in_tok, out_tok, model=model))
+        models.save_brief(name, brief)
+        models.log_briefing_event(
+            "generate_done", repo=name, stage=brief.get("stage"),
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+        )
+        generated += 1
+
+    models.log_action(
+        "generate_briefs", active_group or "all", "all",
+        f"Generated {generated}, {skipped_fresh} fresh, {failed} failed",
+    )
+    msg = f"Briefs: {generated} generated, {skipped_fresh} already current"
+    if failed:
+        msg += f", {failed} failed (see data/logs/briefing.log)"
+    flash(msg + ".", "error" if failed and not generated else "success")
+    return redirect(url_for("briefing_view"))
 
 
 # --- Firestore Setup ---

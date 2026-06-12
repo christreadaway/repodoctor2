@@ -199,6 +199,26 @@ def save_project_summaries(summaries: dict):
     _save_json(SUMMARIES_PATH, summaries)
 
 
+# --- Chat Briefs (Briefing screen) ---
+#
+# Keyed by repo name. One rich AI-generated brief per repo (what it is,
+# stage, what's built, what's left, open decisions, constraints) feeding
+# the cross-project Chat Briefing export.
+
+BRIEFS_PATH = os.path.join(DATA_DIR, "briefs.json")
+
+
+def get_briefs() -> dict:
+    return _load_json(BRIEFS_PATH) or {}
+
+
+def save_brief(repo_name: str, brief: dict):
+    briefs = get_briefs()
+    brief["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    briefs[repo_name] = brief
+    _save_json(BRIEFS_PATH, briefs)
+
+
 # --- Henry Branch Summaries ---
 #
 # Keyed by "{repo_name}/{branch_name}" so multiple henry-named branches in the
@@ -427,9 +447,10 @@ def delete_tracker(owner: str, repo: str) -> bool:
 # copy-paste-able into Claude Code for debugging (per CLAUDE.md).
 
 TRACKER_LOG_PATH = os.path.join(DATA_DIR, "logs", "tracker.log")
+BRIEFING_LOG_PATH = os.path.join(DATA_DIR, "logs", "briefing.log")
 
 
-def log_tracker_event(event: str, **fields):
+def _append_log_event(path: str, event: str, fields: dict):
     _ensure_dirs()
     record = {
         "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -437,18 +458,17 @@ def log_tracker_event(event: str, **fields):
     }
     record.update(fields)
     try:
-        with open(TRACKER_LOG_PATH, "a") as f:
+        with open(path, "a") as f:
             f.write(json.dumps(record, default=str) + "\n")
     except OSError as e:
-        logger.warning("tracker log write failed: %s", e)
+        logger.warning("event log write failed (%s): %s", path, e)
 
 
-def tail_tracker_log(n: int = 100) -> list[dict]:
-    """Return the last n events from the tracker log."""
-    if not os.path.exists(TRACKER_LOG_PATH):
+def _tail_log(path: str, n: int) -> list[dict]:
+    if not os.path.exists(path):
         return []
     try:
-        with open(TRACKER_LOG_PATH, "r") as f:
+        with open(path, "r") as f:
             lines = f.readlines()
     except OSError:
         return []
@@ -462,6 +482,24 @@ def tail_tracker_log(n: int = 100) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return out
+
+
+def log_tracker_event(event: str, **fields):
+    _append_log_event(TRACKER_LOG_PATH, event, fields)
+
+
+def tail_tracker_log(n: int = 100) -> list[dict]:
+    """Return the last n events from the tracker log."""
+    return _tail_log(TRACKER_LOG_PATH, n)
+
+
+def log_briefing_event(event: str, **fields):
+    _append_log_event(BRIEFING_LOG_PATH, event, fields)
+
+
+def tail_briefing_log(n: int = 100) -> list[dict]:
+    """Return the last n events from the briefing log."""
+    return _tail_log(BRIEFING_LOG_PATH, n)
 
 
 # --- Session Cost Tracking ---

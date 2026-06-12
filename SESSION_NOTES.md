@@ -1,11 +1,40 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 14 (14 + 14b + 14c + 14d same-day continuation)
-**Date Range:** 2025-02-14 to 2026-05-19
-**Last Updated:** 2026-05-19 (Session 14d)
+**Total Sessions Logged:** 15
+**Date Range:** 2025-02-14 to 2026-06-12
+**Last Updated:** 2026-06-12 (Session 15)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 15 — 2026-06-12 (Chat Briefing — portfolio snapshot for Claude Chat)
+
+### What We Built
+
+A new **Briefing** screen at `/briefing` (top-nav link between What's Next and Tracker) that summarizes every project comprehensively and composes ONE Markdown document to paste into a Claude chat session — answering "where am I across all my projects?" in a single read. Modeled on parentpoint's CHAT_BRIEFING.md format.
+
+Each project gets an AI-generated **chat brief** with: what it is (the business problem, not the tech), stack, stage (Idea / Requirements / Building / Testing / Live / Paused, with one sentence of evidence), where we are (current-state narrative), what's built (grouped by audience when docs allow), what's left (sequenced), open decisions (owner calls), and constraints a chat session must respect (privacy/security/operational rules). The screen merges each brief with hard facts the app already has: last push, branch count, docs X/5 (+ which are missing), code size, languages, groups, and the repo's tracker (open next actions P0-first with status notes, open questions).
+
+- **COPY FOR CLAUDE CHAT** — one button copies the whole portfolio document (purpose preamble + At-a-Glance table + one section per project, newest-push-first)
+- **DOWNLOAD .MD** — same document as a file at `/briefing/export.md`, for attaching instead of pasting
+- **Per-card COPY SECTION** — just that project's section
+- **Smart generation** — UPDATE STALE + MISSING only generates briefs for repos with no brief or pushed-to since their brief was generated; REGENERATE ALL (with confirm) forces everything in view. Group tabs filter both the screen and what gets generated/exported.
+- Repos without a brief still render and export using the Projects-page summary or GitHub description as fallback, marked "No AI brief yet"
+- STALE badge on cards when the repo was pushed after its brief was generated; same note in the export footer
+- Full-screen generation overlay (reuses the Tracker overlay pattern) with elapsed timer
+
+### Technical Details
+
+- **New module `briefing.py`:** input gathering (docs fetched recursively via the GitHub API + README fallback + compact tracker facts), Haiku generation with strict-JSON system prompt, `normalize_brief()` (stage enum enforcement, bullet caps: 10 built / 10 left / 5 decisions / 4 constraints), staleness check, project assembly, and Markdown composition
+- **Briefs cached** in `data/briefs.json` keyed by repo name with `_generated_at` (mirrors `project_summaries.json`)
+- **Event log** at `data/logs/briefing.log` — one JSON object per line (`generate_start` / `generate_done` / `generate_error` with token counts), same grep-able format as `tracker.log`; the log writer in `models.py` was generalized to `_append_log_event()` / `_tail_log()` serving both logs
+- **Routes:** `GET /briefing`, `POST /briefing/generate` (`force=1` to regenerate all), `GET /briefing/export.md` (download with date- and group-stamped filename)
+- **Refactor:** the group-filter resolution duplicated across Projects and What's Next was extracted into `_resolve_active_group()` and reused by Briefing (generation/export read the group without persisting it)
+- **Costs:** ~$0.005–$0.01 per project on Haiku (2,500-token output budget); token usage feeds the session cost footer
+- **Tests:** 32 new in `tests/test_briefing.py` (normalization, staleness, tracker-action extraction, assembly, Markdown content, mocked input gathering, storage round-trip, route auth) — 176 total pass
+- `.gitignore` now covers `data/briefs.json`, `data/trackers/`, `data/logs/`
 
 ---
 
