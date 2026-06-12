@@ -1,11 +1,50 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 15
+**Total Sessions Logged:** 15 (15 + 15b same-day continuation)
 **Date Range:** 2025-02-14 to 2026-06-12
-**Last Updated:** 2026-06-12 (Session 15)
+**Last Updated:** 2026-06-12 (Session 15b)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 15b — 2026-06-12 (Refactor pass: atomic writes, incremental generation, shared doc-fetch, model constants)
+
+Five behavior-preserving (or strictly-improving) refactors, each its own commit with the full suite green between commits. No architecture change — still Flask + local JSON + vanilla JS.
+
+### 1. Atomic file writes (data-safety)
+
+`models._save_json`, `models.save_spec`, and `security.encrypt_credentials` now write to a temp file, fsync, then rename over the target. A crash or full disk mid-write can no longer leave a truncated JSON/credentials file — the exact corruption `_load_json`'s `.corrupt` rename existed to clean up. Failures are logged and re-raised instead of silent. Closes the `_save_json` Known Issue.
+
+### 2. Incremental per-repo AI generation with live progress
+
+Chat briefs and project summaries no longer run the whole portfolio inside ONE multi-minute POST (browser-timeout risk, zero progress visibility, one failure could kill the batch):
+
+- New per-repo endpoints: `POST /api/briefing/generate/<name>` (server re-checks staleness; `force` overrides) and `POST /api/projects/summary/<name>`
+- Shared client-side queue (`runGenerationQueue` in `app.js`): sequential requests, full-screen overlay with "3 of 12 — repo" progress, elapsed timer, CANCEL (stops after the in-flight repo), and per-repo error reporting with a RELOAD button — errors stay readable
+- A failed generation now returns 502 and **keeps the existing good summary/brief** (the old bulk loop overwrote summaries with error text)
+- Summary generation is now scoped to the group in view and feeds the session cost footer (it previously did the whole account regardless of group, untracked)
+- API endpoints use `_require_auth_api` → 401 JSON instead of a login redirect, so the queue can abort with a clear "session expired" message
+
+### 3. Shared doc-fetch path
+
+`github_client.fetch_repo_docs()` replaces three near-identical implementations (project summaries, tracker generator, chat briefs) of "fetch PRODUCT_SPEC / PROJECT_STATUS / SESSION_NOTES / CLAUDE.md (+ README) for a repo." Truncation, recursive path lookup, README variants, and failure handling now behave identically everywhere; callers pass `actual_paths` to skip a second tree walk.
+
+### 4. Model constants in one place
+
+`ai_analyzer` now owns `DEFAULT_MODEL` / `MODEL_CHOICES` / `VALID_MODELS`. The Settings dropdown, the tracker's per-generation override dropdown, preference validation (unknown ids are rejected on save now), `models.DEFAULT_PREFS`, and every generation default read from it — a new Claude model is a one-line change instead of a six-file hunt.
+
+### 5. Temporary group seeding removed
+
+`DEFAULT_USER_GROUPS`, `seed_default_groups_if_missing`, the `_init_session` call, and their tests are gone, per the removal note the code carried since April 2026. Groups persist at `~/.repodoctor/groups.json`.
+
+### Deliberately NOT done (bigger moves, better as their own session)
+
+- **Blueprint split of app.py + deleting the commented-out legacy routes** — pure reorganization but touches every route; doing it bundled with feature work would muddy review and bisects.
+- **Scan-history slimming** (50 full scans → latest + slim history) — changes stored data shape and touches Stats; needs its own focused pass.
+
+**Tests: 190 pass** (4 seed-group tests removed with their feature; 9 added across atomic writes + per-repo endpoints + doc fetcher).
 
 ---
 
