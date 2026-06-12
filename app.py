@@ -597,29 +597,14 @@ def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
     name = repo["name"]
     ref = repo.get("default_branch", "main")
 
-    # Recursive search so specs in subfolders are found.
-    _, actual_paths = client.check_required_files(owner, name, ref=ref)
-    spec_lookup = {
-        "product_spec": actual_paths.get("PRODUCT_SPEC.md"),
-        "project_status": actual_paths.get("PROJECT_STATUS.md"),
-        "session_notes": actual_paths.get("SESSION_NOTES.md"),
-        "claude": actual_paths.get("CLAUDE.md"),
-    }
-
-    spec_content = {}
-    for key, path in spec_lookup.items():
-        if not path:
-            continue
-        content = client.get_file_content(owner, name, path, ref=ref)
-        if content:
-            # Truncate to keep prompt small
-            spec_content[key] = content[:5000]
+    # Spec docs via the shared doc-fetch path (recursive lookup, truncated).
+    fetched = gh.fetch_repo_docs(client, owner, name, ref=ref, max_chars=5000)
 
     # Build context for AI
     context_parts = []
     if repo.get("description"):
         context_parts.append(f"GitHub description: {repo['description']}")
-    for key, content in spec_content.items():
+    for key, content in fetched["docs"].items():
         context_parts.append(f"--- {key.upper()} ---\n{content}")
 
     if not context_parts:

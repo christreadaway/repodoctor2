@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import briefing
+import github_client as gh
 import models
 
 
@@ -322,6 +323,73 @@ class TestGatherBriefInputs(unittest.TestCase):
         )
         text = briefing.gather_brief_inputs(client, _repo(), None)
         self.assertLess(len(text), 20_000)
+
+
+class TestFetchRepoDocs(unittest.TestCase):
+    """Shared doc-fetch path used by summaries, tracker, and briefs."""
+
+    def _client(self, paths, contents):
+        client = MagicMock()
+        client.check_required_files.return_value = ({}, paths)
+        client.get_file_content.side_effect = (
+            lambda owner, name, path, ref=None: contents.get(path)
+        )
+        return client
+
+    def test_docs_fetched_and_truncated(self):
+        client = self._client(
+            {"PRODUCT_SPEC.md": "docs/PRODUCT_SPEC.md"},
+            {"docs/PRODUCT_SPEC.md": "y" * 9000},
+        )
+        out = gh.fetch_repo_docs(client, "a", "r", ref="main", max_chars=100)
+        self.assertEqual(out["docs"], {"product_spec": "y" * 100})
+        self.assertEqual(out["readme"], "")
+
+    def test_readme_always(self):
+        client = self._client(
+            {"PRODUCT_SPEC.md": "PRODUCT_SPEC.md"},
+            {"PRODUCT_SPEC.md": "spec", "README.md": "readme"},
+        )
+        out = gh.fetch_repo_docs(client, "a", "r", ref="main", max_chars=100,
+                                 include_readme="always")
+        self.assertEqual(out["readme"], "readme")
+
+    def test_readme_if_no_docs_skipped_when_docs_exist(self):
+        client = self._client(
+            {"PRODUCT_SPEC.md": "PRODUCT_SPEC.md"},
+            {"PRODUCT_SPEC.md": "spec", "README.md": "readme"},
+        )
+        out = gh.fetch_repo_docs(client, "a", "r", ref="main", max_chars=100,
+                                 include_readme="if_no_docs")
+        self.assertEqual(out["readme"], "")
+        out = gh.fetch_repo_docs(self._client({}, {"README.md": "readme"}),
+                                 "a", "r", ref="main", max_chars=100,
+                                 include_readme="if_no_docs")
+        self.assertEqual(out["readme"], "readme")
+
+    def test_actual_paths_skip_second_tree_walk(self):
+        client = self._client({}, {"PRODUCT_SPEC.md": "spec"})
+        out = gh.fetch_repo_docs(
+            client, "a", "r", ref="main", max_chars=100,
+            actual_paths={"PRODUCT_SPEC.md": "PRODUCT_SPEC.md"},
+        )
+        self.assertEqual(out["docs"], {"product_spec": "spec"})
+        client.check_required_files.assert_not_called()
+
+    def test_fetch_failure_skips_doc(self):
+        client = MagicMock()
+        client.check_required_files.return_value = (
+            {}, {"PRODUCT_SPEC.md": "PRODUCT_SPEC.md", "CLAUDE.md": "CLAUDE.md"},
+        )
+
+        def flaky(owner, name, path, ref=None):
+            if path == "PRODUCT_SPEC.md":
+                raise RuntimeError("boom")
+            return "claude text"
+
+        client.get_file_content.side_effect = flaky
+        out = gh.fetch_repo_docs(client, "a", "r", ref="main", max_chars=100)
+        self.assertEqual(out["docs"], {"claude": "claude text"})
 
 
 class TestBriefsStorage(unittest.TestCase):

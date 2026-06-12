@@ -19,6 +19,7 @@ import logging
 
 import anthropic
 
+import github_client as gh
 from ai_analyzer import extract_json_object
 
 logger = logging.getLogger(__name__)
@@ -92,39 +93,16 @@ def gather_brief_inputs(client, repo: dict, tracker: dict | None) -> str:
         top = sorted(langs.items(), key=lambda kv: kv[1], reverse=True)[:3]
         parts.append("Languages: " + ", ".join(k for k, _ in top))
 
-    # Required docs, found recursively (same lookup the Projects page uses).
-    _, actual_paths = client.check_required_files(owner, name, ref=ref)
-    doc_keys = {
-        "PRODUCT_SPEC.md": "PRODUCT SPEC",
-        "PROJECT_STATUS.md": "PROJECT STATUS",
-        "SESSION_NOTES.md": "SESSION NOTES",
-        "CLAUDE.md": "CLAUDE.MD",
-    }
-    got_docs = False
-    for filename, label in doc_keys.items():
-        path = actual_paths.get(filename)
-        if not path:
-            continue
-        try:
-            content = client.get_file_content(owner, name, path, ref=ref)
-        except Exception as e:
-            logger.warning("briefing: fetch %s for %s/%s failed: %s",
-                           path, owner, name, e)
-            continue
-        if content:
-            parts.append(f"--- {label} ---\n{content[:MAX_DOC_CHARS]}")
-            got_docs = True
-
-    # README fallback so spec-less repos still get a grounded brief.
-    if not got_docs:
-        for readme_name in ("README.md", "readme.md", "README"):
-            try:
-                content = client.get_file_content(owner, name, readme_name, ref=ref)
-            except Exception:
-                continue
-            if content:
-                parts.append(f"--- README ---\n{content[:MAX_DOC_CHARS]}")
-                break
+    # Spec docs via the shared doc-fetch path, with README fallback so
+    # spec-less repos still get a grounded brief.
+    fetched = gh.fetch_repo_docs(
+        client, owner, name, ref=ref,
+        max_chars=MAX_DOC_CHARS, include_readme="if_no_docs",
+    )
+    for key, content in fetched["docs"].items():
+        parts.append(f"--- {key.upper().replace('_', ' ')} ---\n{content}")
+    if fetched["readme"]:
+        parts.append(f"--- README ---\n{fetched['readme']}")
 
     facts = tracker_facts(tracker)
     if facts:
