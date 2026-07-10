@@ -12,10 +12,26 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "`nPulling latest code from main..." -ForegroundColor Yellow
 git pull origin main
 
+# Make sure a real Python is installed (the Windows Store alias is not one)
+$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+if (-not $pythonCmd -or $pythonCmd.Source -like "*WindowsApps*") {
+    Write-Host "`nERROR: Python is not installed (or only the Windows Store alias was found)." -ForegroundColor Red
+    Write-Host "Install Python 3 from https://www.python.org/downloads/ and check" -ForegroundColor Red
+    Write-Host "'Add python.exe to PATH' during setup, then run this script again." -ForegroundColor Red
+    Read-Host "Press Enter to close"
+    exit 1
+}
+
 # Create venv if missing
 if (-not (Test-Path ".\venv")) {
     Write-Host "Creating virtual environment..." -ForegroundColor Yellow
     python -m venv venv
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path ".\venv\Scripts\Activate.ps1")) {
+        Write-Host "`nERROR: Could not create the virtual environment." -ForegroundColor Red
+        Write-Host "Check your Python install, then run this script again." -ForegroundColor Red
+        Read-Host "Press Enter to close"
+        exit 1
+    }
 }
 
 # Activate venv
@@ -24,6 +40,12 @@ if (-not (Test-Path ".\venv")) {
 # Install / refresh dependencies
 Write-Host "Checking dependencies..." -ForegroundColor Yellow
 pip install -r requirements.txt --quiet
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`nERROR: Dependency install failed (network problem?)." -ForegroundColor Red
+    Write-Host "Fix your connection and run .\start.ps1 again." -ForegroundColor Red
+    Read-Host "Press Enter to close"
+    exit 1
+}
 
 # Free port 5001 if something's already on it
 $existing = Get-NetTCPConnection -LocalPort 5001 -ErrorAction SilentlyContinue

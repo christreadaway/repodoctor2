@@ -86,8 +86,8 @@ def gather_brief_inputs(client, repo: dict, tracker: dict | None) -> str:
         parts.append(f"GitHub description: {repo['description']}")
     if repo.get("created_at"):
         parts.append(f"Repo created: {repo['created_at'][:10]}")
-    if repo.get("updated_at"):
-        parts.append(f"Last push: {repo['updated_at'][:10]}")
+    if last_push_ts(repo):
+        parts.append(f"Last push: {last_push_ts(repo)[:10]}")
     langs = repo.get("languages") or {}
     if langs:
         top = sorted(langs.items(), key=lambda kv: kv[1], reverse=True)[:3]
@@ -171,7 +171,9 @@ def generate_brief(
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
-    raw = message.content[0].text.strip()
+    raw = next(
+        (b.text for b in message.content if getattr(b, "type", "") == "text"), ""
+    ).strip()
     brief = normalize_brief(extract_json_object(raw))
     brief["_usage"] = {
         "input_tokens": message.usage.input_tokens,
@@ -215,6 +217,14 @@ def normalize_brief(raw: dict) -> dict:
     }
 
 
+def last_push_ts(repo: dict) -> str:
+    """The repo's last-push timestamp. GitHub's pushed_at is the actual push
+    time; updated_at only tracks metadata changes (stars, settings, renames)
+    and does NOT change on push. Falls back to updated_at for scans saved
+    before pushed_at was captured."""
+    return repo.get("pushed_at") or repo.get("updated_at") or ""
+
+
 def is_brief_stale(brief: dict | None, repo: dict) -> bool:
     """A brief is stale when the repo was pushed to after the brief was
     generated. Missing timestamps count as stale so generation self-heals."""
@@ -223,10 +233,10 @@ def is_brief_stale(brief: dict | None, repo: dict) -> bool:
     generated = _parse_ts(brief.get("_generated_at", ""))
     if generated is None:
         return True
-    updated = _parse_ts(repo.get("updated_at", ""))
-    if updated is None:
+    pushed = _parse_ts(last_push_ts(repo))
+    if pushed is None:
         return False
-    return updated > generated
+    return pushed > generated
 
 
 def _parse_ts(value: str) -> datetime.datetime | None:
@@ -312,8 +322,8 @@ def assemble_projects(
             "html_url": repo.get("html_url", ""),
             "private": repo.get("private", False),
             "description": repo.get("description", "") or "",
-            "updated_at": repo.get("updated_at", "") or "",
-            "last_push": (repo.get("updated_at") or "")[:10] or "unknown",
+            "updated_at": last_push_ts(repo),
+            "last_push": last_push_ts(repo)[:10] or "unknown",
             "branch_count": repo.get("non_henry_branch_count",
                                      repo.get("total_branch_count", 0)),
             "files_present": repo.get("files_present", 0),

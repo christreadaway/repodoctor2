@@ -13,9 +13,9 @@ import anthropic
 # a new Claude release is a one-line change.
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 MODEL_CHOICES = [
-    ("claude-haiku-4-5-20251001", "Haiku 4.5 — Fastest, cheapest (~$0.80/M input) — Recommended"),
+    ("claude-haiku-4-5-20251001", "Haiku 4.5 — Fastest, cheapest (~$1/M input) — Recommended"),
     ("claude-sonnet-4-5-20250929", "Sonnet 4.5 — Balanced quality & cost (~$3/M input)"),
-    ("claude-opus-4-6", "Opus 4.6 — Most capable, highest cost (~$15/M input)"),
+    ("claude-opus-4-6", "Opus 4.6 — Most capable, highest cost (~$5/M input)"),
 ]
 VALID_MODELS = {model_id for model_id, _ in MODEL_CHOICES}
 
@@ -97,16 +97,19 @@ def estimate_tokens(branch_data: dict, spec_text: str | None = None) -> int:
 
 
 def estimate_cost(input_tokens: int, output_tokens: int = 1000, model: str = DEFAULT_MODEL) -> float:
-    """Estimate cost in USD. Rough estimates based on public pricing."""
+    """Estimate cost in USD. Rough estimates based on public pricing.
+
+    Per MTok: Opus 4.6 $5/$25, Sonnet 4.5 $3/$15, Haiku 4.5 $1/$5.
+    """
     if "opus" in model:
-        input_cost = input_tokens * 15.0 / 1_000_000
-        output_cost = output_tokens * 75.0 / 1_000_000
+        input_cost = input_tokens * 5.0 / 1_000_000
+        output_cost = output_tokens * 25.0 / 1_000_000
     elif "sonnet" in model:
         input_cost = input_tokens * 3.0 / 1_000_000
         output_cost = output_tokens * 15.0 / 1_000_000
     else:  # haiku
-        input_cost = input_tokens * 0.80 / 1_000_000
-        output_cost = output_tokens * 4.0 / 1_000_000
+        input_cost = input_tokens * 1.0 / 1_000_000
+        output_cost = output_tokens * 5.0 / 1_000_000
     return round(input_cost + output_cost, 4)
 
 
@@ -184,7 +187,11 @@ def analyze_branch(
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    response_text = message.content[0].text.strip()
+    # A response can validly have no text block (e.g. a refusal) — indexing
+    # content[0] unconditionally would crash before the fallback below runs.
+    response_text = next(
+        (b.text for b in message.content if getattr(b, "type", "") == "text"), ""
+    ).strip()
 
     try:
         result = extract_json_object(response_text)

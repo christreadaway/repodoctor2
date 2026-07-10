@@ -9,6 +9,8 @@ import datetime
 import os
 import secrets
 
+import requests
+
 try:
     from zoneinfo import ZoneInfo
     _CENTRAL_TZ = ZoneInfo("America/Chicago")
@@ -32,8 +34,50 @@ import tracker_data
 import tracker_generator
 import briefing
 
+def _load_or_create_secret_key() -> str:
+    """Stable Flask secret key. A random per-process key would invalidate
+    every session cookie (and drop pending flash messages) on each restart,
+    so persist one under ~/.repodoctor on first run."""
+    env_key = os.environ.get("FLASK_SECRET_KEY")
+    if env_key:
+        return env_key
+    key_path = os.path.join(os.path.expanduser("~"), ".repodoctor", "secret_key")
+    try:
+        with open(key_path, "r") as f:
+            key = f.read().strip()
+        if key:
+            return key
+    except OSError:
+        pass
+    key = secrets.token_hex(32)
+    try:
+        os.makedirs(os.path.dirname(key_path), exist_ok=True)
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(key)
+    except OSError:
+        pass  # fall back to a per-process key; sessions just won't survive restart
+    return key
+
+
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
+app.secret_key = _load_or_create_secret_key()
+
+# Anti-CSRF token for the destructive credential-reset endpoints. /login/reset
+# is deliberately reachable without auth (recovery from a revoked PAT), which
+# means without this check ANY web page the user visits could cross-origin
+# POST it and silently wipe the stored credentials. Per-boot is enough: the
+# token is rendered into our own forms and unknowable to another origin.
+_RESET_TOKEN = secrets.token_hex(16)
+
+
+@app.context_processor
+def inject_reset_token():
+    return {"reset_token": _RESET_TOKEN}
+
+
+def _reset_token_ok() -> bool:
+    return secrets.compare_digest(request.form.get("reset_token", ""), _RESET_TOKEN)
 
 
 @app.template_filter("central_time")
@@ -169,7 +213,11 @@ def login():
             # invalid/revoked PAT silently lands the user on an empty
             # dashboard with no indication of what went wrong.
             test_client = gh.GitHubClient(creds["github_pat"])
-            user_info = test_client.verify_token()
+            try:
+                user_info = test_client.verify_token()
+            except requests.RequestException:
+                flash("Could not reach GitHub — check your internet connection and try again.", "error")
+                return render_template("login.html", has_credentials=True)
             if user_info is None:
                 flash(
                     "Your saved GitHub Personal Access Token is no longer valid "
@@ -201,13 +249,20 @@ def login():
             if not all([password, github_pat, anthropic_key]):
                 flash("All fields are required.", "error")
                 return render_template("login.html", has_credentials=False)
-            if len(password) < 4:
-                flash("Password must be at least 4 characters.", "error")
+            # This password is the only thing protecting an offline copy of
+            # credentials.enc (which holds a repo-scoped PAT) from brute
+            # force — 4 characters was trivially crackable.
+            if len(password) < 8:
+                flash("Password must be at least 8 characters.", "error")
                 return render_template("login.html", has_credentials=False)
 
             # Verify GitHub PAT
             test_client = gh.GitHubClient(github_pat)
-            user_info = test_client.verify_token()
+            try:
+                user_info = test_client.verify_token()
+            except requests.RequestException:
+                flash("Could not reach GitHub — check your internet connection and try again.", "error")
+                return render_template("login.html", has_credentials=False)
             if user_info is None:
                 flash("Invalid GitHub PAT. Check your token and try again.", "error")
                 return render_template("login.html", has_credentials=False)
@@ -254,6 +309,9 @@ def login_reset():
     Reachable without auth so users locked out by a revoked/expired PAT can
     recover from the login screen without manually deleting files.
     """
+    if not _reset_token_ok():
+        flash("Invalid reset request. Use the button on the login page.", "error")
+        return redirect(url_for("login"))
     global _github_client, _credentials
     _github_client = None
     _credentials = None
@@ -317,6 +375,10 @@ def scan():
                 "description": repo.get("description", ""),
                 "created_at": repo.get("created_at", ""),
                 "updated_at": repo.get("updated_at", ""),
+                "pushed_at": repo.get("pushed_at", ""),
+                # None = unknown, so the dashboard shows "—" instead of
+                # falsely claiming the docs are stale for a failed repo.
+                "docs_updated": None,
                 "total_branch_count": 0,
                 "non_default_branch_count": 0,
                 "henry_branch_count": 0,
@@ -443,6 +505,9 @@ def settings():
                 flash(f"Spec saved for {spec_repo}.", "success")
 
         elif action == "reset_credentials":
+            if not _reset_token_ok():
+                flash("Invalid reset request. Use the button on the Settings page.", "error")
+                return redirect(url_for("settings"))
             security.delete_credentials()
             flash("Credentials deleted. You will need to re-enter them.", "success")
             return redirect(url_for("logout"))
@@ -529,8 +594,9 @@ def projects():
     active_group = _resolve_active_group(groups)
 
     all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
-    # Most recently updated first; missing/blank dates sink to the bottom.
-    all_repos.sort(key=lambda r: r.get("updated_at") or "", reverse=True)
+    # Most recently pushed first; missing/blank dates sink to the bottom.
+    # (pushed_at is the real push time — updated_at doesn't change on push.)
+    all_repos.sort(key=lambda r: r.get("pushed_at") or r.get("updated_at") or "", reverse=True)
     if active_group:
         group_repos = set(groups.get(active_group, []))
         repos = [r for r in all_repos if r["name"] in group_repos]
@@ -622,9 +688,13 @@ def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
 
     context_text = "\n\n".join(context_parts)
 
+    # Honor the Settings model preference — briefs and trackers already do.
+    prefs = models.get_preferences()
+    model = prefs.get("ai_model", ai.DEFAULT_MODEL)
+
     ai_client = anthropic.Anthropic(api_key=creds["anthropic_key"])
     response = ai_client.messages.create(
-        model=ai.DEFAULT_MODEL,
+        model=model,
         max_tokens=500,
         messages=[{
             "role": "user",
@@ -638,7 +708,9 @@ def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
             ),
         }],
     )
-    raw = response.content[0].text.strip()
+    raw = next(
+        (b.text for b in response.content if getattr(b, "type", "") == "text"), ""
+    ).strip()
     summary = ai.extract_json_object(raw)
     # Ensure next_steps is capped at 5
     if "next_steps" in summary and len(summary["next_steps"]) > 5:
@@ -647,7 +719,7 @@ def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
 
     in_tok = response.usage.input_tokens
     out_tok = response.usage.output_tokens
-    _session_cost.add(in_tok, out_tok, ai.estimate_cost(in_tok, out_tok))
+    _session_cost.add(in_tok, out_tok, ai.estimate_cost(in_tok, out_tok, model=model))
     return summary
 
 
@@ -743,6 +815,8 @@ def generate_henry_summaries():
 
     generated = 0
     failed = 0
+    # Honor the Settings model preference, like briefs and trackers do.
+    model = models.get_preferences().get("ai_model", ai.DEFAULT_MODEL)
     # Group by repo so we only fetch get_branches/get_pulls once per repo.
     by_repo: dict[tuple[str, str], list[dict]] = {}
     for t in targets:
@@ -772,7 +846,18 @@ def generate_henry_summaries():
 
         for t in items:
             bname = t["branch_name"]
-            comparison = client.compare_branches(owner, name, default_branch, bname)
+            # A transient network error on one branch must not 500 the whole
+            # batch — record the failure and keep going, like every other
+            # step in this loop.
+            try:
+                comparison = client.compare_branches(owner, name, default_branch, bname)
+            except gh.GitHubAuthError:
+                raise
+            except Exception as e:
+                comparison = None
+                models.save_henry_summary(name, bname, _henry_error_record(t, str(e)))
+                failed += 1
+                continue
             if comparison is None:
                 models.save_henry_summary(name, bname, _henry_error_record(t, "Could not compare branch."))
                 failed += 1
@@ -787,6 +872,18 @@ def generate_henry_summaries():
                 last_commit_date = committer.get("date")
                 author = lc_commit.get("author") or {}
                 last_commit_author = author.get("name", "Unknown")
+                # The compare API caps at 250 commits (oldest-first), so for
+                # bigger branches commits[-1] isn't the tip — fetch the real
+                # tip date so an active branch isn't classified STALE.
+                if comparison.get("total_commits", 0) > len(comparison["commits"]):
+                    try:
+                        tip_date = client.get_last_commit_date(owner, name, ref=bname)
+                        if tip_date:
+                            last_commit_date = tip_date
+                    except gh.GitHubAuthError:
+                        raise
+                    except Exception:
+                        pass
             has_pr = bname in pr_branches
             classification = client.classify_branch(comparison, last_commit_date, has_pr)
 
@@ -832,11 +929,12 @@ def generate_henry_summaries():
                     branch_data=branch_data,
                     default_branch=default_branch,
                     spec_text=spec_text,
+                    model=model,
                 )
                 usage = analysis.get("_usage", {})
                 in_tok = usage.get("input_tokens", 0)
                 out_tok = usage.get("output_tokens", 0)
-                cost = ai.estimate_cost(in_tok, out_tok)
+                cost = ai.estimate_cost(in_tok, out_tok, model=model)
                 _session_cost.add(in_tok, out_tok, cost)
 
                 models.save_henry_summary(name, bname, {
@@ -1008,6 +1106,10 @@ def stats():
         for fut in as_completed(futures):
             try:
                 results.append(fut.result())
+            except gh.GitHubAuthError:
+                # Surface the PAT remediation via the global handler instead
+                # of caching all-zero rows that hide the real problem.
+                raise
             except Exception as e:
                 r = futures[fut]
                 results.append({
@@ -1309,6 +1411,11 @@ def firestore_scan():
             r = futures[fut]
             try:
                 results.append(fut.result())
+            except gh.GitHubAuthError:
+                # Don't overwrite good saved detection data with "not_using"
+                # rows caused by a dead PAT — let the global handler show
+                # the remediation message instead.
+                raise
             except Exception as e:
                 results.append({
                     "owner": r["owner"],

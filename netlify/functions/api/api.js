@@ -4,12 +4,13 @@
  */
 
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const serverless = require('serverless-http');
 const nunjucks = require('nunjucks');
 const cookieSession = require('cookie-session');
 
-const { GitHubClient, scanRepoLite } = require('./lib/github-client');
+const { GitHubClient, GitHubAuthError, scanRepoLite } = require('./lib/github-client');
 const models = require('./lib/models');
 const specCleaner = require('./lib/spec-cleaner');
 
@@ -38,12 +39,41 @@ env.addFilter('dateonly', (str) => {
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
+// SECURITY: never fall back to a constant signing key — anyone who reads the
+// repo could forge an authenticated session cookie. A random per-process key
+// means sessions just don't survive cold starts until FLASK_SECRET_KEY is set.
+if (!process.env.FLASK_SECRET_KEY) {
+  console.warn('FLASK_SECRET_KEY is not set — using a random per-process session key. ' +
+    'Set FLASK_SECRET_KEY in the Netlify environment so logins survive cold starts.');
+}
 app.use(cookieSession({
   name: 'rd_session',
-  keys: [process.env.FLASK_SECRET_KEY || 'repodoctor-dev-key-change-me'],
+  keys: [process.env.FLASK_SECRET_KEY || crypto.randomBytes(32).toString('hex')],
   maxAge: 30 * 60 * 1000,
   sameSite: 'lax',
 }));
+
+/**
+ * Express 4 does not forward rejected promises from async handlers to error
+ * middleware — an unhandled rejection hangs the request until the function
+ * times out. Wrap every async route so failures flash + redirect instead.
+ */
+function asyncRoute(fn, redirectTo = '/') {
+  return async (req, res, next) => {
+    try {
+      await fn(req, res, next);
+    } catch (e) {
+      if (e instanceof GitHubAuthError) {
+        req.flash('error',
+          'GitHub authentication failed — your Personal Access Token is no longer valid ' +
+          '(revoked, expired, or missing the repo scope). Update GITHUB_PAT and redeploy.');
+      } else {
+        req.flash('error', `Unexpected error: ${String(e.message || e).substring(0, 200)}`);
+      }
+      if (!res.headersSent) res.redirect(redirectTo);
+    }
+  };
+}
 
 // Flash message middleware
 app.use((req, res, next) => {
@@ -98,13 +128,20 @@ app.get('/login', (req, res) => {
   res.render('login.html', { has_credentials: envMode });
 });
 
-app.post('/login', async (req, res) => {
+app.post('/login', asyncRoute(async (req, res) => {
   const envMode = !!process.env.GITHUB_PAT && !!process.env.ANTHROPIC_API_KEY;
   const sitePassword = process.env.SITE_PASSWORD || '';
 
   if (envMode) {
+    // SECURITY: an unset SITE_PASSWORD must not mean "no password" — that
+    // would let any visitor log in and read private repos on the deployer's
+    // PAT. Refuse until it's configured.
+    if (!sitePassword) {
+      req.flash('error', 'SITE_PASSWORD is not configured — set it in the Netlify environment before logging in.');
+      return res.redirect('/login');
+    }
     const entered = req.body.password || '';
-    if (sitePassword && entered !== sitePassword) {
+    if (entered !== sitePassword) {
       req.flash('error', 'Wrong password. Try again.');
       return res.redirect('/login');
     }
@@ -148,7 +185,7 @@ app.post('/login', async (req, res) => {
   req.session.github_user = userInfo.login || '';
   req.flash('success', `Welcome, ${userInfo.login}! Connected.`);
   return res.redirect('/');
-});
+}, '/login'));
 
 app.get('/logout', (req, res) => {
   githubClient = null;
@@ -166,7 +203,7 @@ app.get('/', requireAuth, (req, res) => {
   });
 });
 
-app.post('/scan', requireAuth, async (req, res) => {
+app.post('/scan', requireAuth, asyncRoute(async (req, res) => {
   if (!githubClient) {
     req.flash('error', 'Not authenticated with GitHub.');
     return res.redirect('/');
@@ -179,6 +216,7 @@ app.post('/scan', requireAuth, async (req, res) => {
   try {
     repos = await githubClient.getRepos();
   } catch (e) {
+    if (e instanceof GitHubAuthError) throw e; // asyncRoute shows the PAT remedy
     req.flash('error', `GitHub API error: ${e.message}`);
     return res.redirect('/');
   }
@@ -194,6 +232,7 @@ app.post('/scan', requireAuth, async (req, res) => {
       try {
         return await scanRepoLite(githubClient, repo);
       } catch (e) {
+        if (e instanceof GitHubAuthError) throw e;
         return {
           owner: repo.owner.login,
           name: repo.name,
@@ -204,12 +243,16 @@ app.post('/scan', requireAuth, async (req, res) => {
           description: repo.description || '',
           created_at: repo.created_at || '',
           updated_at: repo.updated_at || '',
+          pushed_at: repo.pushed_at || '',
+          docs_updated: null,
           total_branch_count: 0,
           non_default_branch_count: 0,
+          henry_branch_count: 0,
+          non_henry_branch_count: 0,
           branch_names: [],
           required_files: {},
           files_present: 0,
-          files_total: 6,
+          files_total: 5,
           error: e.message,
         };
       }
@@ -217,12 +260,13 @@ app.post('/scan', requireAuth, async (req, res) => {
     results.push(...batchResults);
   }
 
-  results.sort((a, b) => (b.total_branch_count || 0) - (a.total_branch_count || 0));
+  // Sort + total by non-henry branch count, matching the Python dashboard.
+  results.sort((a, b) => (b.non_henry_branch_count || 0) - (a.non_henry_branch_count || 0));
 
   scanResults = {
     repos: results,
     total_repos: results.length,
-    total_branches: results.reduce((sum, r) => sum + (r.total_branch_count || 0), 0),
+    total_branches: results.reduce((sum, r) => sum + (r.non_henry_branch_count || 0), 0),
     repos_missing_files: results.filter(r => (r.files_present || 0) < 4).length,
   };
 
@@ -230,11 +274,11 @@ app.post('/scan', requireAuth, async (req, res) => {
   models.logAction('scan', 'all', 'all', `Scanned ${results.length} repos, ${scanResults.total_branches} total branches`);
   req.flash('success', `Scan complete: ${results.length} repos, ${scanResults.total_branches} total branches found.`);
   return res.redirect('/');
-});
+}));
 
 // --- Repo Detail ---
 
-app.get('/repo/:owner/:name', requireAuth, async (req, res) => {
+app.get('/repo/:owner/:name', requireAuth, asyncRoute(async (req, res) => {
   const { owner, name } = req.params;
   if (!githubClient) {
     req.flash('error', 'Not authenticated with GitHub.');
@@ -260,7 +304,9 @@ app.get('/repo/:owner/:name', requireAuth, async (req, res) => {
     fileMap[stem] = f;
   }
 
-  const specFiles = { PRODUCT_SPEC: null, SESSION_NOTES: null };
+  // Same three docs the Python route reads — without PROJECT_STATUS the
+  // What's Next extractor's highest-priority source was dead code here.
+  const specFiles = { PRODUCT_SPEC: null, PROJECT_STATUS: null, SESSION_NOTES: null };
   const rawSpecs = {};
 
   for (const key of Object.keys(specFiles)) {
@@ -283,7 +329,7 @@ app.get('/repo/:owner/:name', requireAuth, async (req, res) => {
     whats_next: whatsNext,
     conversations: [],
   });
-});
+}));
 
 // --- Settings ---
 
@@ -340,7 +386,7 @@ app.get('/projects/generate', requireAuth, (req, res) => {
   res.redirect('/projects');
 });
 
-app.post('/projects/generate', requireAuth, async (req, res) => {
+app.post('/projects/generate', requireAuth, asyncRoute(async (req, res) => {
   if (!githubClient || !credentials) {
     req.flash('error', 'Not authenticated.');
     return res.redirect('/projects');
@@ -352,27 +398,41 @@ app.post('/projects/generate', requireAuth, async (req, res) => {
 
   const repos = scanResults.repos || [];
 
+  const aiModel = models.getPreferences().ai_model || 'claude-haiku-4-5-20251001';
+
   // Helper to generate summary for a single repo
   async function generateOneSummary(repo) {
     const { owner, name } = repo;
     const ref = repo.default_branch || 'main';
 
-    const rootFiles = await githubClient.getRootFiles(owner, name, ref);
-    const fileMap = {};
-    for (const f of rootFiles) {
-      const fl = f.toLowerCase();
-      const dot = fl.lastIndexOf('.');
-      const stem = dot > 0 ? fl.substring(0, dot) : fl;
-      fileMap[stem] = f;
-    }
-
+    // GitHub fetches go inside try/catch too: a single rejected fetch would
+    // otherwise reject the whole Promise.all batch and hang the request.
     const specContent = {};
-    for (const key of ['product_spec', 'business_spec', 'project_status', 'session_notes']) {
-      const actualName = fileMap[key];
-      if (actualName) {
-        const content = await githubClient.getFileContent(owner, name, actualName, ref);
-        if (content) specContent[key] = content.substring(0, 5000);
+    try {
+      const rootFiles = await githubClient.getRootFiles(owner, name, ref);
+      const fileMap = {};
+      for (const f of rootFiles) {
+        const fl = f.toLowerCase();
+        const dot = fl.lastIndexOf('.');
+        const stem = dot > 0 ? fl.substring(0, dot) : fl;
+        fileMap[stem] = f;
       }
+
+      for (const key of ['product_spec', 'business_spec', 'project_status', 'session_notes']) {
+        const actualName = fileMap[key];
+        if (actualName) {
+          const content = await githubClient.getFileContent(owner, name, actualName, ref);
+          if (content) specContent[key] = content.substring(0, 5000);
+        }
+      }
+    } catch (e) {
+      if (e instanceof GitHubAuthError) throw e;
+      models.saveProjectSummary(name, {
+        what_it_does: repo.description || `${name} — summary generation failed.`,
+        how_finished: 'Unknown — could not fetch repo docs.',
+        next_steps: [`Error: ${String(e.message || e).substring(0, 100)}`],
+      });
+      return 'skipped';
     }
 
     const contextParts = [];
@@ -400,7 +460,7 @@ app.post('/projects/generate', requireAuth, async (req, res) => {
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
+          model: aiModel,
           max_tokens: 500,
           messages: [{
             role: 'user',
@@ -415,7 +475,12 @@ app.post('/projects/generate', requireAuth, async (req, res) => {
       });
 
       const aiData = await aiResp.json();
-      let raw = aiData.content[0].text.trim();
+      if (!aiResp.ok) {
+        // Surface the API's real error instead of a TypeError on undefined.
+        throw new Error(aiData?.error?.message || `Anthropic API HTTP ${aiResp.status}`);
+      }
+      const textBlock = (aiData.content || []).find(b => b.type === 'text');
+      let raw = (textBlock?.text || '').trim();
       if (raw.startsWith('```')) {
         raw = raw.includes('\n') ? raw.split('\n').slice(1).join('\n') : raw.substring(3);
         if (raw.endsWith('```')) raw = raw.slice(0, -3).trim();
@@ -453,7 +518,7 @@ app.post('/projects/generate', requireAuth, async (req, res) => {
   req.flash('success', `Generated summaries for ${generated} projects (${skipped} skipped/fallback).`);
   models.logAction('generate_summaries', 'all', 'all', `Generated ${generated}, skipped ${skipped}`);
   return res.redirect('/projects');
-});
+}, '/projects'));
 
 // --- Mac Setup ---
 
@@ -467,7 +532,15 @@ app.get('/api/session-cost', requireAuth, (req, res) => {
   res.json(models.sessionCost.toDict());
 });
 
-app.get('/api/debug-files/:owner/:name', requireAuth, async (req, res) => {
+app.get('/api/debug-files/:owner/:name', requireAuth, async (req, res, next) => {
+  try {
+    await debugFiles(req, res);
+  } catch (e) {
+    res.status(502).json({ error: String(e.message || e).substring(0, 300) });
+  }
+});
+
+async function debugFiles(req, res) {
   const { owner, name } = req.params;
   if (!githubClient) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -499,7 +572,7 @@ app.get('/api/debug-files/:owner/:name', requireAuth, async (req, res) => {
     files_present: Object.values(requiredFiles).filter(Boolean).length,
     files_total: Object.keys(requiredFiles).length,
   });
-});
+}
 
 // --- Export handler ---
 module.exports.handler = serverless(app);

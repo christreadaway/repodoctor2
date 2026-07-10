@@ -180,13 +180,29 @@ def validate_tracker(tracker: dict) -> list[str]:
     if not isinstance(tracker, dict):
         return ["tracker root must be an object"]
 
-    modules = tracker.get("modules") or []
-    infra_gaps = tracker.get("infra_gaps") or []
-    features = tracker.get("features") or []
-    external_systems = tracker.get("external_systems") or []
-    questions = tracker.get("questions") or []
-    next_actions = tracker.get("next_actions") or []
-    recent_changes = tracker.get("recent_changes") or []
+    def _dict_rows(key: str) -> list[dict]:
+        """Rows for a section, flagging non-dict entries instead of letting
+        row.get() raise AttributeError — a crash here would bypass the
+        generator's validation-retry loop entirely."""
+        rows = tracker.get(key) or []
+        if not isinstance(rows, list):
+            errors.append(f"{key}: must be a list, got {type(rows).__name__}")
+            return []
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                errors.append(f"{key}: row is not an object: {row!r:.80}")
+                continue
+            out.append(row)
+        return out
+
+    modules = _dict_rows("modules")
+    infra_gaps = _dict_rows("infra_gaps")
+    features = _dict_rows("features")
+    external_systems = _dict_rows("external_systems")
+    questions = _dict_rows("questions")
+    next_actions = _dict_rows("next_actions")
+    recent_changes = _dict_rows("recent_changes")
 
     # Per-row ID format + uniqueness
     for prefix, rows, label in (
@@ -299,7 +315,7 @@ def sort_recent_changes(tracker: dict) -> None:
     """Sort tracker['recent_changes'] newest-first in place.
     Called by the generator before saving so the model's ordering doesn't
     matter — we just normalise it. Entries with no date sink to the end."""
-    rows = tracker.get("recent_changes") or []
+    rows = [c for c in (tracker.get("recent_changes") or []) if isinstance(c, dict)]
     rows.sort(key=lambda c: c.get("date") or "0000-00-00", reverse=True)
     tracker["recent_changes"] = rows
 

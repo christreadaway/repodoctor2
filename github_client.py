@@ -29,6 +29,25 @@ class GitHubClient:
             "Accept": "application/vnd.github.v3+json",
         })
 
+    # Default (connect, read) timeout for every GitHub call. Without this,
+    # one stalled connection hangs a scan (or leaks a ThreadPool worker on
+    # the Stats/Firestore pages) forever with no error.
+    REQUEST_TIMEOUT = (10, 30)
+
+    @staticmethod
+    def _rate_limit_wait(resp: requests.Response) -> int:
+        """Seconds to wait before retrying a rate-limited response."""
+        retry_after = resp.headers.get("Retry-After", "")
+        if retry_after.isdigit():
+            return min(max(1, int(retry_after)), 60)
+        reset_at = resp.headers.get("X-RateLimit-Reset")
+        if reset_at:
+            try:
+                return min(max(1, int(reset_at) - int(time.time()) + 1), 60)
+            except ValueError:
+                pass
+        return 5
+
     def _get(self, url: str, raise_on_auth_error: bool = True, **kwargs) -> requests.Response:
         """Make a GET request with rate-limit retry.
 
@@ -37,16 +56,16 @@ class GitHubClient:
         every endpoint that calls into the client. Use raise_on_auth_error=False
         for probes like verify_token() that intentionally inspect 401s.
         """
+        kwargs.setdefault("timeout", self.REQUEST_TIMEOUT)
         resp = self.session.get(url, **kwargs)
-        # If rate-limited, wait and retry once
-        if resp.status_code == 403 and "rate limit" in resp.text.lower():
-            reset_at = resp.headers.get("X-RateLimit-Reset")
-            if reset_at:
-                wait = max(1, int(reset_at) - int(time.time()) + 1)
-                wait = min(wait, 60)  # Cap at 60s
-            else:
-                wait = 5
-            logger.warning("GitHub rate limit hit, waiting %ds", wait)
+        # If rate-limited, wait and retry once. GitHub signals primary rate
+        # limits as 429 and secondary/abuse limits as 403 with "rate limit"
+        # in the body — handle both.
+        if resp.status_code == 429 or (
+            resp.status_code == 403 and "rate limit" in resp.text.lower()
+        ):
+            wait = self._rate_limit_wait(resp)
+            logger.warning("GitHub rate limit hit (HTTP %d), waiting %ds", resp.status_code, wait)
             time.sleep(wait)
             resp = self.session.get(url, **kwargs)
         if raise_on_auth_error and resp.status_code == 401:
@@ -87,6 +106,8 @@ class GitHubClient:
                 },
             )
             if resp.status_code != 200:
+                logger.warning("get_repos page %d failed: HTTP %d — returning %d repos fetched so far",
+                               page, resp.status_code, len(repos))
                 break
             batch = resp.json()
             if not batch:
@@ -105,6 +126,8 @@ class GitHubClient:
                 params={"per_page": 100, "page": page},
             )
             if resp.status_code != 200:
+                logger.warning("get_branches %s/%s page %d failed: HTTP %d",
+                               owner, repo, page, resp.status_code)
                 break
             batch = resp.json()
             if not batch:
@@ -123,14 +146,24 @@ class GitHubClient:
         return None
 
     def get_pulls(self, owner: str, repo: str, state: str = "open") -> list[dict]:
-        """Fetch pull requests for a repo."""
-        resp = self._get(
-            f"{GITHUB_API}/repos/{owner}/{repo}/pulls",
-            params={"state": state, "per_page": 100},
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        return []
+        """Fetch all pull requests for a repo (paginated)."""
+        pulls = []
+        page = 1
+        while True:
+            resp = self._get(
+                f"{GITHUB_API}/repos/{owner}/{repo}/pulls",
+                params={"state": state, "per_page": 100, "page": page},
+            )
+            if resp.status_code != 200:
+                logger.warning("get_pulls %s/%s page %d failed: HTTP %d",
+                               owner, repo, page, resp.status_code)
+                break
+            batch = resp.json()
+            if not batch:
+                break
+            pulls.extend(batch)
+            page += 1
+        return pulls
 
     def get_tags(self, owner: str, repo: str) -> list[dict]:
         """Fetch tags for a repo."""
@@ -142,6 +175,8 @@ class GitHubClient:
                 params={"per_page": 100, "page": page},
             )
             if resp.status_code != 200:
+                logger.warning("get_tags %s/%s page %d failed: HTTP %d",
+                               owner, repo, page, resp.status_code)
                 break
             batch = resp.json()
             if not batch:
@@ -243,6 +278,12 @@ class GitHubClient:
         """
         all_paths = self.get_all_file_paths(owner, repo, ref=ref)
 
+        # Only these extensions count as project docs. Without this filter,
+        # .github/workflows/claude.yml satisfies "CLAUDE.md", license.py
+        # satisfies "LICENSE", etc. — and the YAML then gets fed into AI
+        # prompts as the doc content.
+        _DOC_EXTENSIONS = {".md", ".txt", ".rst", ""}
+
         # stem -> list of (path, depth)
         stem_to_paths: dict[str, list[tuple[str, int]]] = {}
         for path in all_paths:
@@ -252,6 +293,9 @@ class GitHubClient:
             fl = filename.lower()
             dot = fl.rfind(".")
             stem = fl[:dot] if dot > 0 else fl
+            ext = fl[dot:] if dot > 0 else ""
+            if ext not in _DOC_EXTENSIONS:
+                continue
             depth = path.count("/")
             stem_to_paths.setdefault(stem, []).append((path, depth))
 
@@ -298,6 +342,7 @@ class GitHubClient:
                 "object": commit_sha,
                 "type": "commit",
             },
+            timeout=self.REQUEST_TIMEOUT,
         )
         if resp.status_code not in (200, 201):
             return None
@@ -310,6 +355,7 @@ class GitHubClient:
                 "ref": f"refs/tags/{tag_name}",
                 "sha": tag_data["sha"],
             },
+            timeout=self.REQUEST_TIMEOUT,
         )
         if ref_resp.status_code not in (200, 201):
             return None
@@ -388,6 +434,8 @@ class GitHubClient:
                 params=params,
             )
             if resp.status_code != 200:
+                logger.warning("get_commits_since %s/%s page %d failed: HTTP %d",
+                               owner, repo, page, resp.status_code)
                 break
             batch = resp.json()
             if not isinstance(batch, list) or not batch:
@@ -567,6 +615,9 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
         "description": repo.get("description", ""),
         "created_at": repo.get("created_at", ""),
         "updated_at": repo.get("updated_at", ""),
+        # pushed_at is the actual last-push timestamp; updated_at only tracks
+        # metadata changes (stars, settings) and does NOT change on push.
+        "pushed_at": repo.get("pushed_at", ""),
         "total_branch_count": total_branch_count,
         "non_default_branch_count": non_default_count,
         "henry_branch_count": henry_branch_count,
@@ -605,12 +656,18 @@ def scan_repo(client: GitHubClient, repo: dict) -> dict:
         last_commit_author = None
         if comparison.get("commits"):
             last_commit = comparison["commits"][-1]
-            last_commit_date = last_commit["commit"]["committer"]["date"]
-            last_commit_author = (
-                last_commit["commit"]["author"]["name"]
-                if last_commit["commit"].get("author")
-                else "Unknown"
-            )
+            lc_commit = last_commit.get("commit", {})
+            committer = lc_commit.get("committer") or {}
+            last_commit_date = committer.get("date")
+            author = lc_commit.get("author") or {}
+            last_commit_author = author.get("name", "Unknown")
+            # The compare API returns at most 250 commits, oldest-first —
+            # for bigger branches commits[-1] is NOT the tip, which would
+            # misclassify an active branch as STALE. Fetch the real tip date.
+            if comparison.get("total_commits", 0) > len(comparison["commits"]):
+                tip_date = client.get_last_commit_date(owner, name, ref=bname)
+                if tip_date:
+                    last_commit_date = tip_date
 
         has_pr = bname in pr_branches
         classification = client.classify_branch(comparison, last_commit_date, has_pr)

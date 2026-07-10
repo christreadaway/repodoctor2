@@ -12,9 +12,9 @@
 
 [functions."api"]
   external_node_modules = []
-  # Max timeout for Netlify functions (26s on paid plans, 10s on free)
-  # This ensures we use the maximum allowed time
-  timeout = 26
+  # NOTE: function timeout is NOT configurable from netlify.toml — it's a
+  # plan/UI setting (10s free, 26s paid). The /scan batching assumes 26s;
+  # on the free plan, large accounts may need multiple scan clicks.
 
 # Static assets served directly from CDN (matched first, no force needed)
 [[redirects]]

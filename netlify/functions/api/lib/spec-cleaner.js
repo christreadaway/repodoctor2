@@ -10,11 +10,22 @@ function cleanMarkdown(text) {
   let inFrontmatter = false;
   let prevBlank = false;
 
+  // Only treat a leading --- as front-matter when a closing --- appears
+  // nearby with no markdown heading before it — otherwise a doc that merely
+  // opens with a horizontal rule would be consumed entirely.
+  let hasFrontmatter = false;
+  if (lines.length && lines[0].trim() === '---') {
+    for (const l of lines.slice(1, 30)) {
+      if (l.trim() === '---') { hasFrontmatter = true; break; }
+      if (l.trim().startsWith('#')) break;
+    }
+  }
+
   for (let i = 0; i < lines.length; i++) {
     let line = lines[i];
     let stripped = line.trim();
 
-    if (stripped === '---' && i === 0) { inFrontmatter = true; continue; }
+    if (stripped === '---' && i === 0 && hasFrontmatter) { inFrontmatter = true; continue; }
     if (inFrontmatter) { if (stripped === '---') inFrontmatter = false; continue; }
     if (/^[-=*]{3,}\s*$/.test(stripped)) continue;
     if (/^<\/?[a-z]/i.test(stripped)) continue;
@@ -116,10 +127,14 @@ function extractWhatsNext(specs, conversations) {
 function extractSectionItems(text, sectionNames, addFn) {
   for (const section of sectionNames) {
     const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    let pattern = new RegExp(`(?:^|\\n)#+\\s*${escaped}[^\\n]*\\n([\\s\\S]{0,1500}?)(?=^#|$)`, 'mi');
+    // No 'm' flag: with it, '$' matches at every line end and the lazy
+    // capture stops after the FIRST bullet of the section. Without it,
+    // '$' is end-of-string and '\n#' marks the next heading — matching
+    // the Python behavior of capturing the whole section.
+    let pattern = new RegExp(`(?:^|\\n)#+\\s*${escaped}[^\\n]*\\n([\\s\\S]{0,1500}?)(?=\\n#|$)`, 'i');
     let match = text.match(pattern);
     if (!match) {
-      pattern = new RegExp(`(?:^|\\n)\\*?\\*?${escaped}\\*?\\*?:?\\s*\\n([\\s\\S]{0,1500}?)(?=^#|\\n---|$)`, 'mi');
+      pattern = new RegExp(`(?:^|\\n)\\*?\\*?${escaped}\\*?\\*?:?\\s*\\n([\\s\\S]{0,1500}?)(?=\\n#|\\n---|$)`, 'i');
       match = text.match(pattern);
     }
     if (match) extractListItems(match[1], addFn);

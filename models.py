@@ -7,11 +7,20 @@ import datetime
 import json
 import logging
 import os
+import re
 import tempfile
+import threading
 
 from ai_analyzer import DEFAULT_MODEL
 
 logger = logging.getLogger(__name__)
+
+# Flask's dev server is threaded: two concurrent requests (e.g. the Projects
+# summary queue and the Briefing queue in two tabs) doing load→mutate→save on
+# the same JSON file can silently drop each other's writes. One in-process
+# lock around every read-modify-write pair prevents that. _atomic_write
+# already prevents torn files; this prevents lost updates.
+_STORE_LOCK = threading.RLock()
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
@@ -113,12 +122,13 @@ def get_scan_history() -> dict:
 
 
 def save_scan(scan_data: dict):
-    history = get_scan_history()
-    scan_data["timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    history["scans"].append(scan_data)
-    # Keep last 50 scans
-    history["scans"] = history["scans"][-50:]
-    _save_json(SCAN_PATH, history)
+    with _STORE_LOCK:
+        history = get_scan_history()
+        scan_data["timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        history["scans"].append(scan_data)
+        # Keep last 50 scans
+        history["scans"] = history["scans"][-50:]
+        _save_json(SCAN_PATH, history)
 
 
 def get_latest_scan() -> dict | None:
@@ -138,11 +148,12 @@ def get_analysis_cache() -> dict:
 
 
 def cache_analysis(repo_name: str, branch_name: str, commit_sha: str, analysis: dict):
-    cache = get_analysis_cache()
-    key = f"{repo_name}/{branch_name}/{commit_sha}"
-    analysis["_cached_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    cache[key] = analysis
-    _save_json(CACHE_PATH, cache)
+    with _STORE_LOCK:
+        cache = get_analysis_cache()
+        key = f"{repo_name}/{branch_name}/{commit_sha}"
+        analysis["_cached_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        cache[key] = analysis
+        _save_json(CACHE_PATH, cache)
 
 
 def get_cached_analysis(repo_name: str, branch_name: str, commit_sha: str) -> dict | None:
@@ -164,23 +175,38 @@ def get_action_log() -> list:
 
 
 def log_action(action_type: str, repo: str, branch: str, details: str = ""):
-    actions = get_action_log()
-    actions.append({
-        "type": action_type,
-        "repo": repo,
-        "branch": branch,
-        "details": details,
-        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-    })
-    _save_json(ACTION_LOG_PATH, {"actions": actions})
+    with _STORE_LOCK:
+        actions = get_action_log()
+        actions.append({
+            "type": action_type,
+            "repo": repo,
+            "branch": branch,
+            "details": details,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        })
+        # Keep the log bounded — it's rewritten in full on every action.
+        actions = actions[-2000:]
+        _save_json(ACTION_LOG_PATH, {"actions": actions})
 
 
 # --- Product Specs ---
 
+def _safe_spec_name(repo_name: str) -> str | None:
+    """Repo names come from a form field — reject anything that could
+    escape the specs directory (path separators, '..', empty)."""
+    name = (repo_name or "").strip()
+    if not name or not re.fullmatch(r"[\w.-]+", name) or name in (".", ".."):
+        return None
+    return name
+
+
 def get_spec(repo_name: str) -> str | None:
+    safe = _safe_spec_name(repo_name)
+    if safe is None:
+        return None
     specs_dir = os.path.join(DATA_DIR, "specs")
     for ext in (".md", ".txt"):
-        path = os.path.join(specs_dir, f"{repo_name}{ext}")
+        path = os.path.join(specs_dir, f"{safe}{ext}")
         if os.path.exists(path):
             with open(path, "r") as f:
                 return f.read()
@@ -188,8 +214,11 @@ def get_spec(repo_name: str) -> str | None:
 
 
 def save_spec(repo_name: str, content: str):
+    safe = _safe_spec_name(repo_name)
+    if safe is None:
+        raise ValueError(f"Invalid spec name: {repo_name!r}")
     _ensure_dirs()
-    path = os.path.join(DATA_DIR, "specs", f"{repo_name}.md")
+    path = os.path.join(DATA_DIR, "specs", f"{safe}.md")
     _atomic_write(path, lambda f: f.write(content))
 
 
@@ -214,10 +243,11 @@ def get_project_summaries() -> dict:
 
 
 def save_project_summary(repo_name: str, summary: dict):
-    summaries = get_project_summaries()
-    summary["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    summaries[repo_name] = summary
-    _save_json(SUMMARIES_PATH, summaries)
+    with _STORE_LOCK:
+        summaries = get_project_summaries()
+        summary["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        summaries[repo_name] = summary
+        _save_json(SUMMARIES_PATH, summaries)
 
 
 def save_project_summaries(summaries: dict):
@@ -238,10 +268,11 @@ def get_briefs() -> dict:
 
 
 def save_brief(repo_name: str, brief: dict):
-    briefs = get_briefs()
-    brief["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    briefs[repo_name] = brief
-    _save_json(BRIEFS_PATH, briefs)
+    with _STORE_LOCK:
+        briefs = get_briefs()
+        brief["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        briefs[repo_name] = brief
+        _save_json(BRIEFS_PATH, briefs)
 
 
 # --- Henry Branch Summaries ---
@@ -257,10 +288,11 @@ def get_henry_summaries() -> dict:
 
 
 def save_henry_summary(repo_name: str, branch_name: str, summary: dict):
-    summaries = get_henry_summaries()
-    summary["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    summaries[f"{repo_name}/{branch_name}"] = summary
-    _save_json(HENRY_SUMMARIES_PATH, summaries)
+    with _STORE_LOCK:
+        summaries = get_henry_summaries()
+        summary["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        summaries[f"{repo_name}/{branch_name}"] = summary
+        _save_json(HENRY_SUMMARIES_PATH, summaries)
 
 
 def clear_henry_summaries():
@@ -334,38 +366,41 @@ def save_groups(groups: dict):
 
 
 def set_group(name: str, repos: list[str]):
-    groups = get_groups()
-    groups[name] = sorted(set(repos))
-    save_groups(groups)
+    with _STORE_LOCK:
+        groups = get_groups()
+        groups[name] = sorted(set(repos))
+        save_groups(groups)
 
 
 def rename_group(old_name: str, new_name: str) -> bool:
-    groups = get_groups()
-    if old_name not in groups or not new_name or new_name == old_name:
-        return False
-    if new_name in groups:
-        # Would silently overwrite a different group — refuse.
-        return False
-    groups[new_name] = groups.pop(old_name)
-    save_groups(groups)
-    prefs = get_preferences()
-    if prefs.get("active_group") == old_name:
-        prefs["active_group"] = new_name
-        save_preferences(prefs)
-    return True
+    with _STORE_LOCK:
+        groups = get_groups()
+        if old_name not in groups or not new_name or new_name == old_name:
+            return False
+        if new_name in groups:
+            # Would silently overwrite a different group — refuse.
+            return False
+        groups[new_name] = groups.pop(old_name)
+        save_groups(groups)
+        prefs = get_preferences()
+        if prefs.get("active_group") == old_name:
+            prefs["active_group"] = new_name
+            save_preferences(prefs)
+        return True
 
 
 def delete_group(name: str) -> bool:
-    groups = get_groups()
-    if name not in groups:
-        return False
-    groups.pop(name)
-    save_groups(groups)
-    prefs = get_preferences()
-    if prefs.get("active_group") == name:
-        prefs["active_group"] = ""
-        save_preferences(prefs)
-    return True
+    with _STORE_LOCK:
+        groups = get_groups()
+        if name not in groups:
+            return False
+        groups.pop(name)
+        save_groups(groups)
+        prefs = get_preferences()
+        if prefs.get("active_group") == name:
+            prefs["active_group"] = ""
+            save_preferences(prefs)
+        return True
 
 
 # --- Codebase Trackers ---
@@ -498,10 +533,11 @@ class SessionCost:
         self.analyses_count = 0
 
     def add(self, input_tokens: int, output_tokens: int, cost: float):
-        self.total_input_tokens += input_tokens
-        self.total_output_tokens += output_tokens
-        self.total_cost += cost
-        self.analyses_count += 1
+        with _STORE_LOCK:
+            self.total_input_tokens += input_tokens
+            self.total_output_tokens += output_tokens
+            self.total_cost += cost
+            self.analyses_count += 1
 
     def to_dict(self) -> dict:
         return {

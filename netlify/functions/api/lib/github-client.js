@@ -5,6 +5,12 @@
 
 const GITHUB_API = 'https://api.github.com';
 
+/**
+ * Raised on GitHub 401 — mirrors the Python GitHubAuthError so routes can
+ * show the PAT remediation message instead of a silent empty scan.
+ */
+class GitHubAuthError extends Error {}
+
 class GitHubClient {
   constructor(pat) {
     this.headers = {
@@ -19,17 +25,28 @@ class GitHubClient {
       u.searchParams.set(k, String(v));
     }
     let resp = await fetch(u.toString(), { headers: this.headers });
-    if (resp.status === 403) {
+    // Rate-limit retry: GitHub uses 429 for primary limits and 403 with
+    // "rate limit" in the body for secondary limits.
+    if (resp.status === 429 || resp.status === 403) {
       const text = await resp.text();
-      if (text.toLowerCase().includes('rate limit')) {
-        const resetAt = resp.headers.get('X-RateLimit-Reset');
+      if (resp.status === 429 || text.toLowerCase().includes('rate limit')) {
+        const retryAfter = parseInt(resp.headers.get('Retry-After') || '', 10);
+        const resetAt = parseInt(resp.headers.get('X-RateLimit-Reset') || '', 10);
         let wait = 5;
-        if (resetAt) {
-          wait = Math.max(1, Math.min(60, parseInt(resetAt) - Math.floor(Date.now() / 1000) + 1));
+        if (Number.isFinite(retryAfter)) {
+          wait = Math.max(1, Math.min(60, retryAfter));
+        } else if (Number.isFinite(resetAt)) {
+          wait = Math.max(1, Math.min(60, resetAt - Math.floor(Date.now() / 1000) + 1));
         }
         await new Promise(r => setTimeout(r, wait * 1000));
         resp = await fetch(u.toString(), { headers: this.headers });
       }
+    }
+    if (resp.status === 401 && !u.pathname.endsWith('/user')) {
+      throw new GitHubAuthError(
+        `GitHub returned 401 Unauthorized for ${u.pathname}. ` +
+        'Personal Access Token is invalid, expired, or missing required scopes.'
+      );
     }
     return resp;
   }
@@ -84,7 +101,10 @@ class GitHubClient {
   async getFileContent(owner, repo, path, ref) {
     const params = {};
     if (ref) params.ref = ref;
-    const resp = await this._get(`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`, params);
+    // Encode each segment so '#'/'?' in filenames can't truncate the URL,
+    // while preserving '/' separators (mirrors Python's quote(path, safe='/')).
+    const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+    const resp = await this._get(`${GITHUB_API}/repos/${owner}/${repo}/contents/${encodedPath}`, params);
     if (resp.status !== 200) return null;
     const data = await resp.json();
     if (data.encoding === 'base64' && data.content) {
@@ -109,27 +129,34 @@ class GitHubClient {
 
   async checkRequiredFiles(owner, repo, ref) {
     const rootFiles = await this.getRootFiles(owner, repo, ref);
+    // Only doc-like extensions count — claude.yml must not satisfy CLAUDE.md.
+    const DOC_EXTENSIONS = new Set(['.md', '.txt', '.rst', '']);
     const stemToActual = {};
     for (const f of rootFiles) {
       const fl = f.toLowerCase();
       const dot = fl.lastIndexOf('.');
       const stem = dot > 0 ? fl.substring(0, dot) : fl;
+      const ext = dot > 0 ? fl.substring(dot) : '';
+      if (!DOC_EXTENSIONS.has(ext)) continue;
       stemToActual[stem] = f;
     }
 
+    // Same 5 required docs (and the business_spec alias) as the Python app,
+    // so a repo scores identically on Netlify and locally.
     const required = {
-      'CLAUDE.md': 'claude',
-      'LICENSE': 'license',
-      'PRODUCT_SPEC.md': 'product_spec',
-      'SESSION_NOTES.md': 'session_notes',
+      'CLAUDE.md': ['claude'],
+      'LICENSE': ['license'],
+      'PRODUCT_SPEC.md': ['product_spec', 'business_spec'],
+      'PROJECT_STATUS.md': ['project_status'],
+      'SESSION_NOTES.md': ['session_notes'],
     };
 
     const results = {};
     const actualNames = {};
-    for (const [displayName, stem] of Object.entries(required)) {
-      const found = stem in stemToActual;
-      results[displayName] = found;
-      if (found) actualNames[displayName] = stemToActual[stem];
+    for (const [displayName, stems] of Object.entries(required)) {
+      const stem = stems.find(s => s in stemToActual);
+      results[displayName] = Boolean(stem);
+      if (stem) actualNames[displayName] = stemToActual[stem];
     }
     return { results, actualNames };
   }
@@ -164,6 +191,11 @@ async function scanRepoLite(client, repo) {
 
   const branches = await client.getBranches(owner, name);
   const totalBranchCount = branches.length;
+  // Branches named "henry" are excluded from dashboard counts, matching the
+  // Python scan (default branch is never treated as henry).
+  const henryBranchCount = branches.filter(
+    b => b.name.toLowerCase().includes('henry') && b.name !== defaultBranch
+  ).length;
 
   const { results: requiredFiles, actualNames } = await client.checkRequiredFiles(owner, name, defaultBranch);
 
@@ -208,8 +240,11 @@ async function scanRepoLite(client, repo) {
     description: repo.description || '',
     created_at: repo.created_at || '',
     updated_at: repo.updated_at || '',
+    pushed_at: repo.pushed_at || '',
     total_branch_count: totalBranchCount,
     non_default_branch_count: Math.max(0, totalBranchCount - 1),
+    henry_branch_count: henryBranchCount,
+    non_henry_branch_count: totalBranchCount - henryBranchCount,
     branch_names: branches.map(b => b.name),
     required_files: requiredFiles,
     files_present: Object.values(requiredFiles).filter(Boolean).length,
@@ -218,4 +253,4 @@ async function scanRepoLite(client, repo) {
   };
 }
 
-module.exports = { GitHubClient, scanRepoLite };
+module.exports = { GitHubClient, GitHubAuthError, scanRepoLite };

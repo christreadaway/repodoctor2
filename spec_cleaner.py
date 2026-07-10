@@ -22,11 +22,26 @@ def clean_markdown(text: str) -> str:
     in_frontmatter = False
     prev_blank = False
 
+    # Only treat a leading --- as front-matter when a closing --- exists
+    # nearby. A document that merely OPENS with a horizontal rule (common in
+    # SESSION_NOTES where sessions are ----separated and prepended) would
+    # otherwise be consumed in its entirety and render as empty.
+    has_frontmatter = False
+    if lines and lines[0].strip() == "---":
+        for l in lines[1:30]:
+            if l.strip() == "---":
+                has_frontmatter = True
+                break
+            if l.strip().startswith("#"):
+                # A markdown heading before the closing --- means the
+                # opening --- was a horizontal rule, not front-matter.
+                break
+
     for i, line in enumerate(lines):
         stripped = line.strip()
 
         # Skip YAML front-matter blocks (--- to ---)
-        if stripped == "---" and i == 0:
+        if stripped == "---" and i == 0 and has_frontmatter:
             in_frontmatter = True
             continue
         if in_frontmatter:
@@ -64,8 +79,6 @@ def clean_markdown(text: str) -> str:
         # Images: ![alt](url) -> (remove entirely)
         line = re.sub(r'!\[[^\]]*\]\([^)]+\)', '', line)
         # Blockquote markers
-        line = re.sub(r'^>\s*', '', line)
-        # Badge-style markers: > **text:** -> text:
         line = re.sub(r'^>\s*', '', line)
 
         stripped = line.strip()

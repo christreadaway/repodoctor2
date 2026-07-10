@@ -558,14 +558,23 @@ class TestFlaskApp(unittest.TestCase):
     def test_project_summaries_model(self):
         """Project summaries can be saved and retrieved."""
         import models
-        models.save_project_summary("test-repo", {
-            "what_it_does": "Test project",
-            "how_finished": "50% done",
-            "next_steps": ["Step 1", "Step 2"],
-        })
-        summaries = models.get_project_summaries()
-        self.assertIn("test-repo", summaries)
-        self.assertEqual(summaries["test-repo"]["what_it_does"], "Test project")
+        # Sandbox the store — without this, the test writes a fake
+        # "test-repo" entry into the real data/project_summaries.json.
+        orig_path = models.SUMMARIES_PATH
+        models.SUMMARIES_PATH = os.path.join(TEST_DATA_DIR, "test_summaries.json")
+        try:
+            models.save_project_summary("test-repo", {
+                "what_it_does": "Test project",
+                "how_finished": "50% done",
+                "next_steps": ["Step 1", "Step 2"],
+            })
+            summaries = models.get_project_summaries()
+            self.assertIn("test-repo", summaries)
+            self.assertEqual(summaries["test-repo"]["what_it_does"], "Test project")
+        finally:
+            models.SUMMARIES_PATH = orig_path
+            if os.path.exists(os.path.join(TEST_DATA_DIR, "test_summaries.json")):
+                os.remove(os.path.join(TEST_DATA_DIR, "test_summaries.json"))
 
     def test_logout(self):
         """Logout clears session and redirects."""
@@ -594,6 +603,19 @@ class TestFlaskApp(unittest.TestCase):
                 "anthropic_key": "",
             })
             self.assertEqual(resp.status_code, 200)
+            self.assertIn(b"All fields are required", resp.data)
+
+    def test_login_first_time_short_password(self):
+        """Passwords under 8 characters are rejected — they're the only thing
+        protecting the encrypted credential file from offline brute force."""
+        with patch.object(security, "credentials_exist", return_value=False):
+            resp = self.client.post("/login", data={
+                "password": "short",
+                "github_pat": "ghp_x",
+                "anthropic_key": "sk-ant-x",
+            })
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn(b"at least 8 characters", resp.data)
 
     def test_login_wrong_password(self):
         """Login with wrong password shows error."""
@@ -601,6 +623,7 @@ class TestFlaskApp(unittest.TestCase):
             with patch.object(security, "decrypt_credentials", return_value=None):
                 resp = self.client.post("/login", data={"password": "wrong"})
                 self.assertEqual(resp.status_code, 200)
+                self.assertIn(b"Wrong password", resp.data)
 
 
 class TestGitHubAuthErrorHandling(unittest.TestCase):
@@ -672,12 +695,23 @@ class TestGitHubAuthErrorHandling(unittest.TestCase):
             self.assertTrue("'repo' scope" in body or "&#39;repo&#39; scope" in body)
 
     def test_login_reset_endpoint(self):
-        """POST /login/reset deletes credentials and redirects to login."""
+        """POST /login/reset with the reset token deletes credentials."""
+        import app as app_module
         with patch.object(security, "delete_credentials") as mock_del:
-            resp = self.client.post("/login/reset")
+            resp = self.client.post(
+                "/login/reset", data={"reset_token": app_module._RESET_TOKEN}
+            )
             self.assertEqual(resp.status_code, 302)
             self.assertIn("/login", resp.headers["Location"])
             self.assertTrue(mock_del.called)
+
+    def test_login_reset_requires_token(self):
+        """POST /login/reset WITHOUT the anti-CSRF token must not delete
+        credentials — any web page could otherwise wipe them cross-origin."""
+        with patch.object(security, "delete_credentials") as mock_del:
+            resp = self.client.post("/login/reset")
+            self.assertEqual(resp.status_code, 302)
+            self.assertFalse(mock_del.called)
 
     def test_scan_auth_error_redirects_with_remedy(self):
         """Scan that hits 401 must show remediation, not blank dashboard."""
@@ -817,6 +851,14 @@ class TestHenryBranchExclusion(unittest.TestCase):
         fake_client.get_language_bytes.return_value = {}
         fake_client.get_last_commit_date.return_value = None
 
+        # Sandbox the scan-history + action-log stores — POST /scan persists
+        # both, and without this the fake "r1" scan lands in the real
+        # data/scan_history.json and shows up on the next app launch.
+        orig_scan_path = models.SCAN_PATH
+        orig_log_path = models.ACTION_LOG_PATH
+        models.SCAN_PATH = os.path.join(TEST_DATA_DIR, "test_scan_history.json")
+        models.ACTION_LOG_PATH = os.path.join(TEST_DATA_DIR, "test_action_log.json")
+
         orig = app_module._github_client
         app_module._github_client = fake_client
         try:
@@ -828,6 +870,12 @@ class TestHenryBranchExclusion(unittest.TestCase):
         finally:
             app_module._github_client = orig
             app_module._scan_results = None
+            models.SCAN_PATH = orig_scan_path
+            models.ACTION_LOG_PATH = orig_log_path
+            for p in ("test_scan_history.json", "test_action_log.json"):
+                full = os.path.join(TEST_DATA_DIR, p)
+                if os.path.exists(full):
+                    os.remove(full)
 
 
 class TestLegacyGroupsMigration(unittest.TestCase):

@@ -9,7 +9,7 @@ import json
 import os
 import re
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 
 PROJECTS_DIR = os.path.join(os.path.dirname(__file__), "projects")
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
@@ -45,21 +45,29 @@ def parse_claude_export(zip_path: str) -> dict:
             except (json.JSONDecodeError, KeyError):
                 continue
 
+            def _try_parse(item) -> dict | None:
+                # One malformed entry must not abort the whole import —
+                # real exports mix schema versions and tool-use blocks.
+                try:
+                    return _parse_conversation(item)
+                except Exception:
+                    return None
+
             # Handle both flat conversation lists and nested structures
             if isinstance(data, list):
                 for item in data:
-                    conv = _parse_conversation(item)
+                    conv = _try_parse(item)
                     if conv:
                         conversations.append(conv)
             elif isinstance(data, dict):
                 # Could be a single conversation or a wrapper
                 if "chat_messages" in data or "uuid" in data:
-                    conv = _parse_conversation(data)
+                    conv = _try_parse(data)
                     if conv:
                         conversations.append(conv)
                 elif isinstance(data.get("conversations"), list):
                     for item in data["conversations"]:
-                        conv = _parse_conversation(item)
+                        conv = _try_parse(item)
                         if conv:
                             conversations.append(conv)
 
@@ -85,12 +93,14 @@ def _parse_conversation(item: dict) -> dict | None:
         # Try to extract from first message
         messages = item.get("chat_messages", [])
         if messages and isinstance(messages, list):
-            first = messages[0] if messages else {}
+            first = messages[0] if isinstance(messages[0], dict) else {}
             content = first.get("content", first.get("text", ""))
             if isinstance(content, list):
                 content = " ".join(
                     p.get("text", "") for p in content if isinstance(p, dict)
                 )
+            if not isinstance(content, str):
+                content = ""
             name = content[:120] if content else "Untitled conversation"
 
     # Extract project name
@@ -102,16 +112,24 @@ def _parse_conversation(item: dict) -> dict | None:
     elif "project_uuid" in item:
         project = item.get("project_title", "")
 
-    # Extract date
+    # Extract date. Real Claude exports carry ISO timestamps with either a
+    # +00:00 offset or microseconds+Z — fromisoformat handles both; the
+    # strptime list stays as a fallback for other formats. Falling back to
+    # "now" would stamp years-old chats with today's date and break sorting.
     date_str = (
         item.get("created_at")
         or item.get("updated_at")
         or item.get("create_time")
         or ""
     )
-    try:
-        if date_str:
-            # Handle various date formats
+    date = None
+    if date_str:
+        try:
+            date = datetime.fromisoformat(str(date_str).replace("Z", "+00:00"))
+            # Naive downstream code compares/sorts ISO strings; keep naive UTC.
+            if date.tzinfo is not None:
+                date = date.astimezone(timezone.utc).replace(tzinfo=None)
+        except (ValueError, TypeError):
             for fmt in [
                 "%Y-%m-%dT%H:%M:%S.%fZ",
                 "%Y-%m-%dT%H:%M:%SZ",
@@ -123,11 +141,7 @@ def _parse_conversation(item: dict) -> dict | None:
                     break
                 except ValueError:
                     continue
-            else:
-                date = datetime.now()
-        else:
-            date = datetime.now()
-    except Exception:
+    if date is None:
         date = datetime.now()
 
     # Extract messages for excerpt
@@ -138,6 +152,8 @@ def _parse_conversation(item: dict) -> dict | None:
     excerpt = ""
     if isinstance(messages, list):
         for msg in messages:
+            if not isinstance(msg, dict):
+                continue
             sender = msg.get("sender") or msg.get("role") or ""
             if sender in ("human", "user"):
                 content = msg.get("content", msg.get("text", ""))
@@ -147,7 +163,7 @@ def _parse_conversation(item: dict) -> dict | None:
                         for p in content
                         if isinstance(p, dict) and p.get("type") == "text"
                     )
-                if content:
+                if content and isinstance(content, str):
                     excerpt = content[:300]
                     break
 
