@@ -295,14 +295,8 @@ app.get('/repo/:owner/:name', requireAuth, asyncRoute(async (req, res) => {
   }
 
   const ref = repoInfo.default_branch || 'main';
-  const rootFiles = await githubClient.getRootFiles(owner, name, ref);
-  const fileMap = {};
-  for (const f of rootFiles) {
-    const fl = f.toLowerCase();
-    const dot = fl.lastIndexOf('.');
-    const stem = dot > 0 ? fl.substring(0, dot) : fl;
-    fileMap[stem] = f;
-  }
+  // Recursive spec lookup (subfolders included), like the Python route.
+  const { actualNames } = await githubClient.checkRequiredFiles(owner, name, ref);
 
   // Same three docs the Python route reads — without PROJECT_STATUS the
   // What's Next extractor's highest-priority source was dead code here.
@@ -310,9 +304,9 @@ app.get('/repo/:owner/:name', requireAuth, asyncRoute(async (req, res) => {
   const rawSpecs = {};
 
   for (const key of Object.keys(specFiles)) {
-    const actualName = fileMap[key.toLowerCase()];
-    if (actualName) {
-      let content = await githubClient.getFileContent(owner, name, actualName, ref);
+    const actualPath = actualNames[`${key}.md`];
+    if (actualPath) {
+      let content = await githubClient.getFileContent(owner, name, actualPath, ref);
       if (content) {
         if (content.length > 10000) content = content.substring(0, 10000) + '\n\n... (truncated)';
         rawSpecs[key] = content;
@@ -407,21 +401,20 @@ app.post('/projects/generate', requireAuth, asyncRoute(async (req, res) => {
 
     // GitHub fetches go inside try/catch too: a single rejected fetch would
     // otherwise reject the whole Promise.all batch and hang the request.
+    // Recursive doc lookup, same doc set as Python's fetch_repo_docs.
+    const DOC_KEYS = {
+      'PRODUCT_SPEC.md': 'product_spec',
+      'PROJECT_STATUS.md': 'project_status',
+      'SESSION_NOTES.md': 'session_notes',
+      'CLAUDE.md': 'claude',
+    };
     const specContent = {};
     try {
-      const rootFiles = await githubClient.getRootFiles(owner, name, ref);
-      const fileMap = {};
-      for (const f of rootFiles) {
-        const fl = f.toLowerCase();
-        const dot = fl.lastIndexOf('.');
-        const stem = dot > 0 ? fl.substring(0, dot) : fl;
-        fileMap[stem] = f;
-      }
-
-      for (const key of ['product_spec', 'business_spec', 'project_status', 'session_notes']) {
-        const actualName = fileMap[key];
-        if (actualName) {
-          const content = await githubClient.getFileContent(owner, name, actualName, ref);
+      const { actualNames } = await githubClient.checkRequiredFiles(owner, name, ref);
+      for (const [displayName, key] of Object.entries(DOC_KEYS)) {
+        const actualPath = actualNames[displayName];
+        if (actualPath) {
+          const content = await githubClient.getFileContent(owner, name, actualPath, ref);
           if (content) specContent[key] = content.substring(0, 5000);
         }
       }

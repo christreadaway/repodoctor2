@@ -127,22 +127,46 @@ class GitHubClient {
     return data.filter(item => typeof item === 'object').map(item => item.name);
   }
 
+  /**
+   * Every file path in the repo at ref (recursive, via the git trees API) —
+   * mirrors the Python client so specs in subfolders are found.
+   */
+  async getAllFilePaths(owner, repo, ref) {
+    const treeRef = ref || 'HEAD';
+    const resp = await this._get(
+      `${GITHUB_API}/repos/${owner}/${repo}/git/trees/${encodeURIComponent(treeRef)}`,
+      { recursive: '1' }
+    );
+    if (resp.status !== 200) return [];
+    const data = await resp.json();
+    return (data.tree || []).filter(i => i.type === 'blob').map(i => i.path);
+  }
+
   async checkRequiredFiles(owner, repo, ref) {
-    const rootFiles = await this.getRootFiles(owner, repo, ref);
+    // Recursive search with root preference, matching the Python client:
+    // specs kept in docs/ etc. must score the same on Netlify and locally.
+    const SKIP_SEGMENTS = new Set([
+      'node_modules', '.git', 'venv', '.venv', 'env', '.env',
+      '__pycache__', 'dist', 'build', 'target', 'vendor', 'site-packages',
+      '.next', '.nuxt', '.cache', 'coverage', '.tox', 'bower_components',
+    ]);
     // Only doc-like extensions count — claude.yml must not satisfy CLAUDE.md.
     const DOC_EXTENSIONS = new Set(['.md', '.txt', '.rst', '']);
-    const stemToActual = {};
-    for (const f of rootFiles) {
-      const fl = f.toLowerCase();
+
+    const allPaths = await this.getAllFilePaths(owner, repo, ref);
+    const stemToPaths = {};
+    for (const p of allPaths) {
+      const parts = p.split('/');
+      if (parts.slice(0, -1).some(seg => SKIP_SEGMENTS.has(seg))) continue;
+      const fl = parts[parts.length - 1].toLowerCase();
       const dot = fl.lastIndexOf('.');
       const stem = dot > 0 ? fl.substring(0, dot) : fl;
       const ext = dot > 0 ? fl.substring(dot) : '';
       if (!DOC_EXTENSIONS.has(ext)) continue;
-      stemToActual[stem] = f;
+      (stemToPaths[stem] = stemToPaths[stem] || []).push({ path: p, depth: parts.length - 1 });
     }
 
-    // Same 5 required docs (and the business_spec alias) as the Python app,
-    // so a repo scores identically on Netlify and locally.
+    // Same 5 required docs (and the business_spec alias) as the Python app.
     const required = {
       'CLAUDE.md': ['claude'],
       'LICENSE': ['license'],
@@ -154,9 +178,15 @@ class GitHubClient {
     const results = {};
     const actualNames = {};
     for (const [displayName, stems] of Object.entries(required)) {
-      const stem = stems.find(s => s in stemToActual);
-      results[displayName] = Boolean(stem);
-      if (stem) actualNames[displayName] = stemToActual[stem];
+      const matches = stems.flatMap(s => stemToPaths[s] || []);
+      if (matches.length) {
+        // Prefer shallowest, then shortest path — same tiebreak as Python.
+        matches.sort((a, b) => a.depth - b.depth || a.path.length - b.path.length);
+        results[displayName] = true;
+        actualNames[displayName] = matches[0].path;
+      } else {
+        results[displayName] = false;
+      }
     }
     return { results, actualNames };
   }

@@ -31,18 +31,32 @@ def _save_config(config: dict):
         json.dump(config, f, indent=2)
 
 
+# Largest single JSON we'll parse from an export zip. Real exports'
+# conversations.json (full message bodies) can run to hundreds of MB —
+# parsing that in one shot can exhaust memory on a laptop.
+MAX_EXPORT_JSON_BYTES = 200 * 1024 * 1024
+
+# How much of the export we keep per conversation is tiny (name, date,
+# 300-char excerpt), so the cap only guards the parse step.
+
+
 def parse_claude_export(zip_path: str) -> dict:
     """Parse a Claude data export zip. Returns parsed conversation data."""
     _ensure_dirs()
     conversations = []
+    skipped_files = []
 
     with zipfile.ZipFile(zip_path, "r") as zf:
         for name in zf.namelist():
             if not name.endswith(".json"):
                 continue
+            info = zf.getinfo(name)
+            if info.file_size > MAX_EXPORT_JSON_BYTES:
+                skipped_files.append(name)
+                continue
             try:
                 data = json.loads(zf.read(name))
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError, MemoryError):
                 continue
 
             def _try_parse(item) -> dict | None:
@@ -74,12 +88,17 @@ def parse_claude_export(zip_path: str) -> dict:
     # Sort by date, most recent first
     conversations.sort(key=lambda c: c["date"], reverse=True)
 
-    # Save parsed data
+    # Save parsed data (compact — this file is machine-read only, and
+    # indenting a large list roughly doubles the write size)
     output_path = os.path.join(PROJECTS_DIR, "conversations.json")
     with open(output_path, "w") as f:
-        json.dump(conversations, f, indent=2)
+        json.dump(conversations, f)
 
-    return {"conversations": conversations, "count": len(conversations)}
+    return {
+        "conversations": conversations,
+        "count": len(conversations),
+        "skipped_files": skipped_files,
+    }
 
 
 def _parse_conversation(item: dict) -> dict | None:
