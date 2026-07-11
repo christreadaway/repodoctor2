@@ -4879,6 +4879,13 @@ button.tracker-stat-jump:focus {
 .chip-stage-live         { background: var(--tk-green-bg);  color: var(--tk-green-fg);  border-color: var(--tk-green-bd); }
 .chip-stage-paused       { background: var(--tk-red-bg);    color: var(--tk-red-fg);    border-color: var(--tk-red-bd); }
 .chip-stage-unknown      { background: transparent;         color: var(--text-secondary); border-color: var(--border); }
+/* Program-only stage: member projects at different stages. */
+.chip-stage-mixed        { background: var(--tk-sky-bg);    color: var(--tk-sky-fg);    border-color: var(--tk-sky-bd); }
+
+/* --- Program page --- */
+.program-notes-card,
+.program-brief-card { margin-top: 24px; }
+.program-notes-card textarea { width: 100%; }
 
 .briefing-label-decisions { color: var(--tk-amber-fg); }
 

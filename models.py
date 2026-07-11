@@ -410,6 +410,58 @@ def delete_group(name: str) -> bool:
         return True
 
 
+# --- Programs (Program screen) ---
+#
+# A "program" is a group of repos viewed as one initiative (e.g. the
+# Education suite), plus free-text infrastructure notes for the pieces
+# that aren't repos (local LLMs, shared services). Notes live in the user
+# dir so they survive re-cloning; the AI program brief is cached like the
+# per-repo chat briefs. Every generation logs to data/logs/program.log.
+
+PROGRAM_META_PATH = os.path.join(USER_DATA_DIR, "program_meta.json")
+PROGRAM_BRIEFS_PATH = os.path.join(DATA_DIR, "program_briefs.json")
+PROGRAM_LOG_PATH = os.path.join(DATA_DIR, "logs", "program.log")
+
+
+def get_program_meta() -> dict:
+    """{group_name: {"notes": str}, "_seeded": bool}"""
+    data = _load_json(PROGRAM_META_PATH)
+    return data if isinstance(data, dict) else {}
+
+
+def save_program_meta(meta: dict):
+    os.makedirs(USER_DATA_DIR, exist_ok=True)
+    _save_json(PROGRAM_META_PATH, meta)
+
+
+def save_program_notes(group_name: str, notes: str):
+    with _STORE_LOCK:
+        meta = get_program_meta()
+        meta.setdefault(group_name, {})["notes"] = notes
+        save_program_meta(meta)
+
+
+def get_program_briefs() -> dict:
+    return _load_json(PROGRAM_BRIEFS_PATH) or {}
+
+
+def save_program_brief(group_name: str, brief: dict):
+    with _STORE_LOCK:
+        briefs = get_program_briefs()
+        brief["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        briefs[group_name] = brief
+        _save_json(PROGRAM_BRIEFS_PATH, briefs)
+
+
+def log_program_event(event: str, **fields):
+    _append_log_event(PROGRAM_LOG_PATH, event, fields)
+
+
+def tail_program_log(n: int = 100) -> list[dict]:
+    """Return the last n events from the program log."""
+    return _tail_log(PROGRAM_LOG_PATH, n)
+
+
 # --- Codebase Trackers ---
 #
 # One JSON file per repo at data/trackers/<owner>__<name>.json, containing

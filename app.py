@@ -36,6 +36,7 @@ import firestore_detector
 import tracker_data
 import tracker_generator
 import briefing
+import program
 
 def _load_or_create_secret_key() -> str:
     """Stable Flask secret key. A random per-process key would invalidate
@@ -1331,6 +1332,193 @@ def briefing_generate_one(name):
     )
     models.log_action("generate_brief", name, "all", f"stage={brief.get('stage')}")
     return jsonify({"ok": True, "repo": name, "stage": brief.get("stage")})
+
+
+# --- Program (cross-project rollup) ---
+#
+# One tab that treats a group of repos as a single initiative — built for
+# the Education suite (parentpoint + teacherAIde + beacon, plus the local
+# LLM running familygraph and beacon's own local LLM) and reusable for any
+# group (e.g. Subject Apps). Membership is managed with the existing
+# Groups editor on the Projects page; the non-repo pieces live in
+# free-text infrastructure notes. Every generation logs to
+# data/logs/program.log for paste-back debugging.
+
+EDUCATION_PROGRAM = "Education"
+# Matched case-insensitively against scanned repo names on first visit.
+_EDUCATION_SEED_REPOS = ("parentpoint", "parentpointedu", "teacheraide", "beacon", "familygraph")
+SUBJECT_APPS_PROGRAM = "Subject Apps"
+_DEFAULT_EDUCATION_NOTES = (
+    "Shared infrastructure: a local LLM runs familygraph, and beacon ships "
+    "its own local LLM. parentpoint, teacherAIde, and beacon together form "
+    "the education suite."
+)
+
+
+def _seed_program_groups():
+    """One-shot: create the Education group from scan matches and an empty
+    Subject Apps group. Guarded by a marker so a deliberately deleted
+    group is not resurrected on the next visit."""
+    meta = models.get_program_meta()
+    if meta.get("_seeded"):
+        return
+    groups = models.get_groups()
+    scanned = {r["name"].lower(): r["name"]
+               for r in (_scan_results.get("repos", []) if _scan_results else [])}
+
+    if EDUCATION_PROGRAM not in groups:
+        matched = [scanned[s] for s in _EDUCATION_SEED_REPOS if s in scanned]
+        models.set_group(EDUCATION_PROGRAM, matched)
+        models.log_program_event("seed_group", group=EDUCATION_PROGRAM, members=matched)
+    if SUBJECT_APPS_PROGRAM not in groups:
+        models.set_group(SUBJECT_APPS_PROGRAM, [])
+        models.log_program_event("seed_group", group=SUBJECT_APPS_PROGRAM, members=[])
+
+    if not meta.get(EDUCATION_PROGRAM, {}).get("notes"):
+        models.save_program_notes(EDUCATION_PROGRAM, _DEFAULT_EDUCATION_NOTES)
+    if not meta.get(SUBJECT_APPS_PROGRAM, {}).get("notes"):
+        models.save_program_notes(
+            SUBJECT_APPS_PROGRAM,
+            "Subject-specific education apps. Add members on the Projects "
+            "page (Manage Groups), then list any shared pieces here.",
+        )
+
+    meta = models.get_program_meta()
+    meta["_seeded"] = True
+    models.save_program_meta(meta)
+
+
+def _program_members(group_name: str) -> list[dict]:
+    groups = models.get_groups()
+    member_names = set(groups.get(group_name, []))
+    repos = _scan_results.get("repos", []) if _scan_results else []
+    return [r for r in repos if r["name"] in member_names]
+
+
+@app.route("/program")
+@_require_auth
+def program_view():
+    _seed_program_groups()
+    groups = models.get_groups()
+
+    requested = request.args.get("group")
+    if requested is not None and requested in groups:
+        active = requested
+    elif EDUCATION_PROGRAM in groups:
+        active = EDUCATION_PROGRAM
+    else:
+        active = sorted(groups)[0] if groups else ""
+
+    member_repos = _program_members(active) if active else []
+    member_names = models.get_groups().get(active, []) if active else []
+    members = program.assemble_members(
+        member_repos,
+        briefs=models.get_briefs(),
+        summaries=models.get_project_summaries(),
+        trackers=models.list_trackers(),
+    )
+    meta = models.get_program_meta().get(active, {}) if active else {}
+    notes = meta.get("notes", "")
+    pbrief = models.get_program_briefs().get(active) if active else None
+    stale = program.is_program_brief_stale(pbrief, member_repos, member_names)
+    generated_label = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    markdown = program.compose_markdown(active, notes, members, pbrief, generated_label) if active else ""
+
+    # Members in the group but missing from the latest scan (e.g. repo not
+    # created yet, or excluded) — shown so the user knows why they're absent.
+    scanned_names = {r["name"] for r in (_scan_results.get("repos", []) if _scan_results else [])}
+    missing_members = [n for n in member_names if n not in scanned_names]
+
+    return render_template(
+        "program.html",
+        scan_results=_scan_results,
+        groups=groups,
+        active_program=active,
+        members=members,
+        missing_members=missing_members,
+        notes=notes,
+        program_brief=pbrief,
+        brief_stale=stale,
+        markdown=markdown,
+    )
+
+
+@app.route("/program/notes", methods=["POST"])
+@_require_auth
+def program_notes():
+    group_name = (request.form.get("group") or "").strip()
+    notes = request.form.get("notes", "").strip()
+    if group_name not in models.get_groups():
+        flash(f'Unknown program "{group_name}".', "error")
+        return redirect(url_for("program_view"))
+    models.save_program_notes(group_name, notes)
+    models.log_program_event("save_notes", group=group_name, chars=len(notes))
+    flash("Infrastructure notes saved.", "success")
+    return redirect(url_for("program_view", group=group_name))
+
+
+@app.route("/program/generate", methods=["POST"])
+@_require_auth
+def program_generate():
+    creds = _get_credentials()
+    if not creds:
+        flash("Not authenticated.", "error")
+        return redirect(url_for("program_view"))
+    group_name = (request.form.get("group") or "").strip()
+    if group_name not in models.get_groups():
+        flash(f'Unknown program "{group_name}".', "error")
+        return redirect(url_for("program_view"))
+
+    member_repos = _program_members(group_name)
+    if not member_repos:
+        flash("This program has no scanned member projects yet — add repos "
+              "to the group on the Projects page, then re-scan.", "error")
+        return redirect(url_for("program_view", group=group_name))
+
+    members = program.assemble_members(
+        member_repos,
+        briefs=models.get_briefs(),
+        summaries=models.get_project_summaries(),
+        trackers=models.list_trackers(),
+    )
+    notes = models.get_program_meta().get(group_name, {}).get("notes", "")
+    model = models.get_ai_model()
+    context_text = program.build_program_context(group_name, notes, members)
+    models.log_program_event(
+        "generate_start", group=group_name, model=model,
+        members=[m["name"] for m in members], context_chars=len(context_text),
+    )
+
+    try:
+        brief = program.generate_program_brief(
+            api_key=creds["anthropic_key"],
+            program_name=group_name,
+            context_text=context_text,
+            model=model,
+        )
+    except Exception as e:
+        models.log_program_event(
+            "generate_error", group=group_name,
+            error=f"{type(e).__name__}: {str(e)[:300]}",
+        )
+        flash(f"Program brief generation failed: {type(e).__name__}: {str(e)[:200]}", "error")
+        return redirect(url_for("program_view", group=group_name))
+
+    usage = brief.pop("_usage", {})
+    if usage:
+        in_tok = usage.get("input_tokens", 0)
+        out_tok = usage.get("output_tokens", 0)
+        _session_cost.add(in_tok, out_tok, ai.estimate_cost(in_tok, out_tok, model=model))
+    brief["_members"] = sorted(m["name"] for m in members)
+    models.save_program_brief(group_name, brief)
+    models.log_program_event(
+        "generate_done", group=group_name, stage=brief.get("stage"),
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+    )
+    models.log_action("generate_program_brief", group_name, "all", f"stage={brief.get('stage')}")
+    flash(f'Program brief generated for "{group_name}".', "success")
+    return redirect(url_for("program_view", group=group_name))
 
 
 # --- Firestore Setup ---

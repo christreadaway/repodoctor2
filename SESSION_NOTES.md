@@ -1,11 +1,36 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 15 (15 + 15b same-day continuation)
-**Date Range:** 2025-02-14 to 2026-06-12
-**Last Updated:** 2026-06-12 (Session 15b)
+**Total Sessions Logged:** 16
+**Date Range:** 2025-02-14 to 2026-07-11
+**Last Updated:** 2026-07-11 (Session 16)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 16 — 2026-07-11 (Comprehensive review + fixes; new Program tab)
+
+Branch: `claude/codebase-review-fixes-ptbchh`. Two phases: a full-codebase bug hunt (5 parallel review agents, every finding verified before fixing) followed by an 8-angle adversarial self-review of the fix branch itself, then a new feature.
+
+### Review fixes (highlights — see commit messages for the full list)
+
+- **Security:** anti-CSRF token on both credential-reset endpoints (any web page could previously wipe stored credentials cross-origin); spec-name path traversal closed; 8-char password minimum; Netlify port — removed hardcoded fallback cookie-signing key (forgeable session), refuse login when `SITE_PASSWORD` unset, 401s now surface PAT remediation instead of a silent 0-repo scan
+- **Correctness:** brief staleness + "last push" now use `pushed_at` (GitHub doesn't bump `updated_at` on push — stale briefs never regenerated); required-file detection respects extensions (`claude.yml` no longer counts as CLAUDE.md and feeds YAML into prompts); compare-API 250-commit cap no longer misclassifies big active branches as STALE; session-cost pricing corrected (Haiku $1/$5, Opus 4.6 $5/$25 per MTok); Claude-export date parsing fixed (everything was stamped "today")
+- **Robustness:** timeouts + 429 retry + pagination logging on every GitHub call (one `_get_paginated` helper replaces five copies, `_post` wrapper for writes); auth errors re-raised from Stats/Firestore thread pools instead of caching garbage over good data; thread locks on all JSON stores; `extract_response_text()` guards refusal-shaped AI responses everywhere; Flask secret key persisted (restarts no longer log you out); Express async routes wrapped (no more hung-until-timeout requests) with full error logging
+- **UI:** tracker priority chips render (`chip-pp0` never matched CSS); dismissed-status styling + consistent open counts; group-delete confirm no longer bypassed by apostrophes; saved trackers reachable and regenerable after a restart with no scan
+- **Tests:** 2 tests no longer pollute real `data/` files; assertions strengthened; suite grew 190 → 207, all green
+
+### New: Program tab
+
+One screen that rolls a group of repos up as a single initiative — built for the Education suite (parentpoint + teacherAIde + beacon, plus the local LLM running familygraph and beacon's own local LLM) and works for any group (Subject Apps seeded empty for the subject-specific apps):
+
+- `program.py` + `templates/program.html` + `/program` routes; nav tab between Briefing and Tracker
+- Membership = existing Groups (managed on Projects); "Education" auto-seeded once from scan matches (case-insensitive: parentpoint, parentpointedu, teacheraide, beacon, familygraph); deliberately deleted groups stay deleted
+- Free-text **infrastructure notes** per program capture the non-repo pieces (local LLMs, shared services) — pre-seeded with the familygraph/beacon LLM notes; the AI reads them when writing the brief
+- **Program brief**: one API call composed entirely from cached data (per-repo chat briefs, summaries, tracker facts) — what the program is, how the pieces fit, program-wide what's-left, owner decisions, cross-project risks; cached in `data/program_briefs.json`, stale when membership changes or any member is pushed; COPY FOR CLAUDE CHAT exports markdown
+- Logging per project rules: every seed/notes-save/generation (start, done, error) appends to `data/logs/program.log`
+- 15 new tests (normalization, staleness, context/markdown composition, routes, seeding)
 
 ---
 
