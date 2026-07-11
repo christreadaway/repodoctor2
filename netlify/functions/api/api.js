@@ -163,8 +163,8 @@ app.post('/login', asyncRoute(async (req, res) => {
     req.flash('error', 'All fields are required.');
     return res.redirect('/login');
   }
-  if (password.length < 4) {
-    req.flash('error', 'Password must be at least 4 characters.');
+  if (password.length < 8) {
+    req.flash('error', 'Password must be at least 8 characters.');
     return res.redirect('/login');
   }
 
