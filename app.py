@@ -6,10 +6,13 @@ Simplified mode: repo overview with branch counts + required file checks.
 """
 
 import datetime
+import logging
 import os
 import secrets
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 try:
     from zoneinfo import ZoneInfo
@@ -55,8 +58,12 @@ def _load_or_create_secret_key() -> str:
         fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(key)
-    except OSError:
-        pass  # fall back to a per-process key; sessions just won't survive restart
+    except OSError as e:
+        # Fall back to a per-process key; sessions won't survive restart.
+        logger.warning(
+            "Could not persist Flask secret key to %s: %s — logins will not survive restarts",
+            key_path, e,
+        )
     return key
 
 
@@ -77,7 +84,20 @@ def inject_reset_token():
 
 
 def _reset_token_ok() -> bool:
-    return secrets.compare_digest(request.form.get("reset_token", ""), _RESET_TOKEN)
+    # Compare as bytes: compare_digest on str raises TypeError for
+    # non-ASCII input, which would turn a bad token into a 500.
+    supplied = request.form.get("reset_token", "").encode("utf-8", errors="replace")
+    return secrets.compare_digest(supplied, _RESET_TOKEN.encode("utf-8"))
+
+
+def _reject_bad_reset_token(page_name: str, target: str):
+    """The one guard every credential-destroying endpoint calls. Returns a
+    redirect response when the token is missing/wrong, else None."""
+    if _reset_token_ok():
+        return None
+    logger.warning("Rejected credential reset without a valid token (path=%s)", request.path)
+    flash(f"Invalid reset request. Use the button on the {page_name} page.", "error")
+    return redirect(url_for(target))
 
 
 @app.template_filter("central_time")
@@ -309,9 +329,9 @@ def login_reset():
     Reachable without auth so users locked out by a revoked/expired PAT can
     recover from the login screen without manually deleting files.
     """
-    if not _reset_token_ok():
-        flash("Invalid reset request. Use the button on the login page.", "error")
-        return redirect(url_for("login"))
+    rejected = _reject_bad_reset_token("login", "login")
+    if rejected:
+        return rejected
     global _github_client, _credentials
     _github_client = None
     _credentials = None
@@ -500,14 +520,24 @@ def settings():
         elif action == "save_spec":
             spec_repo = request.form.get("spec_repo", "").strip()
             spec_content = request.form.get("spec_content", "").strip()
+            # Accept "owner/repo" paste-ins by keeping the repo part.
+            if "/" in spec_repo:
+                spec_repo = spec_repo.rsplit("/", 1)[-1].strip()
             if spec_repo and spec_content:
-                models.save_spec(spec_repo, spec_content)
-                flash(f"Spec saved for {spec_repo}.", "success")
+                try:
+                    models.save_spec(spec_repo, spec_content)
+                    flash(f"Spec saved for {spec_repo}.", "success")
+                except ValueError:
+                    flash(
+                        f'"{spec_repo}" is not a valid repo name — use letters, '
+                        "numbers, dots, dashes, and underscores only.",
+                        "error",
+                    )
 
         elif action == "reset_credentials":
-            if not _reset_token_ok():
-                flash("Invalid reset request. Use the button on the Settings page.", "error")
-                return redirect(url_for("settings"))
+            rejected = _reject_bad_reset_token("Settings", "settings")
+            if rejected:
+                return rejected
             security.delete_credentials()
             flash("Credentials deleted. You will need to re-enter them.", "success")
             return redirect(url_for("logout"))
@@ -595,8 +625,7 @@ def projects():
 
     all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
     # Most recently pushed first; missing/blank dates sink to the bottom.
-    # (pushed_at is the real push time — updated_at doesn't change on push.)
-    all_repos.sort(key=lambda r: r.get("pushed_at") or r.get("updated_at") or "", reverse=True)
+    all_repos.sort(key=briefing.last_push_ts, reverse=True)
     if active_group:
         group_repos = set(groups.get(active_group, []))
         repos = [r for r in all_repos if r["name"] in group_repos]
@@ -689,8 +718,7 @@ def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
     context_text = "\n\n".join(context_parts)
 
     # Honor the Settings model preference — briefs and trackers already do.
-    prefs = models.get_preferences()
-    model = prefs.get("ai_model", ai.DEFAULT_MODEL)
+    model = models.get_ai_model()
 
     ai_client = anthropic.Anthropic(api_key=creds["anthropic_key"])
     response = ai_client.messages.create(
@@ -816,7 +844,7 @@ def generate_henry_summaries():
     generated = 0
     failed = 0
     # Honor the Settings model preference, like briefs and trackers do.
-    model = models.get_preferences().get("ai_model", ai.DEFAULT_MODEL)
+    model = models.get_ai_model()
     # Group by repo so we only fetch get_branches/get_pulls once per repo.
     by_repo: dict[tuple[str, str], list[dict]] = {}
     for t in targets:
@@ -854,7 +882,6 @@ def generate_henry_summaries():
             except gh.GitHubAuthError:
                 raise
             except Exception as e:
-                comparison = None
                 models.save_henry_summary(name, bname, _henry_error_record(t, str(e)))
                 failed += 1
                 continue
@@ -863,27 +890,10 @@ def generate_henry_summaries():
                 failed += 1
                 continue
 
-            last_commit_date = None
-            last_commit_author = None
-            if comparison.get("commits"):
-                lc = comparison["commits"][-1]
-                lc_commit = lc.get("commit", {})
-                committer = lc_commit.get("committer") or {}
-                last_commit_date = committer.get("date")
-                author = lc_commit.get("author") or {}
-                last_commit_author = author.get("name", "Unknown")
-                # The compare API caps at 250 commits (oldest-first), so for
-                # bigger branches commits[-1] isn't the tip — fetch the real
-                # tip date so an active branch isn't classified STALE.
-                if comparison.get("total_commits", 0) > len(comparison["commits"]):
-                    try:
-                        tip_date = client.get_last_commit_date(owner, name, ref=bname)
-                        if tip_date:
-                            last_commit_date = tip_date
-                    except gh.GitHubAuthError:
-                        raise
-                    except Exception:
-                        pass
+            # Shared with scan_repo — handles the compare API's 250-commit cap.
+            last_commit_date, last_commit_author = client.branch_last_commit(
+                owner, name, bname, comparison,
+            )
             has_pr = bname in pr_branches
             classification = client.classify_branch(comparison, last_commit_date, has_pr)
 
@@ -1287,8 +1297,7 @@ def briefing_generate_one(name):
     if existing and not force and not briefing.is_brief_stale(existing, repo):
         return jsonify({"ok": True, "repo": name, "skipped": "fresh"})
 
-    prefs = models.get_preferences()
-    model = prefs.get("ai_model", ai.DEFAULT_MODEL)
+    model = models.get_ai_model()
     tracker = models.get_tracker(repo["owner"], name)
 
     try:
@@ -1580,13 +1589,20 @@ def tracker_generate(owner, name):
         return redirect(url_for("tracker_view", owner=owner, name=name))
 
     repo_info = _resolve_repo(owner, name)
+    prior = models.get_tracker(owner, name)
+    if not repo_info and prior:
+        # Saved trackers stay reachable (and regenerable) after a restart
+        # with no scan — build minimal repo info from the tracker itself.
+        repo_info = {
+            "owner": owner,
+            "name": name,
+            "default_branch": prior.get("branch_at_verification") or "main",
+        }
     if not repo_info:
         flash("Repository not found in scan results. Run a scan first.", "error")
         return redirect(url_for("tracker_index"))
 
     default_branch = repo_info.get("default_branch", "main")
-    prior = models.get_tracker(owner, name)
-    prefs = models.get_preferences()
 
     # Per-generation model override from the toolbar dropdown (form field
     # "model"); falls back to the global Settings preference.
@@ -1594,7 +1610,7 @@ def tracker_generate(owner, name):
     if requested_model and requested_model in ai.VALID_MODELS:
         model = requested_model
     else:
-        model = prefs.get("ai_model", ai.DEFAULT_MODEL)
+        model = models.get_ai_model()
 
     models.log_tracker_event(
         "generate_start", owner=owner, repo=name, model=model,

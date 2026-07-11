@@ -127,14 +127,15 @@ function extractWhatsNext(specs, conversations) {
 function extractSectionItems(text, sectionNames, addFn) {
   for (const section of sectionNames) {
     const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // No 'm' flag: with it, '$' matches at every line end and the lazy
-    // capture stops after the FIRST bullet of the section. Without it,
-    // '$' is end-of-string and '\n#' marks the next heading — matching
-    // the Python behavior of capturing the whole section.
-    let pattern = new RegExp(`(?:^|\\n)#+\\s*${escaped}[^\\n]*\\n([\\s\\S]{0,1500}?)(?=\\n#|$)`, 'i');
+    // Tempered-greedy capture like the Python original: up to 1500 chars,
+    // each stopping before the next heading. A lazy quantifier with a
+    // trailing (?=\n#|$) anchor fails ENTIRELY on sections longer than
+    // 1500 chars (the anchor is unreachable within the cap), and an 'm'
+    // flag makes '$' stop the capture after the first line.
+    let pattern = new RegExp(`(?:^|\\n)#+\\s*${escaped}[^\\n]*\\n((?:(?!\\n#)[\\s\\S]){0,1500})`, 'i');
     let match = text.match(pattern);
     if (!match) {
-      pattern = new RegExp(`(?:^|\\n)\\*?\\*?${escaped}\\*?\\*?:?\\s*\\n([\\s\\S]{0,1500}?)(?=\\n#|\\n---|$)`, 'i');
+      pattern = new RegExp(`(?:^|\\n)\\*?\\*?${escaped}\\*?\\*?:?\\s*\\n((?:(?!\\n#|\\n---)[\\s\\S]){0,1500})`, 'i');
       match = text.match(pattern);
     }
     if (match) extractListItems(match[1], addFn);

@@ -10,7 +10,7 @@ const serverless = require('serverless-http');
 const nunjucks = require('nunjucks');
 const cookieSession = require('cookie-session');
 
-const { GitHubClient, GitHubAuthError, scanRepoLite } = require('./lib/github-client');
+const { GitHubClient, GitHubAuthError, scanRepoLite, fetchRepoDocs } = require('./lib/github-client');
 const models = require('./lib/models');
 const specCleaner = require('./lib/spec-cleaner');
 
@@ -40,15 +40,25 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 // SECURITY: never fall back to a constant signing key — anyone who reads the
-// repo could forge an authenticated session cookie. A random per-process key
-// means sessions just don't survive cold starts until FLASK_SECRET_KEY is set.
-if (!process.env.FLASK_SECRET_KEY) {
-  console.warn('FLASK_SECRET_KEY is not set — using a random per-process session key. ' +
-    'Set FLASK_SECRET_KEY in the Netlify environment so logins survive cold starts.');
+// repo could forge an authenticated session cookie. When FLASK_SECRET_KEY is
+// unset, derive a stable key from the other deployment secrets: a random
+// per-process key would differ across concurrent Lambda instances and bounce
+// users to /login whenever a request lands on a different instance.
+function sessionSigningKey() {
+  if (process.env.FLASK_SECRET_KEY) return process.env.FLASK_SECRET_KEY;
+  const material = [process.env.GITHUB_PAT, process.env.ANTHROPIC_API_KEY, process.env.SITE_PASSWORD]
+    .filter(Boolean).join('|');
+  if (material) {
+    console.warn('FLASK_SECRET_KEY is not set — deriving the session key from other env secrets. ' +
+      'Set FLASK_SECRET_KEY in the Netlify environment.');
+    return crypto.createHash('sha256').update('repodoctor-session-key:' + material).digest('hex');
+  }
+  console.warn('FLASK_SECRET_KEY is not set and no env secrets exist — using a random per-process key.');
+  return crypto.randomBytes(32).toString('hex');
 }
 app.use(cookieSession({
   name: 'rd_session',
-  keys: [process.env.FLASK_SECRET_KEY || crypto.randomBytes(32).toString('hex')],
+  keys: [sessionSigningKey()],
   maxAge: 30 * 60 * 1000,
   sameSite: 'lax',
 }));
@@ -63,10 +73,16 @@ function asyncRoute(fn, redirectTo = '/') {
     try {
       await fn(req, res, next);
     } catch (e) {
+      // Full stack to the Netlify function log — the flash below is a
+      // truncated one-liner and useless for actual debugging.
+      console.error(`Route ${req.method} ${req.path} failed:`, e);
       if (e instanceof GitHubAuthError) {
+        const envMode = !!process.env.GITHUB_PAT;
         req.flash('error',
           'GitHub authentication failed — your Personal Access Token is no longer valid ' +
-          '(revoked, expired, or missing the repo scope). Update GITHUB_PAT and redeploy.');
+          '(revoked, expired, or missing the repo scope). ' +
+          (envMode ? 'Update GITHUB_PAT in the Netlify environment and redeploy.'
+                   : 'Log out and re-enter a fresh token.'));
       } else {
         req.flash('error', `Unexpected error: ${String(e.message || e).substring(0, 200)}`);
       }
@@ -212,14 +228,8 @@ app.post('/scan', requireAuth, asyncRoute(async (req, res) => {
   const prefs = models.getPreferences();
   const excluded = new Set(prefs.excluded_repos || []);
 
-  let repos;
-  try {
-    repos = await githubClient.getRepos();
-  } catch (e) {
-    if (e instanceof GitHubAuthError) throw e; // asyncRoute shows the PAT remedy
-    req.flash('error', `GitHub API error: ${e.message}`);
-    return res.redirect('/');
-  }
+  // Failures (including a dead PAT) surface via the asyncRoute wrapper.
+  const repos = await githubClient.getRepos();
 
   const filteredRepos = repos.filter(r => !excluded.has(r.full_name) && !excluded.has(r.name));
 
@@ -267,7 +277,8 @@ app.post('/scan', requireAuth, asyncRoute(async (req, res) => {
     repos: results,
     total_repos: results.length,
     total_branches: results.reduce((sum, r) => sum + (r.non_henry_branch_count || 0), 0),
-    repos_missing_files: results.filter(r => (r.files_present || 0) < 4).length,
+    // "missing any required doc" — the required set is 5 files now.
+    repos_missing_files: results.filter(r => (r.files_present || 0) < (r.files_total || 5)).length,
   };
 
   models.saveScan(scanResults);
@@ -295,23 +306,23 @@ app.get('/repo/:owner/:name', requireAuth, asyncRoute(async (req, res) => {
   }
 
   const ref = repoInfo.default_branch || 'main';
-  // Recursive spec lookup (subfolders included), like the Python route.
-  const { actualNames } = await githubClient.checkRequiredFiles(owner, name, ref);
+  // Reuse the doc paths the scan already resolved; fall back to a fresh
+  // lookup for scans saved before actual_names was persisted.
+  const docs = await fetchRepoDocs(githubClient, owner, name, ref, {
+    maxChars: 10000,
+    actualNames: repoInfo.actual_names || null,
+  });
 
   // Same three docs the Python route reads — without PROJECT_STATUS the
   // What's Next extractor's highest-priority source was dead code here.
   const specFiles = { PRODUCT_SPEC: null, PROJECT_STATUS: null, SESSION_NOTES: null };
   const rawSpecs = {};
-
   for (const key of Object.keys(specFiles)) {
-    const actualPath = actualNames[`${key}.md`];
-    if (actualPath) {
-      let content = await githubClient.getFileContent(owner, name, actualPath, ref);
-      if (content) {
-        if (content.length > 10000) content = content.substring(0, 10000) + '\n\n... (truncated)';
-        rawSpecs[key] = content;
-        specFiles[key] = specCleaner.cleanMarkdown(content);
-      }
+    let content = docs[key.toLowerCase()];
+    if (content) {
+      if (content.length >= 10000) content += '\n\n... (truncated)';
+      rawSpecs[key] = content;
+      specFiles[key] = specCleaner.cleanMarkdown(content);
     }
   }
 
@@ -401,23 +412,12 @@ app.post('/projects/generate', requireAuth, asyncRoute(async (req, res) => {
 
     // GitHub fetches go inside try/catch too: a single rejected fetch would
     // otherwise reject the whole Promise.all batch and hang the request.
-    // Recursive doc lookup, same doc set as Python's fetch_repo_docs.
-    const DOC_KEYS = {
-      'PRODUCT_SPEC.md': 'product_spec',
-      'PROJECT_STATUS.md': 'project_status',
-      'SESSION_NOTES.md': 'session_notes',
-      'CLAUDE.md': 'claude',
-    };
-    const specContent = {};
+    let specContent = {};
     try {
-      const { actualNames } = await githubClient.checkRequiredFiles(owner, name, ref);
-      for (const [displayName, key] of Object.entries(DOC_KEYS)) {
-        const actualPath = actualNames[displayName];
-        if (actualPath) {
-          const content = await githubClient.getFileContent(owner, name, actualPath, ref);
-          if (content) specContent[key] = content.substring(0, 5000);
-        }
-      }
+      specContent = await fetchRepoDocs(githubClient, owner, name, ref, {
+        maxChars: 5000,
+        actualNames: repo.actual_names || null,
+      });
     } catch (e) {
       if (e instanceof GitHubAuthError) throw e;
       models.saveProjectSummary(name, {
@@ -529,6 +529,7 @@ app.get('/api/debug-files/:owner/:name', requireAuth, async (req, res, next) => 
   try {
     await debugFiles(req, res);
   } catch (e) {
+    console.error(`Route ${req.method} ${req.path} failed:`, e);
     res.status(502).json({ error: String(e.message || e).substring(0, 300) });
   }
 });

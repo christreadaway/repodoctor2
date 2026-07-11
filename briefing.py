@@ -20,7 +20,7 @@ import logging
 import anthropic
 
 import github_client as gh
-from ai_analyzer import DEFAULT_MODEL, extract_json_object
+from ai_analyzer import DEFAULT_MODEL, extract_json_object, extract_response_text
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +86,9 @@ def gather_brief_inputs(client, repo: dict, tracker: dict | None) -> str:
         parts.append(f"GitHub description: {repo['description']}")
     if repo.get("created_at"):
         parts.append(f"Repo created: {repo['created_at'][:10]}")
-    if last_push_ts(repo):
-        parts.append(f"Last push: {last_push_ts(repo)[:10]}")
+    pushed = last_push_ts(repo)
+    if pushed:
+        parts.append(f"Last push: {pushed[:10]}")
     langs = repo.get("languages") or {}
     if langs:
         top = sorted(langs.items(), key=lambda kv: kv[1], reverse=True)[:3]
@@ -171,9 +172,7 @@ def generate_brief(
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
-    raw = next(
-        (b.text for b in message.content if getattr(b, "type", "") == "text"), ""
-    ).strip()
+    raw = extract_response_text(message)
     brief = normalize_brief(extract_json_object(raw))
     brief["_usage"] = {
         "input_tokens": message.usage.input_tokens,
@@ -316,14 +315,15 @@ def assemble_projects(
             if isinstance(q, dict) and q.get("text")
         ]
 
+        pushed = last_push_ts(repo)
         projects.append({
             "owner": owner,
             "name": name,
             "html_url": repo.get("html_url", ""),
             "private": repo.get("private", False),
             "description": repo.get("description", "") or "",
-            "updated_at": last_push_ts(repo),
-            "last_push": last_push_ts(repo)[:10] or "unknown",
+            "updated_at": pushed,
+            "last_push": pushed[:10] or "unknown",
             "branch_count": repo.get("non_henry_branch_count",
                                      repo.get("total_branch_count", 0)),
             "files_present": repo.get("files_present", 0),

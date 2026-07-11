@@ -6,10 +6,13 @@ and NEVER sent to any API.
 """
 
 import json
+import logging
 import os
 import re
 import zipfile
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 PROJECTS_DIR = os.path.join(os.path.dirname(__file__), "projects")
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
@@ -59,14 +62,6 @@ def parse_claude_export(zip_path: str) -> dict:
             except (json.JSONDecodeError, KeyError, MemoryError):
                 continue
 
-            def _try_parse(item) -> dict | None:
-                # One malformed entry must not abort the whole import —
-                # real exports mix schema versions and tool-use blocks.
-                try:
-                    return _parse_conversation(item)
-                except Exception:
-                    return None
-
             # Handle both flat conversation lists and nested structures
             if isinstance(data, list):
                 for item in data:
@@ -101,6 +96,18 @@ def parse_claude_export(zip_path: str) -> dict:
     }
 
 
+def _try_parse(item) -> dict | None:
+    """One malformed entry must not abort the whole import — real exports
+    mix schema versions and tool-use blocks. Failures are logged so a
+    half-empty import is debuggable."""
+    try:
+        return _parse_conversation(item)
+    except Exception as e:
+        logger.warning("Skipped unparseable conversation entry (%s: %s)",
+                       type(e).__name__, e)
+        return None
+
+
 def _parse_conversation(item: dict) -> dict | None:
     """Parse a single conversation item from the export."""
     if not isinstance(item, dict):
@@ -131,36 +138,34 @@ def _parse_conversation(item: dict) -> dict | None:
     elif "project_uuid" in item:
         project = item.get("project_title", "")
 
-    # Extract date. Real Claude exports carry ISO timestamps with either a
-    # +00:00 offset or microseconds+Z — fromisoformat handles both; the
-    # strptime list stays as a fallback for other formats. Falling back to
-    # "now" would stamp years-old chats with today's date and break sorting.
-    date_str = (
+    # Extract date. Real Claude exports carry ISO timestamps (offsets or
+    # microseconds+Z — fromisoformat handles every shape the old strptime
+    # list did); other export schemas use numeric epoch seconds. Falling
+    # back to "now" would stamp years-old chats with today's date and
+    # break sorting, so it's the last resort only.
+    date_raw = (
         item.get("created_at")
         or item.get("updated_at")
         or item.get("create_time")
         or ""
     )
     date = None
-    if date_str:
+    if isinstance(date_raw, (int, float)):
         try:
-            date = datetime.fromisoformat(str(date_str).replace("Z", "+00:00"))
+            date = datetime.fromtimestamp(date_raw, tz=timezone.utc).replace(tzinfo=None)
+        except (ValueError, OSError, OverflowError):
+            pass
+    elif date_raw:
+        try:
+            date = datetime.fromisoformat(str(date_raw).replace("Z", "+00:00"))
             # Naive downstream code compares/sorts ISO strings; keep naive UTC.
             if date.tzinfo is not None:
                 date = date.astimezone(timezone.utc).replace(tzinfo=None)
         except (ValueError, TypeError):
-            for fmt in [
-                "%Y-%m-%dT%H:%M:%S.%fZ",
-                "%Y-%m-%dT%H:%M:%SZ",
-                "%Y-%m-%dT%H:%M:%S",
-                "%Y-%m-%d",
-            ]:
-                try:
-                    date = datetime.strptime(date_str[:26], fmt)
-                    break
-                except ValueError:
-                    continue
+            pass
     if date is None:
+        if date_raw:
+            logger.warning("Unrecognized conversation timestamp %r — using now()", date_raw)
         date = datetime.now()
 
     # Extract messages for excerpt

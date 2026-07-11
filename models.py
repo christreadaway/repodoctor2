@@ -11,7 +11,7 @@ import re
 import tempfile
 import threading
 
-from ai_analyzer import DEFAULT_MODEL
+from ai_analyzer import DEFAULT_MODEL, VALID_MODELS
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 # lock around every read-modify-write pair prevents that. _atomic_write
 # already prevents torn files; this prevents lost updates.
 _STORE_LOCK = threading.RLock()
+
+
+def get_ai_model() -> str:
+    """The configured AI model, validated — a stale/invalid saved value
+    falls back to the default instead of 404ing at the API."""
+    model = get_preferences().get("ai_model", DEFAULT_MODEL)
+    return model if model in VALID_MODELS else DEFAULT_MODEL
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
@@ -527,13 +534,16 @@ class SessionCost:
     """Track cumulative API costs for the current session."""
 
     def __init__(self):
+        # Own lock — this is pure in-memory arithmetic and shouldn't ever
+        # queue behind another thread's multi-megabyte JSON rewrite.
+        self._lock = threading.Lock()
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost = 0.0
         self.analyses_count = 0
 
     def add(self, input_tokens: int, output_tokens: int, cost: float):
-        with _STORE_LOCK:
+        with self._lock:
             self.total_input_tokens += input_tokens
             self.total_output_tokens += output_tokens
             self.total_cost += cost

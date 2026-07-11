@@ -46,6 +46,18 @@ Return a JSON object with these exact fields:
 For screen_changes: produce one bullet per distinct screen or area touched. Group multiple files for the same screen into a single bullet. Infer screen names from template/route names (e.g. templates/dashboard.html → 'Dashboard', templates/henry.html → 'Henry Branches'). Aim for 1–6 bullets — never more than 8."""
 
 
+def extract_response_text(message) -> str:
+    """First text block of an Anthropic response, or "".
+
+    A response can validly contain no text block (e.g. a refusal) —
+    indexing content[0].text unconditionally crashes before any caller's
+    fallback can run. Every Anthropic call site should use this.
+    """
+    return next(
+        (b.text for b in message.content if getattr(b, "type", "") == "text"), ""
+    ).strip()
+
+
 def extract_json_object(text: str) -> dict:
     """Find and parse the first complete JSON object in `text`.
 
@@ -187,11 +199,7 @@ def analyze_branch(
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    # A response can validly have no text block (e.g. a refusal) — indexing
-    # content[0] unconditionally would crash before the fallback below runs.
-    response_text = next(
-        (b.text for b in message.content if getattr(b, "type", "") == "text"), ""
-    ).strip()
+    response_text = extract_response_text(message)
 
     try:
         result = extract_json_object(response_text)
