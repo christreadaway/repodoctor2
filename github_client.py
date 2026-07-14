@@ -29,6 +29,25 @@ class GitHubClient:
             "Accept": "application/vnd.github.v3+json",
         })
 
+    # Default (connect, read) timeout for every GitHub call. Without this,
+    # one stalled connection hangs a scan (or leaks a ThreadPool worker on
+    # the Stats/Firestore pages) forever with no error.
+    REQUEST_TIMEOUT = (10, 30)
+
+    @staticmethod
+    def _rate_limit_wait(resp: requests.Response) -> int:
+        """Seconds to wait before retrying a rate-limited response."""
+        retry_after = resp.headers.get("Retry-After", "")
+        if retry_after.isdigit():
+            return min(max(1, int(retry_after)), 60)
+        reset_at = resp.headers.get("X-RateLimit-Reset")
+        if reset_at:
+            try:
+                return min(max(1, int(reset_at) - int(time.time()) + 1), 60)
+            except ValueError:
+                pass
+        return 5
+
     def _get(self, url: str, raise_on_auth_error: bool = True, **kwargs) -> requests.Response:
         """Make a GET request with rate-limit retry.
 
@@ -37,16 +56,16 @@ class GitHubClient:
         every endpoint that calls into the client. Use raise_on_auth_error=False
         for probes like verify_token() that intentionally inspect 401s.
         """
+        kwargs.setdefault("timeout", self.REQUEST_TIMEOUT)
         resp = self.session.get(url, **kwargs)
-        # If rate-limited, wait and retry once
-        if resp.status_code == 403 and "rate limit" in resp.text.lower():
-            reset_at = resp.headers.get("X-RateLimit-Reset")
-            if reset_at:
-                wait = max(1, int(reset_at) - int(time.time()) + 1)
-                wait = min(wait, 60)  # Cap at 60s
-            else:
-                wait = 5
-            logger.warning("GitHub rate limit hit, waiting %ds", wait)
+        # If rate-limited, wait and retry once. GitHub signals primary rate
+        # limits as 429 and secondary/abuse limits as 403 with "rate limit"
+        # in the body — handle both.
+        if resp.status_code == 429 or (
+            resp.status_code == 403 and "rate limit" in resp.text.lower()
+        ):
+            wait = self._rate_limit_wait(resp)
+            logger.warning("GitHub rate limit hit (HTTP %d), waiting %ds", resp.status_code, wait)
             time.sleep(wait)
             resp = self.session.get(url, **kwargs)
         if raise_on_auth_error and resp.status_code == 401:
@@ -55,6 +74,40 @@ class GitHubClient:
                 "Personal Access Token is invalid, expired, or missing required scopes."
             )
         return resp
+
+    def _post(self, url: str, json: dict) -> requests.Response:
+        """POST with the same timeout and 401→GitHubAuthError handling as
+        _get, so write endpoints can't hang forever or silently swallow a
+        dead PAT."""
+        resp = self.session.post(url, json=json, timeout=self.REQUEST_TIMEOUT)
+        if resp.status_code == 401:
+            raise GitHubAuthError(
+                f"GitHub returned 401 Unauthorized for {url}. "
+                "Personal Access Token is invalid, expired, or missing required scopes."
+            )
+        return resp
+
+    def _get_paginated(self, url: str, label: str, params: dict | None = None,
+                       max_pages: int | None = None) -> list[dict]:
+        """Page through a list endpoint until an empty page. Non-200 pages
+        are logged (a silent break would truncate results invisibly)."""
+        items: list[dict] = []
+        page = 1
+        while max_pages is None or page <= max_pages:
+            merged = {"per_page": 100, "page": page, **(params or {})}
+            resp = self._get(url, params=merged)
+            if resp.status_code != 200:
+                logger.warning("%s page %d failed: HTTP %d — returning %d items fetched so far",
+                               label, page, resp.status_code, len(items))
+                break
+            batch = resp.json()
+            if not isinstance(batch, list) or not batch:
+                break
+            items.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        return items
 
     def verify_token(self) -> dict | None:
         """Verify the PAT and return user info, or None if invalid."""
@@ -73,45 +126,18 @@ class GitHubClient:
         can show a clear remediation message instead of silently returning
         an empty list.
         """
-        repos = []
-        page = 1
-        while True:
-            resp = self._get(
-                f"{GITHUB_API}/user/repos",
-                params={
-                    "per_page": 100,
-                    "page": page,
-                    "sort": "updated",
-                    "direction": "desc",
-                    "affiliation": "owner,collaborator",
-                },
-            )
-            if resp.status_code != 200:
-                break
-            batch = resp.json()
-            if not batch:
-                break
-            repos.extend(batch)
-            page += 1
-        return repos
+        return self._get_paginated(
+            f"{GITHUB_API}/user/repos", "get_repos",
+            params={"sort": "updated", "direction": "desc",
+                    "affiliation": "owner,collaborator"},
+        )
 
     def get_branches(self, owner: str, repo: str) -> list[dict]:
         """Fetch all branches for a repo."""
-        branches = []
-        page = 1
-        while True:
-            resp = self._get(
-                f"{GITHUB_API}/repos/{owner}/{repo}/branches",
-                params={"per_page": 100, "page": page},
-            )
-            if resp.status_code != 200:
-                break
-            batch = resp.json()
-            if not batch:
-                break
-            branches.extend(batch)
-            page += 1
-        return branches
+        return self._get_paginated(
+            f"{GITHUB_API}/repos/{owner}/{repo}/branches",
+            f"get_branches {owner}/{repo}",
+        )
 
     def compare_branches(self, owner: str, repo: str, base: str, head: str) -> dict | None:
         """Compare two branches. Returns comparison data or None on error."""
@@ -123,32 +149,18 @@ class GitHubClient:
         return None
 
     def get_pulls(self, owner: str, repo: str, state: str = "open") -> list[dict]:
-        """Fetch pull requests for a repo."""
-        resp = self._get(
+        """Fetch all pull requests for a repo (paginated)."""
+        return self._get_paginated(
             f"{GITHUB_API}/repos/{owner}/{repo}/pulls",
-            params={"state": state, "per_page": 100},
+            f"get_pulls {owner}/{repo}", params={"state": state},
         )
-        if resp.status_code == 200:
-            return resp.json()
-        return []
 
     def get_tags(self, owner: str, repo: str) -> list[dict]:
         """Fetch tags for a repo."""
-        tags = []
-        page = 1
-        while True:
-            resp = self._get(
-                f"{GITHUB_API}/repos/{owner}/{repo}/tags",
-                params={"per_page": 100, "page": page},
-            )
-            if resp.status_code != 200:
-                break
-            batch = resp.json()
-            if not batch:
-                break
-            tags.extend(batch)
-            page += 1
-        return tags
+        return self._get_paginated(
+            f"{GITHUB_API}/repos/{owner}/{repo}/tags",
+            f"get_tags {owner}/{repo}",
+        )
 
     def check_claude_md(self, owner: str, repo: str) -> bool:
         """Check if CLAUDE.md exists in the repo root."""
@@ -243,6 +255,12 @@ class GitHubClient:
         """
         all_paths = self.get_all_file_paths(owner, repo, ref=ref)
 
+        # Only these extensions count as project docs. Without this filter,
+        # .github/workflows/claude.yml satisfies "CLAUDE.md", license.py
+        # satisfies "LICENSE", etc. — and the YAML then gets fed into AI
+        # prompts as the doc content.
+        _DOC_EXTENSIONS = {".md", ".txt", ".rst", ""}
+
         # stem -> list of (path, depth)
         stem_to_paths: dict[str, list[tuple[str, int]]] = {}
         for path in all_paths:
@@ -252,6 +270,9 @@ class GitHubClient:
             fl = filename.lower()
             dot = fl.rfind(".")
             stem = fl[:dot] if dot > 0 else fl
+            ext = fl[dot:] if dot > 0 else ""
+            if ext not in _DOC_EXTENSIONS:
+                continue
             depth = path.count("/")
             stem_to_paths.setdefault(stem, []).append((path, depth))
 
@@ -290,7 +311,7 @@ class GitHubClient:
         tag_name = f"archive/{branch_name}/{today}"
 
         # Create the tag object
-        resp = self.session.post(
+        resp = self._post(
             f"{GITHUB_API}/repos/{owner}/{repo}/git/tags",
             json={
                 "tag": tag_name,
@@ -304,7 +325,7 @@ class GitHubClient:
         tag_data = resp.json()
 
         # Create the reference
-        ref_resp = self.session.post(
+        ref_resp = self._post(
             f"{GITHUB_API}/repos/{owner}/{repo}/git/refs",
             json={
                 "ref": f"refs/tags/{tag_name}",
@@ -377,26 +398,41 @@ class GitHubClient:
         Returns up to max_pages * 100 commits. Each commit dict contains at
         minimum a `commit.author.date` / `commit.committer.date`.
         """
-        commits: list[dict] = []
-        page = 1
-        while page <= max_pages:
-            params = {"since": since_iso, "per_page": 100, "page": page}
-            if ref:
-                params["sha"] = ref
-            resp = self._get(
-                f"{GITHUB_API}/repos/{owner}/{repo}/commits",
-                params=params,
-            )
-            if resp.status_code != 200:
-                break
-            batch = resp.json()
-            if not isinstance(batch, list) or not batch:
-                break
-            commits.extend(batch)
-            if len(batch) < 100:
-                break
-            page += 1
-        return commits
+        params: dict = {"since": since_iso}
+        if ref:
+            params["sha"] = ref
+        return self._get_paginated(
+            f"{GITHUB_API}/repos/{owner}/{repo}/commits",
+            f"get_commits_since {owner}/{repo}", params=params, max_pages=max_pages,
+        )
+
+    def branch_last_commit(self, owner: str, repo: str, branch: str,
+                           comparison: dict) -> tuple[str | None, str | None]:
+        """(date, author) of the newest commit on a compared branch.
+
+        The compare API returns at most 250 commits, oldest-first — for
+        bigger branches commits[-1] is NOT the tip, which would misclassify
+        an actively-developed branch as STALE. When truncated, fetch the
+        real tip date. Shared by scan_repo and the Henry page.
+        """
+        commits = comparison.get("commits") or []
+        if not commits:
+            return None, None
+        lc_commit = commits[-1].get("commit", {})
+        committer = lc_commit.get("committer") or {}
+        date = committer.get("date")
+        author = (lc_commit.get("author") or {}).get("name", "Unknown")
+        if comparison.get("total_commits", 0) > len(commits):
+            try:
+                tip_date = self.get_last_commit_date(owner, repo, ref=branch)
+                if tip_date:
+                    date = tip_date
+            except GitHubAuthError:
+                raise
+            except Exception as e:
+                logger.warning("branch tip-date fetch failed for %s/%s@%s: %s — "
+                               "using the (older) compare-API date", owner, repo, branch, e)
+        return date, author
 
     def classify_branch(self, comparison: dict, last_commit_date: str | None, has_pr: bool) -> str:
         """Classify a branch based on comparison data."""
@@ -567,6 +603,9 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
         "description": repo.get("description", ""),
         "created_at": repo.get("created_at", ""),
         "updated_at": repo.get("updated_at", ""),
+        # pushed_at is the actual last-push timestamp; updated_at only tracks
+        # metadata changes (stars, settings) and does NOT change on push.
+        "pushed_at": repo.get("pushed_at", ""),
         "total_branch_count": total_branch_count,
         "non_default_branch_count": non_default_count,
         "henry_branch_count": henry_branch_count,
@@ -601,16 +640,9 @@ def scan_repo(client: GitHubClient, repo: dict) -> dict:
         if comparison is None:
             continue
 
-        last_commit_date = None
-        last_commit_author = None
-        if comparison.get("commits"):
-            last_commit = comparison["commits"][-1]
-            last_commit_date = last_commit["commit"]["committer"]["date"]
-            last_commit_author = (
-                last_commit["commit"]["author"]["name"]
-                if last_commit["commit"].get("author")
-                else "Unknown"
-            )
+        last_commit_date, last_commit_author = client.branch_last_commit(
+            owner, name, bname, comparison,
+        )
 
         has_pr = bname in pr_branches
         classification = client.classify_branch(comparison, last_commit_date, has_pr)

@@ -20,7 +20,7 @@ import logging
 import anthropic
 
 import github_client as gh
-from ai_analyzer import DEFAULT_MODEL, extract_json_object
+from ai_analyzer import DEFAULT_MODEL, extract_json_object, extract_response_text
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +86,9 @@ def gather_brief_inputs(client, repo: dict, tracker: dict | None) -> str:
         parts.append(f"GitHub description: {repo['description']}")
     if repo.get("created_at"):
         parts.append(f"Repo created: {repo['created_at'][:10]}")
-    if repo.get("updated_at"):
-        parts.append(f"Last push: {repo['updated_at'][:10]}")
+    pushed = last_push_ts(repo)
+    if pushed:
+        parts.append(f"Last push: {pushed[:10]}")
     langs = repo.get("languages") or {}
     if langs:
         top = sorted(langs.items(), key=lambda kv: kv[1], reverse=True)[:3]
@@ -171,7 +172,7 @@ def generate_brief(
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
-    raw = message.content[0].text.strip()
+    raw = extract_response_text(message)
     brief = normalize_brief(extract_json_object(raw))
     brief["_usage"] = {
         "input_tokens": message.usage.input_tokens,
@@ -215,6 +216,14 @@ def normalize_brief(raw: dict) -> dict:
     }
 
 
+def last_push_ts(repo: dict) -> str:
+    """The repo's last-push timestamp. GitHub's pushed_at is the actual push
+    time; updated_at only tracks metadata changes (stars, settings, renames)
+    and does NOT change on push. Falls back to updated_at for scans saved
+    before pushed_at was captured."""
+    return repo.get("pushed_at") or repo.get("updated_at") or ""
+
+
 def is_brief_stale(brief: dict | None, repo: dict) -> bool:
     """A brief is stale when the repo was pushed to after the brief was
     generated. Missing timestamps count as stale so generation self-heals."""
@@ -223,10 +232,10 @@ def is_brief_stale(brief: dict | None, repo: dict) -> bool:
     generated = _parse_ts(brief.get("_generated_at", ""))
     if generated is None:
         return True
-    updated = _parse_ts(repo.get("updated_at", ""))
-    if updated is None:
+    pushed = _parse_ts(last_push_ts(repo))
+    if pushed is None:
         return False
-    return updated > generated
+    return pushed > generated
 
 
 def _parse_ts(value: str) -> datetime.datetime | None:
@@ -306,14 +315,15 @@ def assemble_projects(
             if isinstance(q, dict) and q.get("text")
         ]
 
+        pushed = last_push_ts(repo)
         projects.append({
             "owner": owner,
             "name": name,
             "html_url": repo.get("html_url", ""),
             "private": repo.get("private", False),
             "description": repo.get("description", "") or "",
-            "updated_at": repo.get("updated_at", "") or "",
-            "last_push": (repo.get("updated_at") or "")[:10] or "unknown",
+            "updated_at": pushed,
+            "last_push": pushed[:10] or "unknown",
             "branch_count": repo.get("non_henry_branch_count",
                                      repo.get("total_branch_count", 0)),
             "files_present": repo.get("files_present", 0),

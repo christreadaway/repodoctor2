@@ -115,7 +115,10 @@ Acceptance: the external system is reachable from the app under realistic config
 </div>
 
 {# --- Repo selector + actions --- #}
-{% if scan_results %}
+{# Gate on repos, not scan_results: saved trackers must stay reachable after
+   a restart with no in-memory scan (that's why _tracker_repo_list includes
+   them in the first place). #}
+{% if repos %}
 <div class="tracker-toolbar">
     <form method="GET" action="" class="tracker-pick" id="tracker-pick-form">
         <label for="tracker-pick" class="tracker-pick-label">Project</label>
@@ -151,13 +154,15 @@ Acceptance: the external system is reachable from the app under realistic config
 
     <div class="tracker-model-hint">
         Default model: <code>{{ preferences.ai_model }}</code>
-        <a href="{{ url_for('settings') }}#ai-model">change in Settings</a>
+        <a href="{{ url_for('settings') }}#ai_model">change in Settings</a>
         &mdash; or pick a one-shot override from the dropdown above.
     </div>
 </div>
 {% endif %}
 
-{% if not scan_results %}
+{# A loaded tracker (or the debug surface) must render even with no scan
+   data — saved trackers survive restarts and stay reachable. #}
+{% if not repos and not tracker and mode != 'debug' %}
 <div class="onboarding">
     <div class="onboarding-welcome">
         <h2>No scan data yet.</h2>
@@ -314,7 +319,8 @@ Acceptance: the external system is reachable from the app under realistic config
     <div class="tracker-panel-grid">
         <div class="tracker-card">
             <h3>What's open right now</h3>
-            {% set p0_open = tracker.next_actions | selectattr('priority', 'equalto', 'P0') | rejectattr('status', 'equalto', 'shipped') | list %}
+            {# Match the header stat + Open filter: dismissed isn't open. #}
+            {% set p0_open = tracker.next_actions | selectattr('priority', 'equalto', 'P0') | rejectattr('status', 'in', ['shipped', 'dismissed']) | list %}
             {% if p0_open %}
             <ul class="tracker-overview-list">
                 {% for n in p0_open %}
@@ -409,7 +415,7 @@ Acceptance: the external system is reachable from the app under realistic config
     <header class="tracker-next-header">
         <div class="tracker-next-id">
             <span class="chip chip-code">{{ n.id }}</span>
-            <span class="chip chip-p{{ n.priority|lower if n.priority != '—' else 'none' }}">{{ n.priority }}</span>
+            <span class="chip chip-{{ n.priority|lower if n.priority != '—' else 'pnone' }}">{{ n.priority }}</span>
             <span class="chip chip-effort" title="{{ meta.EFFORT_META.get(n.effort, {}).get('hint', '') }}">{{ n.effort }}</span>
             <span class="chip chip-tone-{{ n.status or 'todo' }}">{{ meta.NEXT_ACTION_STATUS_META.get(n.status or 'todo', {}).get('label', n.status or 'todo') }}</span>
         </div>
@@ -528,7 +534,7 @@ Acceptance: the external system is reachable from the app under realistic config
                     <span class="chip chip-code">{{ m.id }}</span>
                     <span class="chip chip-{{ m.status }}">{{ meta.STATUS_META.get(m.status, {}).get('label', m.status) }}</span>
                     {% if m.priority and m.priority != '—' %}
-                    <span class="chip chip-p{{ m.priority|lower }}">{{ m.priority }}</span>
+                    <span class="chip chip-{{ m.priority|lower }}">{{ m.priority }}</span>
                     {% endif %}
                 </header>
                 <h4 class="tracker-module-name">{{ m.name }}</h4>
@@ -557,7 +563,7 @@ Acceptance: the external system is reachable from the app under realistic config
         <article class="tracker-infra-card" id="row-{{ g.id }}">
             <header class="tracker-infra-header">
                 <span class="chip chip-code">{{ g.id }}</span>
-                <span class="chip chip-p{{ g.priority|lower if g.priority != '—' else 'none' }}">{{ g.priority }}</span>
+                <span class="chip chip-{{ g.priority|lower if g.priority != '—' else 'pnone' }}">{{ g.priority }}</span>
             </header>
             <h3 class="tracker-infra-name">{{ g.name }}</h3>
             <p class="tracker-infra-desc">{{ g.description }}</p>
@@ -590,11 +596,11 @@ Acceptance: the external system is reachable from the app under realistic config
             <div class="tracker-feature-priorities">
                 <span class="tracker-priority-pair">
                     <span class="tracker-priority-label">build</span>
-                    <span class="chip chip-p{{ f.build_priority|lower if f.build_priority != '—' else 'none' }}">{{ f.build_priority }}</span>
+                    <span class="chip chip-{{ f.build_priority|lower if f.build_priority != '—' else 'pnone' }}">{{ f.build_priority }}</span>
                 </span>
                 <span class="tracker-priority-pair">
                     <span class="tracker-priority-label">rollout</span>
-                    <span class="chip chip-p{{ f.roll_priority|lower if f.roll_priority != '—' else 'none' }}">{{ f.roll_priority }}</span>
+                    <span class="chip chip-{{ f.roll_priority|lower if f.roll_priority != '—' else 'pnone' }}">{{ f.roll_priority }}</span>
                 </span>
             </div>
             <p class="tracker-feature-take">{{ f.take }}</p>

@@ -6,8 +6,13 @@ Simplified mode: repo overview with branch counts + required file checks.
 """
 
 import datetime
+import logging
 import os
 import secrets
+
+import requests
+
+logger = logging.getLogger(__name__)
 
 try:
     from zoneinfo import ZoneInfo
@@ -31,9 +36,69 @@ import firestore_detector
 import tracker_data
 import tracker_generator
 import briefing
+import program
+
+def _load_or_create_secret_key() -> str:
+    """Stable Flask secret key. A random per-process key would invalidate
+    every session cookie (and drop pending flash messages) on each restart,
+    so persist one under ~/.repodoctor on first run."""
+    env_key = os.environ.get("FLASK_SECRET_KEY")
+    if env_key:
+        return env_key
+    key_path = os.path.join(os.path.expanduser("~"), ".repodoctor", "secret_key")
+    try:
+        with open(key_path, "r") as f:
+            key = f.read().strip()
+        if key:
+            return key
+    except OSError:
+        pass
+    key = secrets.token_hex(32)
+    try:
+        os.makedirs(os.path.dirname(key_path), exist_ok=True)
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(key)
+    except OSError as e:
+        # Fall back to a per-process key; sessions won't survive restart.
+        logger.warning(
+            "Could not persist Flask secret key to %s: %s — logins will not survive restarts",
+            key_path, e,
+        )
+    return key
+
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
+app.secret_key = _load_or_create_secret_key()
+
+# Anti-CSRF token for the destructive credential-reset endpoints. /login/reset
+# is deliberately reachable without auth (recovery from a revoked PAT), which
+# means without this check ANY web page the user visits could cross-origin
+# POST it and silently wipe the stored credentials. Per-boot is enough: the
+# token is rendered into our own forms and unknowable to another origin.
+_RESET_TOKEN = secrets.token_hex(16)
+
+
+@app.context_processor
+def inject_reset_token():
+    return {"reset_token": _RESET_TOKEN}
+
+
+def _reset_token_ok() -> bool:
+    # Compare as bytes: compare_digest on str raises TypeError for
+    # non-ASCII input, which would turn a bad token into a 500.
+    supplied = request.form.get("reset_token", "").encode("utf-8", errors="replace")
+    return secrets.compare_digest(supplied, _RESET_TOKEN.encode("utf-8"))
+
+
+def _reject_bad_reset_token(page_name: str, target: str):
+    """The one guard every credential-destroying endpoint calls. Returns a
+    redirect response when the token is missing/wrong, else None."""
+    if _reset_token_ok():
+        return None
+    logger.warning("Rejected credential reset without a valid token (path=%s)", request.path)
+    flash(f"Invalid reset request. Use the button on the {page_name} page.", "error")
+    return redirect(url_for(target))
 
 
 @app.template_filter("central_time")
@@ -169,7 +234,11 @@ def login():
             # invalid/revoked PAT silently lands the user on an empty
             # dashboard with no indication of what went wrong.
             test_client = gh.GitHubClient(creds["github_pat"])
-            user_info = test_client.verify_token()
+            try:
+                user_info = test_client.verify_token()
+            except requests.RequestException:
+                flash("Could not reach GitHub — check your internet connection and try again.", "error")
+                return render_template("login.html", has_credentials=True)
             if user_info is None:
                 flash(
                     "Your saved GitHub Personal Access Token is no longer valid "
@@ -201,13 +270,20 @@ def login():
             if not all([password, github_pat, anthropic_key]):
                 flash("All fields are required.", "error")
                 return render_template("login.html", has_credentials=False)
-            if len(password) < 4:
-                flash("Password must be at least 4 characters.", "error")
+            # This password is the only thing protecting an offline copy of
+            # credentials.enc (which holds a repo-scoped PAT) from brute
+            # force — 4 characters was trivially crackable.
+            if len(password) < 8:
+                flash("Password must be at least 8 characters.", "error")
                 return render_template("login.html", has_credentials=False)
 
             # Verify GitHub PAT
             test_client = gh.GitHubClient(github_pat)
-            user_info = test_client.verify_token()
+            try:
+                user_info = test_client.verify_token()
+            except requests.RequestException:
+                flash("Could not reach GitHub — check your internet connection and try again.", "error")
+                return render_template("login.html", has_credentials=False)
             if user_info is None:
                 flash("Invalid GitHub PAT. Check your token and try again.", "error")
                 return render_template("login.html", has_credentials=False)
@@ -254,6 +330,9 @@ def login_reset():
     Reachable without auth so users locked out by a revoked/expired PAT can
     recover from the login screen without manually deleting files.
     """
+    rejected = _reject_bad_reset_token("login", "login")
+    if rejected:
+        return rejected
     global _github_client, _credentials
     _github_client = None
     _credentials = None
@@ -317,6 +396,10 @@ def scan():
                 "description": repo.get("description", ""),
                 "created_at": repo.get("created_at", ""),
                 "updated_at": repo.get("updated_at", ""),
+                "pushed_at": repo.get("pushed_at", ""),
+                # None = unknown, so the dashboard shows "—" instead of
+                # falsely claiming the docs are stale for a failed repo.
+                "docs_updated": None,
                 "total_branch_count": 0,
                 "non_default_branch_count": 0,
                 "henry_branch_count": 0,
@@ -438,11 +521,24 @@ def settings():
         elif action == "save_spec":
             spec_repo = request.form.get("spec_repo", "").strip()
             spec_content = request.form.get("spec_content", "").strip()
+            # Accept "owner/repo" paste-ins by keeping the repo part.
+            if "/" in spec_repo:
+                spec_repo = spec_repo.rsplit("/", 1)[-1].strip()
             if spec_repo and spec_content:
-                models.save_spec(spec_repo, spec_content)
-                flash(f"Spec saved for {spec_repo}.", "success")
+                try:
+                    models.save_spec(spec_repo, spec_content)
+                    flash(f"Spec saved for {spec_repo}.", "success")
+                except ValueError:
+                    flash(
+                        f'"{spec_repo}" is not a valid repo name — use letters, '
+                        "numbers, dots, dashes, and underscores only.",
+                        "error",
+                    )
 
         elif action == "reset_credentials":
+            rejected = _reject_bad_reset_token("Settings", "settings")
+            if rejected:
+                return rejected
             security.delete_credentials()
             flash("Credentials deleted. You will need to re-enter them.", "success")
             return redirect(url_for("logout"))
@@ -529,8 +625,8 @@ def projects():
     active_group = _resolve_active_group(groups)
 
     all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
-    # Most recently updated first; missing/blank dates sink to the bottom.
-    all_repos.sort(key=lambda r: r.get("updated_at") or "", reverse=True)
+    # Most recently pushed first; missing/blank dates sink to the bottom.
+    all_repos.sort(key=briefing.last_push_ts, reverse=True)
     if active_group:
         group_repos = set(groups.get(active_group, []))
         repos = [r for r in all_repos if r["name"] in group_repos]
@@ -622,9 +718,12 @@ def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
 
     context_text = "\n\n".join(context_parts)
 
+    # Honor the Settings model preference — briefs and trackers already do.
+    model = models.get_ai_model()
+
     ai_client = anthropic.Anthropic(api_key=creds["anthropic_key"])
     response = ai_client.messages.create(
-        model=ai.DEFAULT_MODEL,
+        model=model,
         max_tokens=500,
         messages=[{
             "role": "user",
@@ -638,7 +737,9 @@ def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
             ),
         }],
     )
-    raw = response.content[0].text.strip()
+    raw = next(
+        (b.text for b in response.content if getattr(b, "type", "") == "text"), ""
+    ).strip()
     summary = ai.extract_json_object(raw)
     # Ensure next_steps is capped at 5
     if "next_steps" in summary and len(summary["next_steps"]) > 5:
@@ -647,7 +748,7 @@ def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
 
     in_tok = response.usage.input_tokens
     out_tok = response.usage.output_tokens
-    _session_cost.add(in_tok, out_tok, ai.estimate_cost(in_tok, out_tok))
+    _session_cost.add(in_tok, out_tok, ai.estimate_cost(in_tok, out_tok, model=model))
     return summary
 
 
@@ -743,6 +844,8 @@ def generate_henry_summaries():
 
     generated = 0
     failed = 0
+    # Honor the Settings model preference, like briefs and trackers do.
+    model = models.get_ai_model()
     # Group by repo so we only fetch get_branches/get_pulls once per repo.
     by_repo: dict[tuple[str, str], list[dict]] = {}
     for t in targets:
@@ -772,21 +875,26 @@ def generate_henry_summaries():
 
         for t in items:
             bname = t["branch_name"]
-            comparison = client.compare_branches(owner, name, default_branch, bname)
+            # A transient network error on one branch must not 500 the whole
+            # batch — record the failure and keep going, like every other
+            # step in this loop.
+            try:
+                comparison = client.compare_branches(owner, name, default_branch, bname)
+            except gh.GitHubAuthError:
+                raise
+            except Exception as e:
+                models.save_henry_summary(name, bname, _henry_error_record(t, str(e)))
+                failed += 1
+                continue
             if comparison is None:
                 models.save_henry_summary(name, bname, _henry_error_record(t, "Could not compare branch."))
                 failed += 1
                 continue
 
-            last_commit_date = None
-            last_commit_author = None
-            if comparison.get("commits"):
-                lc = comparison["commits"][-1]
-                lc_commit = lc.get("commit", {})
-                committer = lc_commit.get("committer") or {}
-                last_commit_date = committer.get("date")
-                author = lc_commit.get("author") or {}
-                last_commit_author = author.get("name", "Unknown")
+            # Shared with scan_repo — handles the compare API's 250-commit cap.
+            last_commit_date, last_commit_author = client.branch_last_commit(
+                owner, name, bname, comparison,
+            )
             has_pr = bname in pr_branches
             classification = client.classify_branch(comparison, last_commit_date, has_pr)
 
@@ -832,11 +940,12 @@ def generate_henry_summaries():
                     branch_data=branch_data,
                     default_branch=default_branch,
                     spec_text=spec_text,
+                    model=model,
                 )
                 usage = analysis.get("_usage", {})
                 in_tok = usage.get("input_tokens", 0)
                 out_tok = usage.get("output_tokens", 0)
-                cost = ai.estimate_cost(in_tok, out_tok)
+                cost = ai.estimate_cost(in_tok, out_tok, model=model)
                 _session_cost.add(in_tok, out_tok, cost)
 
                 models.save_henry_summary(name, bname, {
@@ -1008,6 +1117,10 @@ def stats():
         for fut in as_completed(futures):
             try:
                 results.append(fut.result())
+            except gh.GitHubAuthError:
+                # Surface the PAT remediation via the global handler instead
+                # of caching all-zero rows that hide the real problem.
+                raise
             except Exception as e:
                 r = futures[fut]
                 results.append({
@@ -1185,8 +1298,7 @@ def briefing_generate_one(name):
     if existing and not force and not briefing.is_brief_stale(existing, repo):
         return jsonify({"ok": True, "repo": name, "skipped": "fresh"})
 
-    prefs = models.get_preferences()
-    model = prefs.get("ai_model", ai.DEFAULT_MODEL)
+    model = models.get_ai_model()
     tracker = models.get_tracker(repo["owner"], name)
 
     try:
@@ -1220,6 +1332,193 @@ def briefing_generate_one(name):
     )
     models.log_action("generate_brief", name, "all", f"stage={brief.get('stage')}")
     return jsonify({"ok": True, "repo": name, "stage": brief.get("stage")})
+
+
+# --- Program (cross-project rollup) ---
+#
+# One tab that treats a group of repos as a single initiative — built for
+# the Education suite (parentpoint + teacherAIde + beacon, plus the local
+# LLM running familygraph and beacon's own local LLM) and reusable for any
+# group (e.g. Subject Apps). Membership is managed with the existing
+# Groups editor on the Projects page; the non-repo pieces live in
+# free-text infrastructure notes. Every generation logs to
+# data/logs/program.log for paste-back debugging.
+
+EDUCATION_PROGRAM = "Education"
+# Matched case-insensitively against scanned repo names on first visit.
+_EDUCATION_SEED_REPOS = ("parentpoint", "parentpointedu", "teacheraide", "beacon", "familygraph")
+SUBJECT_APPS_PROGRAM = "Subject Apps"
+_DEFAULT_EDUCATION_NOTES = (
+    "Shared infrastructure: a local LLM runs familygraph, and beacon ships "
+    "its own local LLM. parentpoint, teacherAIde, and beacon together form "
+    "the education suite."
+)
+
+
+def _seed_program_groups():
+    """One-shot: create the Education group from scan matches and an empty
+    Subject Apps group. Guarded by a marker so a deliberately deleted
+    group is not resurrected on the next visit."""
+    meta = models.get_program_meta()
+    if meta.get("_seeded"):
+        return
+    groups = models.get_groups()
+    scanned = {r["name"].lower(): r["name"]
+               for r in (_scan_results.get("repos", []) if _scan_results else [])}
+
+    if EDUCATION_PROGRAM not in groups:
+        matched = [scanned[s] for s in _EDUCATION_SEED_REPOS if s in scanned]
+        models.set_group(EDUCATION_PROGRAM, matched)
+        models.log_program_event("seed_group", group=EDUCATION_PROGRAM, members=matched)
+    if SUBJECT_APPS_PROGRAM not in groups:
+        models.set_group(SUBJECT_APPS_PROGRAM, [])
+        models.log_program_event("seed_group", group=SUBJECT_APPS_PROGRAM, members=[])
+
+    if not meta.get(EDUCATION_PROGRAM, {}).get("notes"):
+        models.save_program_notes(EDUCATION_PROGRAM, _DEFAULT_EDUCATION_NOTES)
+    if not meta.get(SUBJECT_APPS_PROGRAM, {}).get("notes"):
+        models.save_program_notes(
+            SUBJECT_APPS_PROGRAM,
+            "Subject-specific education apps. Add members on the Projects "
+            "page (Manage Groups), then list any shared pieces here.",
+        )
+
+    meta = models.get_program_meta()
+    meta["_seeded"] = True
+    models.save_program_meta(meta)
+
+
+def _program_members(group_name: str) -> list[dict]:
+    groups = models.get_groups()
+    member_names = set(groups.get(group_name, []))
+    repos = _scan_results.get("repos", []) if _scan_results else []
+    return [r for r in repos if r["name"] in member_names]
+
+
+@app.route("/program")
+@_require_auth
+def program_view():
+    _seed_program_groups()
+    groups = models.get_groups()
+
+    requested = request.args.get("group")
+    if requested is not None and requested in groups:
+        active = requested
+    elif EDUCATION_PROGRAM in groups:
+        active = EDUCATION_PROGRAM
+    else:
+        active = sorted(groups)[0] if groups else ""
+
+    member_repos = _program_members(active) if active else []
+    member_names = models.get_groups().get(active, []) if active else []
+    members = program.assemble_members(
+        member_repos,
+        briefs=models.get_briefs(),
+        summaries=models.get_project_summaries(),
+        trackers=models.list_trackers(),
+    )
+    meta = models.get_program_meta().get(active, {}) if active else {}
+    notes = meta.get("notes", "")
+    pbrief = models.get_program_briefs().get(active) if active else None
+    stale = program.is_program_brief_stale(pbrief, member_repos, member_names)
+    generated_label = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    markdown = program.compose_markdown(active, notes, members, pbrief, generated_label) if active else ""
+
+    # Members in the group but missing from the latest scan (e.g. repo not
+    # created yet, or excluded) — shown so the user knows why they're absent.
+    scanned_names = {r["name"] for r in (_scan_results.get("repos", []) if _scan_results else [])}
+    missing_members = [n for n in member_names if n not in scanned_names]
+
+    return render_template(
+        "program.html",
+        scan_results=_scan_results,
+        groups=groups,
+        active_program=active,
+        members=members,
+        missing_members=missing_members,
+        notes=notes,
+        program_brief=pbrief,
+        brief_stale=stale,
+        markdown=markdown,
+    )
+
+
+@app.route("/program/notes", methods=["POST"])
+@_require_auth
+def program_notes():
+    group_name = (request.form.get("group") or "").strip()
+    notes = request.form.get("notes", "").strip()
+    if group_name not in models.get_groups():
+        flash(f'Unknown program "{group_name}".', "error")
+        return redirect(url_for("program_view"))
+    models.save_program_notes(group_name, notes)
+    models.log_program_event("save_notes", group=group_name, chars=len(notes))
+    flash("Infrastructure notes saved.", "success")
+    return redirect(url_for("program_view", group=group_name))
+
+
+@app.route("/program/generate", methods=["POST"])
+@_require_auth
+def program_generate():
+    creds = _get_credentials()
+    if not creds:
+        flash("Not authenticated.", "error")
+        return redirect(url_for("program_view"))
+    group_name = (request.form.get("group") or "").strip()
+    if group_name not in models.get_groups():
+        flash(f'Unknown program "{group_name}".', "error")
+        return redirect(url_for("program_view"))
+
+    member_repos = _program_members(group_name)
+    if not member_repos:
+        flash("This program has no scanned member projects yet — add repos "
+              "to the group on the Projects page, then re-scan.", "error")
+        return redirect(url_for("program_view", group=group_name))
+
+    members = program.assemble_members(
+        member_repos,
+        briefs=models.get_briefs(),
+        summaries=models.get_project_summaries(),
+        trackers=models.list_trackers(),
+    )
+    notes = models.get_program_meta().get(group_name, {}).get("notes", "")
+    model = models.get_ai_model()
+    context_text = program.build_program_context(group_name, notes, members)
+    models.log_program_event(
+        "generate_start", group=group_name, model=model,
+        members=[m["name"] for m in members], context_chars=len(context_text),
+    )
+
+    try:
+        brief = program.generate_program_brief(
+            api_key=creds["anthropic_key"],
+            program_name=group_name,
+            context_text=context_text,
+            model=model,
+        )
+    except Exception as e:
+        models.log_program_event(
+            "generate_error", group=group_name,
+            error=f"{type(e).__name__}: {str(e)[:300]}",
+        )
+        flash(f"Program brief generation failed: {type(e).__name__}: {str(e)[:200]}", "error")
+        return redirect(url_for("program_view", group=group_name))
+
+    usage = brief.pop("_usage", {})
+    if usage:
+        in_tok = usage.get("input_tokens", 0)
+        out_tok = usage.get("output_tokens", 0)
+        _session_cost.add(in_tok, out_tok, ai.estimate_cost(in_tok, out_tok, model=model))
+    brief["_members"] = sorted(m["name"] for m in members)
+    models.save_program_brief(group_name, brief)
+    models.log_program_event(
+        "generate_done", group=group_name, stage=brief.get("stage"),
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+    )
+    models.log_action("generate_program_brief", group_name, "all", f"stage={brief.get('stage')}")
+    flash(f'Program brief generated for "{group_name}".', "success")
+    return redirect(url_for("program_view", group=group_name))
 
 
 # --- Firestore Setup ---
@@ -1309,6 +1608,11 @@ def firestore_scan():
             r = futures[fut]
             try:
                 results.append(fut.result())
+            except gh.GitHubAuthError:
+                # Don't overwrite good saved detection data with "not_using"
+                # rows caused by a dead PAT — let the global handler show
+                # the remediation message instead.
+                raise
             except Exception as e:
                 results.append({
                     "owner": r["owner"],
@@ -1473,13 +1777,20 @@ def tracker_generate(owner, name):
         return redirect(url_for("tracker_view", owner=owner, name=name))
 
     repo_info = _resolve_repo(owner, name)
+    prior = models.get_tracker(owner, name)
+    if not repo_info and prior:
+        # Saved trackers stay reachable (and regenerable) after a restart
+        # with no scan — build minimal repo info from the tracker itself.
+        repo_info = {
+            "owner": owner,
+            "name": name,
+            "default_branch": prior.get("branch_at_verification") or "main",
+        }
     if not repo_info:
         flash("Repository not found in scan results. Run a scan first.", "error")
         return redirect(url_for("tracker_index"))
 
     default_branch = repo_info.get("default_branch", "main")
-    prior = models.get_tracker(owner, name)
-    prefs = models.get_preferences()
 
     # Per-generation model override from the toolbar dropdown (form field
     # "model"); falls back to the global Settings preference.
@@ -1487,7 +1798,7 @@ def tracker_generate(owner, name):
     if requested_model and requested_model in ai.VALID_MODELS:
         model = requested_model
     else:
-        model = prefs.get("ai_model", ai.DEFAULT_MODEL)
+        model = models.get_ai_model()
 
     models.log_tracker_event(
         "generate_start", owner=owner, repo=name, model=model,

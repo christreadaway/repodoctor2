@@ -107,6 +107,7 @@
         </div>
         <form method="POST" action="{{ url_for('settings') }}" onsubmit="return confirm('This will delete your encrypted credentials. You will need to re-enter both API keys. Continue?')">
             <input type="hidden" name="action" value="reset_credentials">
+            <input type="hidden" name="reset_token" value="{{ reset_token }}">
             <button type="submit" class="btn btn-danger">RESET CREDENTIALS</button>
         </form>
     </div>

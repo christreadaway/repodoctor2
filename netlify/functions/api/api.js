@@ -4,12 +4,13 @@
  */
 
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const serverless = require('serverless-http');
 const nunjucks = require('nunjucks');
 const cookieSession = require('cookie-session');
 
-const { GitHubClient, scanRepoLite } = require('./lib/github-client');
+const { GitHubClient, GitHubAuthError, scanRepoLite, fetchRepoDocs } = require('./lib/github-client');
 const models = require('./lib/models');
 const specCleaner = require('./lib/spec-cleaner');
 
@@ -38,12 +39,57 @@ env.addFilter('dateonly', (str) => {
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
+// SECURITY: never fall back to a constant signing key — anyone who reads the
+// repo could forge an authenticated session cookie. When FLASK_SECRET_KEY is
+// unset, derive a stable key from the other deployment secrets: a random
+// per-process key would differ across concurrent Lambda instances and bounce
+// users to /login whenever a request lands on a different instance.
+function sessionSigningKey() {
+  if (process.env.FLASK_SECRET_KEY) return process.env.FLASK_SECRET_KEY;
+  const material = [process.env.GITHUB_PAT, process.env.ANTHROPIC_API_KEY, process.env.SITE_PASSWORD]
+    .filter(Boolean).join('|');
+  if (material) {
+    console.warn('FLASK_SECRET_KEY is not set — deriving the session key from other env secrets. ' +
+      'Set FLASK_SECRET_KEY in the Netlify environment.');
+    return crypto.createHash('sha256').update('repodoctor-session-key:' + material).digest('hex');
+  }
+  console.warn('FLASK_SECRET_KEY is not set and no env secrets exist — using a random per-process key.');
+  return crypto.randomBytes(32).toString('hex');
+}
 app.use(cookieSession({
   name: 'rd_session',
-  keys: [process.env.FLASK_SECRET_KEY || 'repodoctor-dev-key-change-me'],
+  keys: [sessionSigningKey()],
   maxAge: 30 * 60 * 1000,
   sameSite: 'lax',
 }));
+
+/**
+ * Express 4 does not forward rejected promises from async handlers to error
+ * middleware — an unhandled rejection hangs the request until the function
+ * times out. Wrap every async route so failures flash + redirect instead.
+ */
+function asyncRoute(fn, redirectTo = '/') {
+  return async (req, res, next) => {
+    try {
+      await fn(req, res, next);
+    } catch (e) {
+      // Full stack to the Netlify function log — the flash below is a
+      // truncated one-liner and useless for actual debugging.
+      console.error(`Route ${req.method} ${req.path} failed:`, e);
+      if (e instanceof GitHubAuthError) {
+        const envMode = !!process.env.GITHUB_PAT;
+        req.flash('error',
+          'GitHub authentication failed — your Personal Access Token is no longer valid ' +
+          '(revoked, expired, or missing the repo scope). ' +
+          (envMode ? 'Update GITHUB_PAT in the Netlify environment and redeploy.'
+                   : 'Log out and re-enter a fresh token.'));
+      } else {
+        req.flash('error', `Unexpected error: ${String(e.message || e).substring(0, 200)}`);
+      }
+      if (!res.headersSent) res.redirect(redirectTo);
+    }
+  };
+}
 
 // Flash message middleware
 app.use((req, res, next) => {
@@ -98,13 +144,20 @@ app.get('/login', (req, res) => {
   res.render('login.html', { has_credentials: envMode });
 });
 
-app.post('/login', async (req, res) => {
+app.post('/login', asyncRoute(async (req, res) => {
   const envMode = !!process.env.GITHUB_PAT && !!process.env.ANTHROPIC_API_KEY;
   const sitePassword = process.env.SITE_PASSWORD || '';
 
   if (envMode) {
+    // SECURITY: an unset SITE_PASSWORD must not mean "no password" — that
+    // would let any visitor log in and read private repos on the deployer's
+    // PAT. Refuse until it's configured.
+    if (!sitePassword) {
+      req.flash('error', 'SITE_PASSWORD is not configured — set it in the Netlify environment before logging in.');
+      return res.redirect('/login');
+    }
     const entered = req.body.password || '';
-    if (sitePassword && entered !== sitePassword) {
+    if (entered !== sitePassword) {
       req.flash('error', 'Wrong password. Try again.');
       return res.redirect('/login');
     }
@@ -126,8 +179,8 @@ app.post('/login', async (req, res) => {
     req.flash('error', 'All fields are required.');
     return res.redirect('/login');
   }
-  if (password.length < 4) {
-    req.flash('error', 'Password must be at least 4 characters.');
+  if (password.length < 8) {
+    req.flash('error', 'Password must be at least 8 characters.');
     return res.redirect('/login');
   }
 
@@ -148,7 +201,7 @@ app.post('/login', async (req, res) => {
   req.session.github_user = userInfo.login || '';
   req.flash('success', `Welcome, ${userInfo.login}! Connected.`);
   return res.redirect('/');
-});
+}, '/login'));
 
 app.get('/logout', (req, res) => {
   githubClient = null;
@@ -166,7 +219,7 @@ app.get('/', requireAuth, (req, res) => {
   });
 });
 
-app.post('/scan', requireAuth, async (req, res) => {
+app.post('/scan', requireAuth, asyncRoute(async (req, res) => {
   if (!githubClient) {
     req.flash('error', 'Not authenticated with GitHub.');
     return res.redirect('/');
@@ -175,13 +228,8 @@ app.post('/scan', requireAuth, async (req, res) => {
   const prefs = models.getPreferences();
   const excluded = new Set(prefs.excluded_repos || []);
 
-  let repos;
-  try {
-    repos = await githubClient.getRepos();
-  } catch (e) {
-    req.flash('error', `GitHub API error: ${e.message}`);
-    return res.redirect('/');
-  }
+  // Failures (including a dead PAT) surface via the asyncRoute wrapper.
+  const repos = await githubClient.getRepos();
 
   const filteredRepos = repos.filter(r => !excluded.has(r.full_name) && !excluded.has(r.name));
 
@@ -194,6 +242,7 @@ app.post('/scan', requireAuth, async (req, res) => {
       try {
         return await scanRepoLite(githubClient, repo);
       } catch (e) {
+        if (e instanceof GitHubAuthError) throw e;
         return {
           owner: repo.owner.login,
           name: repo.name,
@@ -204,12 +253,16 @@ app.post('/scan', requireAuth, async (req, res) => {
           description: repo.description || '',
           created_at: repo.created_at || '',
           updated_at: repo.updated_at || '',
+          pushed_at: repo.pushed_at || '',
+          docs_updated: null,
           total_branch_count: 0,
           non_default_branch_count: 0,
+          henry_branch_count: 0,
+          non_henry_branch_count: 0,
           branch_names: [],
           required_files: {},
           files_present: 0,
-          files_total: 6,
+          files_total: 5,
           error: e.message,
         };
       }
@@ -217,24 +270,26 @@ app.post('/scan', requireAuth, async (req, res) => {
     results.push(...batchResults);
   }
 
-  results.sort((a, b) => (b.total_branch_count || 0) - (a.total_branch_count || 0));
+  // Sort + total by non-henry branch count, matching the Python dashboard.
+  results.sort((a, b) => (b.non_henry_branch_count || 0) - (a.non_henry_branch_count || 0));
 
   scanResults = {
     repos: results,
     total_repos: results.length,
-    total_branches: results.reduce((sum, r) => sum + (r.total_branch_count || 0), 0),
-    repos_missing_files: results.filter(r => (r.files_present || 0) < 4).length,
+    total_branches: results.reduce((sum, r) => sum + (r.non_henry_branch_count || 0), 0),
+    // "missing any required doc" — the required set is 5 files now.
+    repos_missing_files: results.filter(r => (r.files_present || 0) < (r.files_total || 5)).length,
   };
 
   models.saveScan(scanResults);
   models.logAction('scan', 'all', 'all', `Scanned ${results.length} repos, ${scanResults.total_branches} total branches`);
   req.flash('success', `Scan complete: ${results.length} repos, ${scanResults.total_branches} total branches found.`);
   return res.redirect('/');
-});
+}));
 
 // --- Repo Detail ---
 
-app.get('/repo/:owner/:name', requireAuth, async (req, res) => {
+app.get('/repo/:owner/:name', requireAuth, asyncRoute(async (req, res) => {
   const { owner, name } = req.params;
   if (!githubClient) {
     req.flash('error', 'Not authenticated with GitHub.');
@@ -251,27 +306,23 @@ app.get('/repo/:owner/:name', requireAuth, async (req, res) => {
   }
 
   const ref = repoInfo.default_branch || 'main';
-  const rootFiles = await githubClient.getRootFiles(owner, name, ref);
-  const fileMap = {};
-  for (const f of rootFiles) {
-    const fl = f.toLowerCase();
-    const dot = fl.lastIndexOf('.');
-    const stem = dot > 0 ? fl.substring(0, dot) : fl;
-    fileMap[stem] = f;
-  }
+  // Reuse the doc paths the scan already resolved; fall back to a fresh
+  // lookup for scans saved before actual_names was persisted.
+  const docs = await fetchRepoDocs(githubClient, owner, name, ref, {
+    maxChars: 10000,
+    actualNames: repoInfo.actual_names || null,
+  });
 
-  const specFiles = { PRODUCT_SPEC: null, SESSION_NOTES: null };
+  // Same three docs the Python route reads — without PROJECT_STATUS the
+  // What's Next extractor's highest-priority source was dead code here.
+  const specFiles = { PRODUCT_SPEC: null, PROJECT_STATUS: null, SESSION_NOTES: null };
   const rawSpecs = {};
-
   for (const key of Object.keys(specFiles)) {
-    const actualName = fileMap[key.toLowerCase()];
-    if (actualName) {
-      let content = await githubClient.getFileContent(owner, name, actualName, ref);
-      if (content) {
-        if (content.length > 10000) content = content.substring(0, 10000) + '\n\n... (truncated)';
-        rawSpecs[key] = content;
-        specFiles[key] = specCleaner.cleanMarkdown(content);
-      }
+    let content = docs[key.toLowerCase()];
+    if (content) {
+      if (content.length >= 10000) content += '\n\n... (truncated)';
+      rawSpecs[key] = content;
+      specFiles[key] = specCleaner.cleanMarkdown(content);
     }
   }
 
@@ -283,7 +334,7 @@ app.get('/repo/:owner/:name', requireAuth, async (req, res) => {
     whats_next: whatsNext,
     conversations: [],
   });
-});
+}));
 
 // --- Settings ---
 
@@ -340,7 +391,7 @@ app.get('/projects/generate', requireAuth, (req, res) => {
   res.redirect('/projects');
 });
 
-app.post('/projects/generate', requireAuth, async (req, res) => {
+app.post('/projects/generate', requireAuth, asyncRoute(async (req, res) => {
   if (!githubClient || !credentials) {
     req.flash('error', 'Not authenticated.');
     return res.redirect('/projects');
@@ -352,27 +403,29 @@ app.post('/projects/generate', requireAuth, async (req, res) => {
 
   const repos = scanResults.repos || [];
 
+  const aiModel = models.getPreferences().ai_model || 'claude-haiku-4-5-20251001';
+
   // Helper to generate summary for a single repo
   async function generateOneSummary(repo) {
     const { owner, name } = repo;
     const ref = repo.default_branch || 'main';
 
-    const rootFiles = await githubClient.getRootFiles(owner, name, ref);
-    const fileMap = {};
-    for (const f of rootFiles) {
-      const fl = f.toLowerCase();
-      const dot = fl.lastIndexOf('.');
-      const stem = dot > 0 ? fl.substring(0, dot) : fl;
-      fileMap[stem] = f;
-    }
-
-    const specContent = {};
-    for (const key of ['product_spec', 'business_spec', 'project_status', 'session_notes']) {
-      const actualName = fileMap[key];
-      if (actualName) {
-        const content = await githubClient.getFileContent(owner, name, actualName, ref);
-        if (content) specContent[key] = content.substring(0, 5000);
-      }
+    // GitHub fetches go inside try/catch too: a single rejected fetch would
+    // otherwise reject the whole Promise.all batch and hang the request.
+    let specContent = {};
+    try {
+      specContent = await fetchRepoDocs(githubClient, owner, name, ref, {
+        maxChars: 5000,
+        actualNames: repo.actual_names || null,
+      });
+    } catch (e) {
+      if (e instanceof GitHubAuthError) throw e;
+      models.saveProjectSummary(name, {
+        what_it_does: repo.description || `${name} — summary generation failed.`,
+        how_finished: 'Unknown — could not fetch repo docs.',
+        next_steps: [`Error: ${String(e.message || e).substring(0, 100)}`],
+      });
+      return 'skipped';
     }
 
     const contextParts = [];
@@ -400,7 +453,7 @@ app.post('/projects/generate', requireAuth, async (req, res) => {
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
+          model: aiModel,
           max_tokens: 500,
           messages: [{
             role: 'user',
@@ -415,7 +468,12 @@ app.post('/projects/generate', requireAuth, async (req, res) => {
       });
 
       const aiData = await aiResp.json();
-      let raw = aiData.content[0].text.trim();
+      if (!aiResp.ok) {
+        // Surface the API's real error instead of a TypeError on undefined.
+        throw new Error(aiData?.error?.message || `Anthropic API HTTP ${aiResp.status}`);
+      }
+      const textBlock = (aiData.content || []).find(b => b.type === 'text');
+      let raw = (textBlock?.text || '').trim();
       if (raw.startsWith('```')) {
         raw = raw.includes('\n') ? raw.split('\n').slice(1).join('\n') : raw.substring(3);
         if (raw.endsWith('```')) raw = raw.slice(0, -3).trim();
@@ -453,7 +511,7 @@ app.post('/projects/generate', requireAuth, async (req, res) => {
   req.flash('success', `Generated summaries for ${generated} projects (${skipped} skipped/fallback).`);
   models.logAction('generate_summaries', 'all', 'all', `Generated ${generated}, skipped ${skipped}`);
   return res.redirect('/projects');
-});
+}, '/projects'));
 
 // --- Mac Setup ---
 
@@ -467,7 +525,16 @@ app.get('/api/session-cost', requireAuth, (req, res) => {
   res.json(models.sessionCost.toDict());
 });
 
-app.get('/api/debug-files/:owner/:name', requireAuth, async (req, res) => {
+app.get('/api/debug-files/:owner/:name', requireAuth, async (req, res, next) => {
+  try {
+    await debugFiles(req, res);
+  } catch (e) {
+    console.error(`Route ${req.method} ${req.path} failed:`, e);
+    res.status(502).json({ error: String(e.message || e).substring(0, 300) });
+  }
+});
+
+async function debugFiles(req, res) {
   const { owner, name } = req.params;
   if (!githubClient) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -499,7 +566,7 @@ app.get('/api/debug-files/:owner/:name', requireAuth, async (req, res) => {
     files_present: Object.values(requiredFiles).filter(Boolean).length,
     files_total: Object.keys(requiredFiles).length,
   });
-});
+}
 
 // --- Export handler ---
 module.exports.handler = serverless(app);

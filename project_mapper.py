@@ -6,10 +6,13 @@ and NEVER sent to any API.
 """
 
 import json
+import logging
 import os
 import re
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 PROJECTS_DIR = os.path.join(os.path.dirname(__file__), "projects")
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
@@ -31,47 +34,78 @@ def _save_config(config: dict):
         json.dump(config, f, indent=2)
 
 
+# Largest single JSON we'll parse from an export zip. Real exports'
+# conversations.json (full message bodies) can run to hundreds of MB —
+# parsing that in one shot can exhaust memory on a laptop.
+MAX_EXPORT_JSON_BYTES = 200 * 1024 * 1024
+
+# How much of the export we keep per conversation is tiny (name, date,
+# 300-char excerpt), so the cap only guards the parse step.
+
+
 def parse_claude_export(zip_path: str) -> dict:
     """Parse a Claude data export zip. Returns parsed conversation data."""
     _ensure_dirs()
     conversations = []
+    skipped_files = []
 
     with zipfile.ZipFile(zip_path, "r") as zf:
         for name in zf.namelist():
             if not name.endswith(".json"):
                 continue
+            info = zf.getinfo(name)
+            if info.file_size > MAX_EXPORT_JSON_BYTES:
+                skipped_files.append(name)
+                continue
             try:
                 data = json.loads(zf.read(name))
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError, MemoryError):
                 continue
 
             # Handle both flat conversation lists and nested structures
             if isinstance(data, list):
                 for item in data:
-                    conv = _parse_conversation(item)
+                    conv = _try_parse(item)
                     if conv:
                         conversations.append(conv)
             elif isinstance(data, dict):
                 # Could be a single conversation or a wrapper
                 if "chat_messages" in data or "uuid" in data:
-                    conv = _parse_conversation(data)
+                    conv = _try_parse(data)
                     if conv:
                         conversations.append(conv)
                 elif isinstance(data.get("conversations"), list):
                     for item in data["conversations"]:
-                        conv = _parse_conversation(item)
+                        conv = _try_parse(item)
                         if conv:
                             conversations.append(conv)
 
     # Sort by date, most recent first
     conversations.sort(key=lambda c: c["date"], reverse=True)
 
-    # Save parsed data
+    # Save parsed data (compact — this file is machine-read only, and
+    # indenting a large list roughly doubles the write size)
     output_path = os.path.join(PROJECTS_DIR, "conversations.json")
     with open(output_path, "w") as f:
-        json.dump(conversations, f, indent=2)
+        json.dump(conversations, f)
 
-    return {"conversations": conversations, "count": len(conversations)}
+    return {
+        "conversations": conversations,
+        "count": len(conversations),
+        "skipped_files": skipped_files,
+    }
+
+
+def _try_parse(item) -> dict | None:
+    """One malformed entry must not abort the whole import — real exports
+    mix schema versions and tool-use blocks. Failures are logged so a
+    half-empty import is debuggable."""
+    try:
+        return _parse_conversation(item)
+    except Exception as e:
+        logger.warning("Skipped unparseable conversation entry (%s: %s)",
+                       type(e).__name__, e)
+        return None
 
 
 def _parse_conversation(item: dict) -> dict | None:
@@ -85,12 +119,14 @@ def _parse_conversation(item: dict) -> dict | None:
         # Try to extract from first message
         messages = item.get("chat_messages", [])
         if messages and isinstance(messages, list):
-            first = messages[0] if messages else {}
+            first = messages[0] if isinstance(messages[0], dict) else {}
             content = first.get("content", first.get("text", ""))
             if isinstance(content, list):
                 content = " ".join(
                     p.get("text", "") for p in content if isinstance(p, dict)
                 )
+            if not isinstance(content, str):
+                content = ""
             name = content[:120] if content else "Untitled conversation"
 
     # Extract project name
@@ -102,32 +138,34 @@ def _parse_conversation(item: dict) -> dict | None:
     elif "project_uuid" in item:
         project = item.get("project_title", "")
 
-    # Extract date
-    date_str = (
+    # Extract date. Real Claude exports carry ISO timestamps (offsets or
+    # microseconds+Z — fromisoformat handles every shape the old strptime
+    # list did); other export schemas use numeric epoch seconds. Falling
+    # back to "now" would stamp years-old chats with today's date and
+    # break sorting, so it's the last resort only.
+    date_raw = (
         item.get("created_at")
         or item.get("updated_at")
         or item.get("create_time")
         or ""
     )
-    try:
-        if date_str:
-            # Handle various date formats
-            for fmt in [
-                "%Y-%m-%dT%H:%M:%S.%fZ",
-                "%Y-%m-%dT%H:%M:%SZ",
-                "%Y-%m-%dT%H:%M:%S",
-                "%Y-%m-%d",
-            ]:
-                try:
-                    date = datetime.strptime(date_str[:26], fmt)
-                    break
-                except ValueError:
-                    continue
-            else:
-                date = datetime.now()
-        else:
-            date = datetime.now()
-    except Exception:
+    date = None
+    if isinstance(date_raw, (int, float)):
+        try:
+            date = datetime.fromtimestamp(date_raw, tz=timezone.utc).replace(tzinfo=None)
+        except (ValueError, OSError, OverflowError):
+            pass
+    elif date_raw:
+        try:
+            date = datetime.fromisoformat(str(date_raw).replace("Z", "+00:00"))
+            # Naive downstream code compares/sorts ISO strings; keep naive UTC.
+            if date.tzinfo is not None:
+                date = date.astimezone(timezone.utc).replace(tzinfo=None)
+        except (ValueError, TypeError):
+            pass
+    if date is None:
+        if date_raw:
+            logger.warning("Unrecognized conversation timestamp %r — using now()", date_raw)
         date = datetime.now()
 
     # Extract messages for excerpt
@@ -138,6 +176,8 @@ def _parse_conversation(item: dict) -> dict | None:
     excerpt = ""
     if isinstance(messages, list):
         for msg in messages:
+            if not isinstance(msg, dict):
+                continue
             sender = msg.get("sender") or msg.get("role") or ""
             if sender in ("human", "user"):
                 content = msg.get("content", msg.get("text", ""))
@@ -147,7 +187,7 @@ def _parse_conversation(item: dict) -> dict | None:
                         for p in content
                         if isinstance(p, dict) and p.get("type") == "text"
                     )
-                if content:
+                if content and isinstance(content, str):
                     excerpt = content[:300]
                     break
 

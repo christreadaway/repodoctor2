@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}RepoDoctor — Program{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Program</h1>
+    <div class="page-actions">
+        {% if active_program and members %}
+        <button type="button" class="btn btn-primary" id="copy-program-btn">COPY FOR CLAUDE CHAT</button>
+        <form method="POST" action="{{ url_for('program_generate') }}" class="inline-form">
+            <input type="hidden" name="group" value="{{ active_program }}">
+            <button type="submit" class="btn btn-secondary" data-loading-text="GENERATING…">
+                {% if program_brief %}REGENERATE PROGRAM BRIEF{% else %}GENERATE PROGRAM BRIEF{% endif %}
+            </button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first, then come back to roll your projects up into programs.</p>
+    </div>
+</div>
+{% else %}
+
+{% if groups %}
+<div class="group-bar">
+    <div class="group-tabs">
+        {% for gname, gRepos in groups.items() %}
+        <a href="{{ url_for('program_view', group=gname) }}"
+           class="group-tab {% if active_program == gname %}active{% endif %}">
+           {{ gname }} <span class="group-count">{{ gRepos|length }}</span>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<p class="projects-hint">
+    A program is a set of projects that ship together — like the Education suite —
+    viewed as ONE initiative: shared infrastructure, cross-project state, and what's
+    left across all of it. Membership is managed in
+    <a href="{{ url_for('projects') }}">Projects &rarr; Manage Groups</a>; the pieces
+    that aren't repos (local LLMs, shared services) go in the infrastructure notes below.
+    The brief is built from your existing per-project briefs — generate those on the
+    <a href="{{ url_for('briefing_view') }}">Briefing</a> page first for the richest result.
+</p>
+
+<div class="briefing-stats">
+    <span class="briefing-stat"><strong>{{ members|length }}</strong> project{% if members|length != 1 %}s{% endif %} in this program</span>
+    {% if program_brief %}
+    <span class="briefing-stat briefing-stat-ok">Stage: <strong>{{ program_brief.stage }}</strong></span>
+    <span class="briefing-stat">Brief generated {{ program_brief._generated_at[:10] }}</span>
+    {% if brief_stale %}<span class="briefing-stat briefing-stat-warn"><strong>STALE</strong> — membership or code changed since</span>{% endif %}
+    {% else %}
+    <span class="briefing-stat briefing-stat-missing">No program brief yet</span>
+    {% endif %}
+</div>
+
+<textarea id="program-markdown" hidden readonly>{{ markdown }}</textarea>
+
+{% if missing_members %}
+<div class="projects-hint">
+    <p>In this group but not in the latest scan (not created yet, excluded, or renamed):
+    {% for n in missing_members %}<span class="chip chip-code">{{ n }}</span> {% endfor %}</p>
+</div>
+{% endif %}
+
+{% if not members %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scanned projects in {{ active_program or "this program" }} yet.</h2>
+        <p>Add repos to the group in <a href="{{ url_for('projects') }}">Projects &rarr; Manage Groups</a>. Repos that don't exist on GitHub yet will appear here automatically once created and scanned.</p>
+    </div>
+</div>
+{% else %}
+
+{# --- Member projects --- #}
+<div class="projects-grid">
+    {% for m in members %}
+    <div class="project-card {% if m.has_brief %}has-summary{% endif %}">
+        <div class="project-card-header">
+            <a href="{{ url_for('repo_detail', owner=m.owner, name=m.name) }}" class="project-name">{{ m.name }}</a>
+            <div class="project-meta">
+                <span class="chip chip-stage-{{ m.stage|lower }}">{{ m.stage|upper }}</span>
+                {% if m.open_p0 %}<span class="chip chip-p0">{{ m.open_p0 }} P0</span>{% endif %}
+            </div>
+        </div>
+        <div class="project-section">
+            <p class="project-section-text">{{ m.one_liner }}</p>
+        </div>
+        <div class="briefing-card-footer">
+            <span class="briefing-facts">
+                Pushed {{ m.last_push }}
+                {%- if not m.has_brief %} · no per-project brief yet{% endif %}
+            </span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{# --- Infrastructure notes --- #}
+{% if active_program %}
+<div class="settings-card program-notes-card">
+    <h2>Infrastructure &amp; components (not repos)</h2>
+    <p class="text-secondary">The pieces of this program that don't live in a GitHub repo — local LLMs, shared data layers, manual services. The AI reads this when writing the program brief.</p>
+    <form method="POST" action="{{ url_for('program_notes') }}">
+        <input type="hidden" name="group" value="{{ active_program }}">
+        <div class="form-group">
+            <textarea name="notes" rows="4" placeholder="e.g. A local LLM runs familygraph; beacon ships its own local LLM.">{{ notes }}</textarea>
+        </div>
+        <button type="submit" class="btn btn-secondary btn-sm">SAVE NOTES</button>
+    </form>
+</div>
+{% endif %}
+
+{# --- The program brief --- #}
+{% if program_brief %}
+<div class="settings-card program-brief-card">
+    <h2>{{ active_program }} — program brief</h2>
+
+    {% if program_brief.what_it_is %}
+    <div class="project-section">
+        <div class="project-section-label">What this program is</div>
+        <p class="project-section-text">{{ program_brief.what_it_is }}</p>
+    </div>
+    {% endif %}
+
+    {% if program_brief.architecture %}
+    <div class="project-section">
+        <div class="project-section-label">How the pieces fit</div>
+        <p class="project-section-text">{{ program_brief.architecture }}</p>
+    </div>
+    {% endif %}
+
+    {% set where = [program_brief.stage_note, program_brief.where_we_are]|select|join(' ') %}
+    {% if where %}
+    <div class="project-section">
+        <div class="project-section-label">Where we are — {{ program_brief.stage }}</div>
+        <p class="project-section-text">{{ where }}</p>
+    </div>
+    {% endif %}
+
+    {% if program_brief.whats_built %}
+    <div class="project-section">
+        <div class="project-section-label">What's built</div>
+        <ul class="project-next-steps">
+            {% for item in program_brief.whats_built %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if program_brief.whats_left %}
+    <div class="project-section">
+        <div class="project-section-label">What's left (program-wide)</div>
+        <ul class="project-next-steps">
+            {% for item in program_brief.whats_left %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if program_brief.open_decisions %}
+    <div class="project-section">
+        <div class="project-section-label briefing-label-decisions">Open decisions (you)</div>
+        <ul class="project-next-steps">
+            {% for item in program_brief.open_decisions %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if program_brief.risks %}
+    <div class="project-section">
+        <div class="project-section-label">Cross-project risks &amp; dependencies</div>
+        <ul class="project-next-steps">
+            {% for item in program_brief.risks %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+</div>
+{% elif members %}
+<div class="projects-hint">
+    <p>Click <strong>GENERATE PROGRAM BRIEF</strong> above — Claude reads the per-project
+    briefs, tracker facts, and your infrastructure notes (one API call, no GitHub fetches)
+    and writes the cross-project rollup: how the pieces fit, program-wide next steps,
+    and the dependencies a per-project view can't show.</p>
+</div>
+{% endif %}
+
+{% endif %}
+
+<script>
+(function () {
+    var copyBtn = document.getElementById('copy-program-btn');
+    var source = document.getElementById('program-markdown');
+    if (copyBtn && source) {
+        copyBtn.addEventListener('click', function () {
+            window.copyToClipboard(source.value, copyBtn);
+        });
+    }
+})();
+</script>
+{% endblock %}

@@ -21,6 +21,7 @@
         </form>
         <form method="POST" action="{{ url_for('login_reset') }}" class="reset-creds-form"
               onsubmit="return confirm('Delete the saved encrypted credentials? You will need to re-enter your GitHub PAT and Anthropic key.');">
+            <input type="hidden" name="reset_token" value="{{ reset_token }}">
             <button type="submit" class="btn btn-secondary btn-full">RESET CREDENTIALS</button>
             <p class="text-secondary login-hint">
                 Use this if your GitHub PAT was revoked/expired, you forgot
@@ -47,7 +48,7 @@
             <div class="form-group">
                 <label for="password">Choose a Password</label>
                 <input type="password" id="password" name="password" required
-                       placeholder="Min 4 characters — encrypts your keys locally">
+                       placeholder="Min 8 characters — encrypts your keys locally">
                 <span class="form-hint">This password encrypts both keys on your machine. Not sent anywhere.</span>
             </div>
             <button type="submit" class="btn btn-primary btn-full">SAVE &amp; CONNECT</button>

@@ -38,7 +38,7 @@ VENDOR_DIRS = {
 # Truncation budgets — keep prompt under ~50k input tokens on Haiku and
 # leave plenty of output room. Complex repos (parentpoint, catholicevents)
 # can push the output to 12K+ tokens once next-action prompts, modules,
-# and recent_changes are populated, so generation runs with max_tokens=16000.
+# and recent_changes are populated, so generation runs with max_tokens=32000.
 MAX_DOC_CHARS = 6000
 MAX_TREE_PATHS = 200
 MAX_COMMITS = 40
@@ -61,7 +61,7 @@ Hard rules:
    - priority / build_priority / roll_priority / next_action.priority: "P0" | "P1" | "P2" | "P3" | "—"
    - feature.status: "Proposed" | "In Discussion" | "In Progress" | "Shipped" | "Abandoned"
    - effort: "XS" | "S" | "M" | "L" | "XL"
-   - next_action.status: "todo" | "in_progress" | "awaiting_deploy" | "shipped"
+   - next_action.status: "todo" | "in_progress" | "awaiting_deploy" | "shipped" | "blocked" | "dismissed" ("blocked" and "dismissed" are user-set — preserve them per rule 2a, never emit them yourself for new rows)
    - change.kind: "shipped" | "unblocked" | "doc" | "fix" | "blocked"
    - external_system.mode: "Core" | "Integrate" | "Replace" | "Optional"
 7. Be ruthless about scope. HARD CAPS — exceeding any of these is a failure of the task:
@@ -157,8 +157,10 @@ def gather_repo_inputs(
         if p.endswith(("/.gitkeep",)) or p == ".gitignore":
             continue
         filtered.append(p)
-    # Bias toward source/template/config dirs over random noise
-    filtered.sort()
+    # Shallowest paths first so root + top-level source/template/config files
+    # survive the cap; a plain alphabetical sort could fill all 200 slots
+    # with docs/assets and leave whole source dirs invisible to the model.
+    filtered.sort(key=lambda p: (p.count("/"), p))
     inputs["file_tree"] = filtered[:MAX_TREE_PATHS]
     inputs["file_tree_truncated"] = len(filtered) > MAX_TREE_PATHS
 
