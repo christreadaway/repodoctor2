@@ -19,7 +19,7 @@ import logging
 
 import anthropic
 
-from ai_analyzer import DEFAULT_MODEL, extract_json_object, extract_response_text
+from ai_analyzer import DEFAULT_MODEL, extract_json_object, extract_response_text, thinking_kwargs
 from briefing import (
     UNKNOWN_STAGE,
     _parse_ts,
@@ -142,6 +142,7 @@ def generate_program_brief(api_key: str, program_name: str, context_text: str,
         model=model,
         max_tokens=2500,
         system=SYSTEM_PROMPT,
+        **thinking_kwargs(model),
         messages=[{
             "role": "user",
             "content": (

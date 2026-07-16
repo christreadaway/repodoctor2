@@ -14,10 +14,24 @@ import anthropic
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 MODEL_CHOICES = [
     ("claude-haiku-4-5-20251001", "Haiku 4.5 — Fastest, cheapest (~$1/M input) — Recommended"),
-    ("claude-sonnet-4-5-20250929", "Sonnet 4.5 — Balanced quality & cost (~$3/M input)"),
-    ("claude-opus-4-6", "Opus 4.6 — Most capable, highest cost (~$5/M input)"),
+    ("claude-sonnet-5", "Sonnet 5 — Balanced quality & cost (~$3/M input; intro ~$2/M through Aug 2026)"),
+    ("claude-opus-4-8", "Opus 4.8 — Most capable, highest cost (~$5/M input)"),
 ]
 VALID_MODELS = {model_id for model_id, _ in MODEL_CHOICES}
+
+
+def thinking_kwargs(model: str) -> dict:
+    """Extra request kwargs to keep AI responses fast and untruncated.
+
+    Sonnet 5 runs adaptive thinking by DEFAULT whenever the `thinking` field
+    is omitted — that spends output tokens and, under the small max_tokens
+    budgets in this app, can eat the budget and truncate the JSON we need.
+    Disable thinking so behavior matches the prior Sonnet 4.5. Opus 4.8 and
+    Haiku 4.5 already default to no thinking, so they get nothing extra
+    (passing `disabled` to Haiku 4.5 is avoided intentionally)."""
+    if "sonnet-5" in model:
+        return {"thinking": {"type": "disabled"}}
+    return {}
 
 SYSTEM_PROMPT = """You are a Git branch analyst helping a non-developer understand their repository branches. Your job is to analyze branch data and produce clear, actionable recommendations.
 
@@ -111,7 +125,9 @@ def estimate_tokens(branch_data: dict, spec_text: str | None = None) -> int:
 def estimate_cost(input_tokens: int, output_tokens: int = 1000, model: str = DEFAULT_MODEL) -> float:
     """Estimate cost in USD. Rough estimates based on public pricing.
 
-    Per MTok: Opus 4.6 $5/$25, Sonnet 4.5 $3/$15, Haiku 4.5 $1/$5.
+    Per MTok: Opus 4.8 $5/$25, Sonnet 5 $3/$15 (intro $2/$10 through
+    Aug 2026 — we bill at the $3/$15 sticker to stay conservative),
+    Haiku 4.5 $1/$5.
     """
     if "opus" in model:
         input_cost = input_tokens * 5.0 / 1_000_000
@@ -197,6 +213,7 @@ def analyze_branch(
         max_tokens=2000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
+        **thinking_kwargs(model),
     )
 
     response_text = extract_response_text(message)

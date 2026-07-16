@@ -416,17 +416,31 @@ class TestAIAnalyzer(unittest.TestCase):
 
     def test_estimate_cost_sonnet(self):
         """Cost estimation for Sonnet model."""
-        cost = ai.estimate_cost(1000, 500, "claude-sonnet-4-5-20250929")
+        cost = ai.estimate_cost(1000, 500, "claude-sonnet-5")
         self.assertGreater(cost, 0)
         self.assertLess(cost, 1.0)
 
     def test_estimate_cost_haiku_cheapest(self):
         """Haiku model is cheapest."""
         haiku_cost = ai.estimate_cost(1000, 500, "claude-haiku-4-5-20251001")
-        sonnet_cost = ai.estimate_cost(1000, 500, "claude-sonnet-4-5-20250929")
-        opus_cost = ai.estimate_cost(1000, 500, "claude-opus-4-6")
+        sonnet_cost = ai.estimate_cost(1000, 500, "claude-sonnet-5")
+        opus_cost = ai.estimate_cost(1000, 500, "claude-opus-4-8")
         self.assertGreater(sonnet_cost, haiku_cost)
         self.assertGreater(opus_cost, sonnet_cost)
+
+    def test_thinking_kwargs_disables_for_sonnet5(self):
+        """Sonnet 5 must get thinking disabled (it defaults to adaptive,
+        which would spend tokens and truncate JSON under our max_tokens)."""
+        self.assertEqual(
+            ai.thinking_kwargs("claude-sonnet-5"),
+            {"thinking": {"type": "disabled"}},
+        )
+
+    def test_thinking_kwargs_empty_for_others(self):
+        """Opus 4.8 and Haiku 4.5 already default to no thinking — no extra
+        kwargs (and passing 'disabled' to Haiku 4.5 is intentionally avoided)."""
+        self.assertEqual(ai.thinking_kwargs("claude-opus-4-8"), {})
+        self.assertEqual(ai.thinking_kwargs("claude-haiku-4-5-20251001"), {})
 
     def test_build_analysis_prompt(self):
         """Build prompt includes all required context."""
