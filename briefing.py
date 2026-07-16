@@ -20,7 +20,7 @@ import logging
 import anthropic
 
 import github_client as gh
-from ai_analyzer import DEFAULT_MODEL, extract_json_object, extract_response_text
+from ai_analyzer import DEFAULT_MODEL, extract_json_object, extract_response_text, thinking_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +171,7 @@ def generate_brief(
         max_tokens=2500,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
+        **thinking_kwargs(model),
     )
     raw = extract_response_text(message)
     brief = normalize_brief(extract_json_object(raw))

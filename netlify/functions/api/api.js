@@ -455,6 +455,11 @@ app.post('/projects/generate', requireAuth, asyncRoute(async (req, res) => {
         body: JSON.stringify({
           model: aiModel,
           max_tokens: 500,
+          // Sonnet 5 runs adaptive thinking by default when `thinking` is
+          // omitted, which spends output tokens and can truncate our JSON
+          // under this 500-token budget. Disable it. Opus 4.8 / Haiku 4.5
+          // already default to no thinking.
+          ...(aiModel.includes('sonnet-5') ? { thinking: { type: 'disabled' } } : {}),
           messages: [{
             role: 'user',
             content: `Project: ${name}\n\n${contextText}\n\n` +

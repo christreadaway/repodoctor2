@@ -725,6 +725,7 @@ def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
     response = ai_client.messages.create(
         model=model,
         max_tokens=500,
+        **ai.thinking_kwargs(model),
         messages=[{
             "role": "user",
             "content": (
@@ -2014,7 +2015,7 @@ def tracker_action_status(owner, name, action_id):
 #         return jsonify({"error": "Branch not found in scan results"}), 404
 #
 #     prefs = models.get_preferences()
-#     model = prefs.get("ai_model", "claude-sonnet-4-5-20250929")
+#     model = prefs.get("ai_model", "claude-sonnet-5")
 #     spec_text = models.get_spec(repo_name)
 #     local_root = prefs.get("local_root", "~/claudesync2")
 #     local_path = f"{local_root}/{repo_name}"
@@ -2079,7 +2080,7 @@ def tracker_action_status(owner, name, action_id):
 #     spec_text = models.get_spec(repo_name)
 #     tokens = ai.estimate_tokens(branch_data, spec_text)
 #     prefs = models.get_preferences()
-#     model = prefs.get("ai_model", "claude-sonnet-4-5-20250929")
+#     model = prefs.get("ai_model", "claude-sonnet-5")
 #     cost = ai.estimate_cost(tokens, 1000, model)
 #
 #     return jsonify({"estimated_tokens": tokens, "estimated_cost": cost, "model": model})

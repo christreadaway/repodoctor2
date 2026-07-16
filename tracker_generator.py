@@ -24,7 +24,7 @@ import anthropic
 import github_client as gh
 import tracker_data as td
 import firestore_detector
-from ai_analyzer import DEFAULT_MODEL, extract_json_object
+from ai_analyzer import DEFAULT_MODEL, extract_json_object, thinking_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -353,6 +353,7 @@ def generate_tracker(
             max_tokens=32000,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
+            **thinking_kwargs(model),
         ) as stream:
             chunks: list[str] = []
             for piece in stream.text_stream:
