@@ -70,6 +70,16 @@ def _load_or_create_secret_key() -> str:
 
 app = Flask(__name__)
 app.secret_key = _load_or_create_secret_key()
+# Harden the session cookie. HttpOnly keeps client JS from reading it;
+# SameSite=Lax stops other sites from riding a logged-in session with
+# cross-site POSTs (Chrome/Firefox default to Lax, but Safari does not — and
+# this app runs on a Mac). SESSION_COOKIE_SECURE is deliberately left off: the
+# local app is served over http://127.0.0.1, where a Secure cookie is never
+# sent, which would break login.
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
 # Anti-CSRF token for the destructive credential-reset endpoints. /login/reset
 # is deliberately reachable without auth (recovery from a revoked PAT), which
@@ -2280,6 +2290,10 @@ def tracker_action_status(owner, name, action_id):
 
 if __name__ == "__main__":
     import logging
-    logging.basicConfig(level=logging.DEBUG)
+    # Werkzeug's debug mode exposes an interactive, code-executing console on
+    # error pages — handy for a quick local hack, dangerous for an app holding
+    # a GitHub PAT. Default it OFF; opt in with REPODOCTOR_DEBUG=1 when needed.
+    debug_mode = os.environ.get("REPODOCTOR_DEBUG", "").lower() in ("1", "true", "yes")
+    logging.basicConfig(level=logging.DEBUG if debug_mode else logging.INFO)
     models._ensure_dirs()
-    app.run(host="127.0.0.1", port=5001, debug=True)
+    app.run(host="127.0.0.1", port=5001, debug=debug_mode)
