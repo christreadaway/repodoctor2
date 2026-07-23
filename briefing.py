@@ -122,9 +122,11 @@ def tracker_facts(tracker: dict | None) -> str:
     if modules:
         counts: dict[str, int] = {}
         for m in modules:
-            s = m.get("status", "?")
+            s = m.get("status") or "?"
             counts[s] = counts.get(s, 0) + 1
-        summary = ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
+        # str-key the sort: a hand-edited tracker with a null/non-string status
+        # would otherwise make sorted() compare None against str and raise.
+        summary = ", ".join(f"{v} {k}" for k, v in sorted(counts.items(), key=lambda kv: str(kv[0])))
         lines.append(f"Modules: {len(modules)} total ({summary})")
 
     open_actions = open_tracker_actions(tracker)
@@ -174,7 +176,15 @@ def generate_brief(
         **thinking_kwargs(model),
     )
     raw = extract_response_text(message)
-    brief = normalize_brief(extract_json_object(raw))
+    # An AI refusal (empty text) or prose/truncated output makes
+    # extract_json_object raise; degrade to a normalized empty brief instead of
+    # failing the whole generation (mirrors ai_analyzer.analyze_branch).
+    # json.JSONDecodeError is a ValueError subclass, so this catches both.
+    try:
+        parsed = extract_json_object(raw)
+    except ValueError:
+        parsed = {}
+    brief = normalize_brief(parsed)
     brief["_usage"] = {
         "input_tokens": message.usage.input_tokens,
         "output_tokens": message.usage.output_tokens,

@@ -3,6 +3,7 @@ Data models and local storage for RepoDoctor.
 Handles scan history, analysis cache, action log, and preferences.
 """
 
+import collections
 import datetime
 import json
 import logging
@@ -119,13 +120,30 @@ def save_preferences(prefs: dict):
     _save_json(PREFS_PATH, prefs)
 
 
+def update_preferences(mutate) -> dict:
+    """Load -> mutate -> save preferences under the store lock, so two requests
+    writing prefs at once (e.g. a settings save racing a group switch in
+    another tab) don't silently lose each other's update. `mutate(prefs)` edits
+    in place."""
+    with _STORE_LOCK:
+        prefs = get_preferences()
+        mutate(prefs)
+        save_preferences(prefs)
+        return prefs
+
+
 # --- Scan History ---
 
 SCAN_PATH = os.path.join(DATA_DIR, "scan_history.json")
 
 
 def get_scan_history() -> dict:
-    return _load_json(SCAN_PATH) or {"scans": []}
+    data = _load_json(SCAN_PATH)
+    # Tolerate a corrupt/hand-edited file that isn't a dict with a list
+    # "scans" — otherwise save_scan/get_latest_scan raise on the bad shape.
+    if isinstance(data, dict) and isinstance(data.get("scans"), list):
+        return data
+    return {"scans": []}
 
 
 def save_scan(scan_data: dict):
@@ -178,7 +196,10 @@ def get_action_log() -> list:
     data = _load_json(ACTION_LOG_PATH)
     if isinstance(data, list):
         return data
-    return data.get("actions", [])
+    if isinstance(data, dict):
+        actions = data.get("actions", [])
+        return actions if isinstance(actions, list) else []
+    return []
 
 
 def log_action(action_type: str, repo: str, branch: str, details: str = ""):
@@ -327,7 +348,7 @@ def save_firestore_data(repos: list[dict]):
     """Save a freshly-scanned set of detection results."""
     payload = {
         "_scanned_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "repos": {r["name"]: r for r in repos},
+        "repos": {r["name"]: r for r in repos if r.get("name")},
     }
     os.makedirs(USER_DATA_DIR, exist_ok=True)
     _save_json(FIRESTORE_DATA_PATH, payload)
@@ -490,6 +511,20 @@ def save_tracker(owner: str, repo: str, tracker: dict):
     _save_json(_tracker_path(owner, repo), tracker)
 
 
+def update_tracker(owner: str, repo: str, mutate) -> dict | None:
+    """Load -> mutate -> save a tracker atomically under the store lock, so a
+    status click and a concurrent regeneration (or two status clicks) can't
+    lose each other's write. `mutate(tracker)` edits in place; returns the
+    saved tracker, or None if the tracker doesn't exist."""
+    with _STORE_LOCK:
+        tracker = get_tracker(owner, repo)
+        if tracker is None:
+            return None
+        mutate(tracker)
+        save_tracker(owner, repo, tracker)
+        return tracker
+
+
 def list_trackers() -> dict[str, dict]:
     """Return {f'{owner}/{repo}': tracker_dict} for every saved tracker."""
     _ensure_dirs()
@@ -528,6 +563,25 @@ TRACKER_LOG_PATH = os.path.join(DATA_DIR, "logs", "tracker.log")
 BRIEFING_LOG_PATH = os.path.join(DATA_DIR, "logs", "briefing.log")
 
 
+# Event logs are append-only; cap growth so they don't balloon on a
+# long-running deployment. When a file passes the byte cap, rewrite it keeping
+# only the newest _LOG_KEEP_LINES lines.
+_LOG_MAX_BYTES = 2_000_000
+_LOG_KEEP_LINES = 5000
+
+
+def _truncate_log(path: str, keep: int):
+    try:
+        with open(path, "r") as f:
+            tail = collections.deque(f, maxlen=keep)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            f.writelines(tail)
+        os.replace(tmp, path)
+    except OSError as e:
+        logger.warning("event log truncate failed (%s): %s", path, e)
+
+
 def _append_log_event(path: str, event: str, fields: dict):
     _ensure_dirs()
     record = {
@@ -538,6 +592,8 @@ def _append_log_event(path: str, event: str, fields: dict):
     try:
         with open(path, "a") as f:
             f.write(json.dumps(record, default=str) + "\n")
+        if os.path.getsize(path) > _LOG_MAX_BYTES:
+            _truncate_log(path, _LOG_KEEP_LINES)
     except OSError as e:
         logger.warning("event log write failed (%s): %s", path, e)
 
@@ -546,12 +602,14 @@ def _tail_log(path: str, n: int) -> list[dict]:
     if not os.path.exists(path):
         return []
     try:
+        # deque(maxlen=n) keeps only the last n lines in memory instead of
+        # loading the whole (potentially multi-MB) file via readlines().
         with open(path, "r") as f:
-            lines = f.readlines()
+            lines = collections.deque(f, maxlen=n)
     except OSError:
         return []
     out: list[dict] = []
-    for line in lines[-n:]:
+    for line in lines:
         line = line.strip()
         if not line:
             continue

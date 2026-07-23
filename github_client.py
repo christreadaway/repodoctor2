@@ -185,7 +185,9 @@ class GitHubClient:
         if resp.status_code != 200:
             return None
         data = resp.json()
-        if data.get("encoding") == "base64" and data.get("content"):
+        # A directory path returns a JSON array, not an object; guard the shape
+        # so .get() doesn't raise AttributeError on a list.
+        if isinstance(data, dict) and data.get("encoding") == "base64" and data.get("content"):
             try:
                 return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
             except Exception:
@@ -350,7 +352,9 @@ class GitHubClient:
         if resp.status_code == 200:
             commits = resp.json()
             if commits:
-                return commits[0]["commit"]["committer"]["date"]
+                commit = commits[0].get("commit") or {}
+                committer = commit.get("committer") or {}
+                return committer.get("date")
         return None
 
     def get_last_commit_date(self, owner: str, repo: str, ref: str | None = None) -> str | None:
@@ -365,7 +369,9 @@ class GitHubClient:
         if resp.status_code == 200:
             commits = resp.json()
             if commits:
-                return commits[0]["commit"]["committer"]["date"]
+                commit = commits[0].get("commit") or {}
+                committer = commit.get("committer") or {}
+                return committer.get("date")
         return None
 
     def get_default_branch_commits(self, owner: str, repo: str, default_branch: str, count: int = 10) -> list[dict]:

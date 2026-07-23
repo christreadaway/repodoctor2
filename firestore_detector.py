@@ -15,7 +15,22 @@ firestore.indexes.json). All work is read-only.
 import json
 import logging
 
+from github_client import GitHubAuthError
+
 logger = logging.getLogger(__name__)
+
+
+def _safe_file(client, owner: str, name: str, path: str, ref) -> str:
+    """Fetch one file's content, treating a transient per-file failure as
+    'signal absent' ("") so a single bad fetch doesn't discard the whole repo's
+    detection and overwrite prior good data. Auth failures still propagate."""
+    try:
+        return client.get_file_content(owner, name, path, ref=ref) or ""
+    except GitHubAuthError:
+        raise
+    except Exception as e:
+        logger.warning("firestore: file fetch failed (%s in %s/%s): %s", path, owner, name, e)
+        return ""
 
 
 # Files we look for anywhere in the tree (shallowest match wins).
@@ -170,30 +185,30 @@ def detect_firestore_status(client, owner: str, name: str, ref: str) -> dict:
     firebase_json_has_firestore = False
 
     if firebaserc_path:
-        content = client.get_file_content(owner, name, firebaserc_path, ref=ref) or ""
+        content = _safe_file(client, owner, name, firebaserc_path, ref)
         project_id = _extract_project_id(content)
 
     if firebase_json_path:
-        content = client.get_file_content(owner, name, firebase_json_path, ref=ref) or ""
+        content = _safe_file(client, owner, name, firebase_json_path, ref)
         site_domain = _extract_hosting_site(content)
         firebase_json_has_firestore = _firebase_json_mentions_firestore(content)
 
     if firestore_indexes_path:
-        content = client.get_file_content(owner, name, firestore_indexes_path, ref=ref) or ""
+        content = _safe_file(client, owner, name, firestore_indexes_path, ref)
         indexes_count = _count_indexes(content)
 
     js_deps: list[str] = []
     if package_json_path:
-        content = client.get_file_content(owner, name, package_json_path, ref=ref) or ""
+        content = _safe_file(client, owner, name, package_json_path, ref)
         js_deps = _matched_js_deps(content)
 
     py_deps: list[str] = []
     if requirements_path or pyproject_path:
         text = ""
         if requirements_path:
-            text += (client.get_file_content(owner, name, requirements_path, ref=ref) or "") + "\n"
+            text += _safe_file(client, owner, name, requirements_path, ref) + "\n"
         if pyproject_path:
-            text += client.get_file_content(owner, name, pyproject_path, ref=ref) or ""
+            text += _safe_file(client, owner, name, pyproject_path, ref)
         py_deps = _matched_py_deps(text)
 
     indicators = []
