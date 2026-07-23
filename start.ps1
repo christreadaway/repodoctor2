@@ -8,9 +8,24 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  RepoDoctor2 - Starting up..." -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
+# Make sure git is installed
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    Write-Host "`nERROR: Git is not installed." -ForegroundColor Red
+    Write-Host "Install it from https://git-scm.com/downloads (or run: winget install -e --id Git.Git)," -ForegroundColor Red
+    Write-Host "close this window, reopen PowerShell, and run .\start.ps1 again." -ForegroundColor Red
+    Read-Host "Press Enter to close"
+    exit 1
+}
+
 # Pull latest code
 Write-Host "`nPulling latest code from main..." -ForegroundColor Yellow
 git pull origin main
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`nERROR: git pull failed (network issue, or local edits blocking the merge)." -ForegroundColor Red
+    Write-Host "See GET_LATEST_PC.md for how to fix, then run .\start.ps1 again." -ForegroundColor Red
+    Read-Host "Press Enter to close"
+    exit 1
+}
 
 # Make sure a real Python is installed (the Windows Store alias is not one)
 $pythonCmd = Get-Command python -ErrorAction SilentlyContinue

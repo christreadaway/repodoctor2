@@ -1,8 +1,10 @@
 # Run RepoDoctor Locally — One Paste
 
-Pull the latest code from `main` and launch the app. Copy the whole block for your computer, paste it, press Enter. Your browser opens to **http://127.0.0.1:5001**.
+Copy the whole block for your computer, paste it, press Enter. Works whether this is a brand-new computer or you've run it here a hundred times before — same command every time. Your browser opens to **http://127.0.0.1:5001**.
 
 Press **Ctrl + C** in the terminal window to stop the server.
+
+First run takes 2-5 minutes (installing Python/Git and dependencies). Every run after that takes a few seconds.
 
 ---
 
@@ -11,10 +13,14 @@ Press **Ctrl + C** in the terminal window to stop the server.
 Open **Terminal** (Cmd+Space → type `terminal` → Enter), paste this, press Enter:
 
 ```bash
-cd ~/RepoDoctor2 && git pull origin main && ./start.command
+xcode-select --install 2>/dev/null
+cd ~
+if [ ! -d "RepoDoctor2" ]; then git clone https://github.com/christreadaway/repodoctor2.git RepoDoctor2; fi
+cd ~/RepoDoctor2
+./start.command
 ```
 
-That pulls the latest code from `main`, then `start.command` sets up the virtual environment, installs dependencies, and launches the app.
+If macOS pops up a dialog to install Xcode Command Line Tools, click **Install**, wait for it to finish, then paste the block again.
 
 ---
 
@@ -23,43 +29,17 @@ That pulls the latest code from `main`, then `start.command` sets up the virtual
 Press the **Windows key**, type `powershell`, press Enter, paste this, press Enter:
 
 ```powershell
-cd ~\repodoctor2; .\start.ps1
-```
-
-`start.ps1` already pulls the latest code from `main`, refreshes dependencies, and launches the app — no separate `git pull` needed.
-
----
-
-## First Time on a New Computer
-
-If you've never cloned the repo on this machine, the commands above will fail with a "no such directory" error. Run the one-time block below instead. It installs what's needed, clones the repo, and launches. After that, use the one-paste command above every time.
-
-### Mac — first time
-
-```bash
-xcode-select --install 2>/dev/null; \
-cd ~ && \
-git clone https://github.com/christreadaway/repodoctor2.git RepoDoctor2 && \
-cd ~/RepoDoctor2 && \
-./start.command
-```
-
-If macOS pops up a dialog to install Xcode Command Line Tools, click **Install**, wait for it to finish, then re-run the paste.
-
-### Windows — first time
-
-```powershell
 Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
 winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements
 winget install -e --id Git.Git --accept-source-agreements --accept-package-agreements
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 cd ~
-git clone https://github.com/christreadaway/repodoctor2.git repodoctor2
-cd ~\repodoctor2
+if (-not (Test-Path .\repodoctor2)) { git clone https://github.com/christreadaway/repodoctor2.git repodoctor2 }
+cd .\repodoctor2
 .\start.ps1
 ```
 
-Takes 2–5 minutes the first time.
+If `winget` reports Python or Git already installed, that's fine — keep going.
 
 ---
 
@@ -85,6 +65,8 @@ Takes 2–5 minutes the first time.
 - Windows: `Get-NetTCPConnection -LocalPort 5001 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }`
 
 **`./start.command` permission denied (Mac)** → Run `chmod +x start.command` once, then retry.
+
+**`winget` not recognized (Windows)** → Update Windows, or install from https://aka.ms/getwinget.
 
 ---
 
