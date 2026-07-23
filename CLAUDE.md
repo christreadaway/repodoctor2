@@ -174,3 +174,5 @@ Finally, when I ask you to do something, think through the task comprehensively 
 And regarding product specs, any product spec doc that I ask you to create for claude code needs to have built-in logging infrastructure that can identify errors, log them, and allow me to copy/paste back into claude code for faster debugging.
 
 For any local installations running npm, run sfw npm install for real-time security protection and update claude.md files accordingly.
+
+sfw also wraps pip (`sfw pip install <package>`) — use it whenever installing a NEW/unfamiliar Python package on my behalf, same as npm. Don't wire sfw into a project's own auto-launch scripts (start.ps1, start.command, etc.) — that would force Node/npm onto machines that only need Python, breaking dummy-proof first-time setup for a pure-Python app. For an already-vetted requirements.txt, run `pip-audit` periodically instead (checks installed versions against known CVEs — a different job than sfw's install-time malware gate) and report findings before they'd need fixing.
