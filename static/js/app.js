@@ -23,20 +23,33 @@
    * POST JSON to a route and return the parsed response.
    * Rejects with an Error whose message is the server-provided error text.
    */
+  /**
+   * Parse a fetch Response as JSON, tolerating a non-JSON body (a gateway
+   * 502/504 HTML page, a plain-text error). Without this, resp.json() rejects
+   * with a cryptic "Unexpected token '<'" that the caller can't act on.
+   */
+  function parseJsonResponse(resp) {
+    return resp.text().then(function (text) {
+      var data;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (e) {
+        throw new Error("Server error (" + resp.status + ")");
+      }
+      if (!resp.ok) {
+        throw new Error(data.error || "Server error (" + resp.status + ")");
+      }
+      return data;
+    });
+  }
+
   function postJson(url, body) {
     return fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
       body: JSON.stringify(body),
-    }).then(function (resp) {
-      return resp.json().then(function (data) {
-        if (!resp.ok) {
-          throw new Error(data.error || "Server error (" + resp.status + ")");
-        }
-        return data;
-      });
-    });
+    }).then(parseJsonResponse);
   }
 
   /**
@@ -45,14 +58,7 @@
   function getJson(url) {
     return fetch(url, {
       credentials: "same-origin",
-    }).then(function (resp) {
-      return resp.json().then(function (data) {
-        if (!resp.ok) {
-          throw new Error(data.error || "Server error (" + resp.status + ")");
-        }
-        return data;
-      });
-    });
+    }).then(parseJsonResponse);
   }
 
   /**

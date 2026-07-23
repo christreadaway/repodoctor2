@@ -67,11 +67,13 @@ app.use(cookieSession({
   keys: [sessionSigningKey()],
   maxAge: 30 * 60 * 1000,
   sameSite: 'lax',
-  // Only transmit the session cookie over HTTPS. Netlify is always HTTPS at
-  // the edge; with 'trust proxy' set above, cookie-session sees the request as
-  // secure and emits the cookie normally. httpOnly keeps client JS from
-  // reading it (also the default, stated here for clarity).
-  secure: true,
+  // Secure in production (Netlify is HTTPS at the edge; with 'trust proxy'
+  // above, cookie-session sees the request as secure and emits the cookie).
+  // Relaxed only under the Netlify CLI dev server, which serves plain HTTP —
+  // there a Secure cookie throws "Cannot send secure cookie over unencrypted
+  // connection" and 500s every page. Defaults to secure unless explicitly in
+  // that dev context, so production is never silently downgraded.
+  secure: process.env.NETLIFY_DEV !== 'true',
   httpOnly: true,
 }));
 
@@ -176,6 +178,13 @@ function loginLockMs(ip) {
 
 function recordLoginFailure(ip) {
   const now = Date.now();
+  // Bound the map so a flood of distinct keys can't grow it without limit:
+  // once it's large, drop every entry whose lockout window has expired.
+  if (loginAttempts.size > 1000) {
+    for (const [k, v] of loginAttempts) {
+      if (now > v.resetAt) loginAttempts.delete(k);
+    }
+  }
   const rec = loginAttempts.get(ip);
   if (!rec || now > rec.resetAt) {
     loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_LOCKOUT_MS });
@@ -186,6 +195,15 @@ function recordLoginFailure(ip) {
 
 function clearLoginFailures(ip) {
   loginAttempts.delete(ip);
+}
+
+// Netlify's edge sets x-nf-client-connection-ip to the real client IP. Prefer
+// it over req.ip: under 'trust proxy' req.ip is the left-most X-Forwarded-For
+// entry, which a client can spoof to get a fresh throttle bucket every request
+// (bypassing the lockout) or, if XFF is ever absent, collapse all clients into
+// one bucket and lock everyone out. Fall back to req.ip for local dev.
+function clientIp(req) {
+  return req.headers['x-nf-client-connection-ip'] || req.ip || 'unknown';
 }
 
 // --- Auth Routes ---
@@ -208,7 +226,7 @@ app.post('/login', asyncRoute(async (req, res) => {
       req.flash('error', 'SITE_PASSWORD is not configured — set it in the Netlify environment before logging in.');
       return res.redirect('/login');
     }
-    const ip = req.ip || 'unknown';
+    const ip = clientIp(req);
     const lockMs = loginLockMs(ip);
     if (lockMs > 0) {
       req.flash('error', `Too many failed attempts. Try again in ${Math.ceil(lockMs / 60000)} minute(s).`);
@@ -406,7 +424,9 @@ app.get('/settings', requireAuth, (req, res) => {
 });
 
 app.post('/settings', requireAuth, (req, res) => {
-  const action = req.body.action;
+  // Guard req.body: body-parser leaves it undefined for a foreign/empty
+  // Content-Type, and this handler isn't wrapped by asyncRoute.
+  const action = (req.body || {}).action;
 
   if (action === 'save_preferences') {
     const prefs = models.getPreferences();
