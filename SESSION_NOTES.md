@@ -1,11 +1,64 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 16
-**Date Range:** 2025-02-14 to 2026-07-11
-**Last Updated:** 2026-07-11 (Session 16)
+**Total Sessions Logged:** 17
+**Date Range:** 2025-02-14 to 2026-07-23
+**Last Updated:** 2026-07-23 (Session 17)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 17 — 2026-07-23 (Local-setup fix, security hardening, full bug audit, Netlify decommission)
+
+Branch: `claude/local-setup-instructions-vgxwrp`. Started from a real failure — the run-local directions broke on a brand-new Windows PC — then expanded into a security review, a comprehensive bug audit, and bringing the docs current.
+
+### What We Did
+
+**1. Fixed local setup so one command works everywhere.**
+The failure: on a new PC, `cd ~\repodoctor2; .\start.ps1` errored with "Cannot find path" because the repo wasn't cloned yet. Root cause: every setup doc split "first time on a new computer" from "every session," and it was easy to grab the wrong one. Fix: a single self-healing command per OS (clones if the folder is missing, otherwise pulls `main` and launches) across `README.md` (new — the front door), `RUN_LOCAL.md`, `SETUP_PC.md`, `SETUP_MAC.md`, `GET_LATEST_PC.md`. `start.ps1` now checks for Git up front and stops with a clear message if `git pull` fails instead of silently continuing.
+
+**2. Security hardening (from a security review).**
+- Netlify port: per-IP login brute-force throttle (5 tries, 15-min lockout) + constant-time password compare; throttle keyed on the trusted `x-nf-client-connection-ip` (not the spoofable `X-Forwarded-For`) with map pruning; Secure + HttpOnly session cookie (relaxed only under `netlify dev`).
+- Local Flask: Werkzeug debug mode **OFF by default** (was on — it exposes an interactive code console on error pages); opt in with `REPODOCTOR_DEBUG=1`. `SESSION_COOKIE_SAMESITE=Lax` + `HttpOnly` set explicitly (Safari doesn't default to Lax). `/logout`'s global client wipe gated behind an authenticated session (a cross-origin GET could otherwise knock the user offline). Escaped remaining unescaped data in the tracker overlay.
+- Patched 4 Netlify dependency CVEs (1 high: `path-to-regexp` ReDoS) — Express 4.21.0 → 4.22.2, lockfile only. Python app deps (Flask, requests, anthropic, cryptography) audited clean.
+
+**3. Comprehensive bug audit — 5 parallel review agents, every finding verified with a runtime repro before fixing.**
+- **HIGH:** `tracker_data.validate_tracker` / `sort_recent_changes` crashed (Attribute/TypeError) on a non-string prompt, id, or date from the LLM — bypassing the generator's retry loop and 500ing the tracker page. `project_mapper` persisted a null conversation `project` and crashed `.lower()`, 500ing every repo-detail page. Both fixed (coerce/report at source + consumers).
+- **MEDIUM/LOW:** global `requests.RequestException` handler (transient GitHub errors no longer 500 the scan); `update_preferences`/`update_tracker` locked get-modify-save (lost-update races); corrupt-file tolerance for scan/action-log JSON; firestore per-file fetch isolation; null-committer + directory-shape guards in `github_client`; null-safe status sort + empty-brief fallback in briefing/program; exact per-model pricing table (Fable 5 was mispriced as Haiku); event-log rotation + O(n) tail; broadened atomic-write cleanup in `security.py`.
+- Added `tests/test_bug_fixes.py` (14 regression tests). Full suite **223 passing** (was 209).
+
+**4. Decommissioned the hosted Netlify deployment** (user runs local primarily; a live deployment kept the GitHub PAT reachable 24/7). The site takedown is a Netlify-dashboard action the user performs; the serverless **code stays in the repo** (user's call) but no longer auto-deploys once the site is deleted. Recommended rotating the GitHub PAT.
+
+**5. Brought docs current** — this entry, `PROJECT_STATUS.md` (header, Netlify-decommissioned notes, fixed stale CSRF item, test count, one-command run flow), and the setup docs above.
+
+### Technical Details
+
+**Files changed (code):** `app.py`, `models.py`, `security.py`, `tracker_data.py`, `project_mapper.py`, `briefing.py`, `tracker_generator.py`, `program.py`, `github_client.py`, `ai_analyzer.py`, `firestore_detector.py`, `start.ps1`, `netlify/functions/api/api.js`, `static/js/app.js`, `netlify/functions/api/views/dashboard.html`, `package-lock.json`, `tests/test_bug_fixes.py`.
+**Files changed (docs):** `README.md` (new), `RUN_LOCAL.md`, `SETUP_PC.md`, `SETUP_MAC.md`, `GET_LATEST_PC.md`, `PROJECT_STATUS.md`, `SESSION_NOTES.md`.
+
+Commits (this branch): local-setup fix; security hardening; dependency patch; Python audit fixes + tests; JS audit fixes; docs.
+
+### Current Status
+- ✅ One-command local run works on a fresh computer and an existing one
+- ✅ Security hardening complete; 223 tests green; 0 dependency vulnerabilities
+- ✅ Two HIGH crash bugs fixed + verified; medium/low batch fixed
+- ✅ Docs current
+- 🚧 Branch not yet merged to `main` — the local-setup fix only helps future new-computer setups once merged (fresh clones pull from `main`)
+- 🚧 Netlify site takedown + PAT rotation are user-side dashboard actions
+
+### Decisions Made
+- **One self-healing command over separate "first-time" instructions** — the split was the actual failure mode.
+- **Keep the Netlify code, decommission only the live site** — user runs local; preserves the redeploy option without the always-on attack surface.
+- **Deferred (documented) low-severity items, to avoid regressions from invasive changes:** repo lookups keyed by name alone can collide on same-named collaborator repos; the Netlify port's in-memory scan state isn't shared across serverless instances (moot while decommissioned); GitHub pagination can silently truncate on a mid-list rate-limit (rare for a personal account); `_no_cycles` is recursive (only a ~1000-deep dependency chain would hit the limit).
+
+### Next Steps
+1. Merge this branch to `main` so the local-setup fix reaches new-computer clones.
+2. On Netlify: delete the site (removes the URL, functions, and stored env vars) and rotate the GitHub PAT.
+3. Everything under PROJECT_STATUS "Next Steps" still applies (generate briefs/trackers across the portfolio, wire tracker actions into What's Next).
+
+### Questions / Blockers
+- None blocking. Open user decisions: whether to open a PR for this branch, and confirming the Netlify site takedown is done on their end.
 
 ---
 

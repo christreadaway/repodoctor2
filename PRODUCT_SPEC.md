@@ -510,8 +510,8 @@ Coverage areas:
 | Refreshed top nav with pulsing user pill | Working |
 | Settings | Working |
 | Cost tracking | Working |
-| Tests (144 total: 97 from Session 13 + 47 tracker tests through Session 14d) | Passing |
-| Netlify deployment (Node.js) | Working — behind Flask version (groups, recursive search, stats, whats-next not ported yet) |
+| Tests (223 total via `pytest`, incl. Session 17 regression suite) | Passing |
+| Netlify deployment (Node.js) | Hosted site decommissioned 2026-07-23; code retained in `netlify/`, behind Flask version. Local Flask is the supported way to run. |
 | AI project summaries via Claude Haiku | Working |
 | AI branch analysis | Built, inactive |
 | Archive management | Built, inactive |
@@ -525,7 +525,7 @@ Coverage areas:
 
 ### Near Term
 1. Surface tracker `next_actions` (open P0/P1) into the What's Next aggregated view so the single-page inbox includes them alongside the project-summary bullets
-2. Port Project Groups + recursive spec search + Stats + What's Next to the Netlify Node.js version (Tracker is Flask-only by design — relies on local JSON storage)
+2. (Deprioritized — hosted Netlify site decommissioned 2026-07-23) If ever redeployed: port Project Groups + recursive spec search + Stats + What's Next to the Netlify Node.js version (Tracker is Flask-only by design — relies on local JSON storage)
 3. Parallelize the initial scan (languages call doubled API traffic; `ThreadPoolExecutor` on `scan_repo_lite` like `/stats` does)
 4. Wire `project_mapper.py` into Flask routes and add conversation import UI (drag-and-drop ZIP + mapping review screen)
 5. Re-enable commented-out features: AI analysis, archive, action log, setup guide
