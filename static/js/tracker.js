@@ -26,6 +26,13 @@
     }
   }
 
+  // Escape text before inserting it via innerHTML.
+  function escapeHtml(str) {
+    var div = document.createElement("div");
+    div.appendChild(document.createTextNode(str == null ? "" : String(str)));
+    return div.innerHTML;
+  }
+
   // ---------- Tabs ----------
   function switchTab(name) {
     document.querySelectorAll(".tracker-tab").forEach(function (btn) {
@@ -271,9 +278,9 @@
       '<div class="tracker-overlay-card">' +
         '<div class="tracker-overlay-spinner"></div>' +
         '<h2 class="tracker-overlay-title">ANALYZING<span class="tracker-overlay-dots"><span>.</span><span>.</span><span>.</span></span></h2>' +
-        '<p class="tracker-overlay-repo">' + repo + '</p>' +
+        '<p class="tracker-overlay-repo">' + escapeHtml(repo) + '</p>' +
         '<p class="tracker-overlay-detail">Reading docs + file tree + recent commits, then asking ' +
-          '<code>' + (model || "the configured model") + '</code> to produce the tracker JSON.</p>' +
+          '<code>' + escapeHtml(model || "the configured model") + '</code> to produce the tracker JSON.</p>' +
         '<p class="tracker-overlay-elapsed">Elapsed: <span id="tracker-overlay-time">0s</span></p>' +
         '<p class="tracker-overlay-foot">Typical: 20-90 seconds. Don\'t close this tab.</p>' +
       '</div>';

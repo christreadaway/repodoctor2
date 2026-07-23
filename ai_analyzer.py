@@ -129,15 +129,26 @@ def estimate_cost(input_tokens: int, output_tokens: int = 1000, model: str = DEF
     Aug 2026 — we bill at the $3/$15 sticker to stay conservative),
     Haiku 4.5 $1/$5.
     """
-    if "opus" in model:
-        input_cost = input_tokens * 5.0 / 1_000_000
-        output_cost = output_tokens * 25.0 / 1_000_000
+    # Explicit per-model rates ($ per MTok, input/output). Substring matching
+    # alone silently mispriced any model without "opus"/"sonnet" in its id as
+    # Haiku — e.g. Fable 5 (really $10/$50) would have billed at $1/$5.
+    RATES = {
+        "claude-opus-4-8": (5.0, 25.0),
+        "claude-sonnet-5": (3.0, 15.0),
+        "claude-haiku-4-5-20251001": (1.0, 5.0),
+    }
+    if model in RATES:
+        in_rate, out_rate = RATES[model]
+    elif "opus" in model:
+        in_rate, out_rate = 5.0, 25.0
     elif "sonnet" in model:
-        input_cost = input_tokens * 3.0 / 1_000_000
-        output_cost = output_tokens * 15.0 / 1_000_000
-    else:  # haiku
-        input_cost = input_tokens * 1.0 / 1_000_000
-        output_cost = output_tokens * 5.0 / 1_000_000
+        in_rate, out_rate = 3.0, 15.0
+    elif "fable" in model:
+        in_rate, out_rate = 10.0, 50.0
+    else:  # unknown / haiku
+        in_rate, out_rate = 1.0, 5.0
+    input_cost = input_tokens * in_rate / 1_000_000
+    output_cost = output_tokens * out_rate / 1_000_000
     return round(input_cost + output_cost, 4)
 
 

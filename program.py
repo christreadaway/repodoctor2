@@ -90,8 +90,11 @@ def assemble_members(repos: list[dict], briefs: dict, summaries: dict,
             "summary": summary,
             "open_actions": open_actions,
             "open_p0": sum(1 for a in open_actions if a["priority"] == "P0"),
+            # Raw timestamp for sorting; "last_push" above is a display string
+            # ("unknown" would otherwise sort ahead of real dates under reverse).
+            "_push_ts": last_push_ts(repo) or "",
         })
-    members.sort(key=lambda m: m["last_push"], reverse=True)
+    members.sort(key=lambda m: m["_push_ts"], reverse=True)
     return members
 
 
@@ -152,7 +155,14 @@ def generate_program_brief(api_key: str, program_name: str, context_text: str,
         }],
     )
     raw = extract_response_text(message)
-    brief = normalize_program_brief(extract_json_object(raw))
+    # Degrade to an empty brief on an unparseable AI response instead of
+    # failing (json.JSONDecodeError is a ValueError subclass, so this covers
+    # both empty/prose refusals and malformed JSON).
+    try:
+        parsed = extract_json_object(raw)
+    except ValueError:
+        parsed = {}
+    brief = normalize_program_brief(parsed)
     brief["_usage"] = {
         "input_tokens": message.usage.input_tokens,
         "output_tokens": message.usage.output_tokens,

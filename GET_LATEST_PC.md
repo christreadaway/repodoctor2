@@ -4,15 +4,18 @@ Dummy-proof guide for syncing your local copy of RepoDoctor2 with GitHub.
 
 ---
 
-## TL;DR (already cloned)
+## TL;DR (works every time)
 
 ```powershell
-cd ~\repodoctor2; .\start.ps1
+cd ~
+if (-not (Test-Path .\repodoctor2)) { git clone https://github.com/christreadaway/repodoctor2.git repodoctor2 }
+cd .\repodoctor2
+.\start.ps1
 ```
 
-`start.ps1` already runs `git pull origin main` for you, then launches the app. **This is the only command you need 99% of the time.**
+`start.ps1` runs `git pull origin main` for you, then launches the app. The `Test-Path` check clones the repo first if it isn't on this machine yet, so this is the only command you need — brand-new computer or the 500th time.
 
-If you get `Cannot find path 'C:\Users\<you>\repodoctor2'` → see **First Time on This Machine** below.
+If this fails with `git` or `python` "is not recognized," Git or Python itself isn't installed on this machine yet → see **First Time on This Machine** below.
 
 ---
 
@@ -24,9 +27,9 @@ cd ~\repodoctor2; git pull origin main
 
 ---
 
-## First Time on This Machine
+## First Time on This Machine (nothing installed yet)
 
-If `~\repodoctor2` doesn't exist yet, paste this **entire block** into PowerShell. It installs Python + Git (skipped if already present), clones the repo, and launches:
+If Python or Git aren't on this machine at all, paste this **entire block** into PowerShell instead. It installs Python + Git (skipped if already present), clones the repo, and launches:
 
 ```powershell
 Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
@@ -34,14 +37,14 @@ winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-pa
 winget install -e --id Git.Git --accept-source-agreements --accept-package-agreements
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 cd ~
-git clone https://github.com/christreadaway/repodoctor2.git repodoctor2
-cd ~\repodoctor2
+if (-not (Test-Path .\repodoctor2)) { git clone https://github.com/christreadaway/repodoctor2.git repodoctor2 }
+cd .\repodoctor2
 .\start.ps1
 ```
 
 Takes 2–5 minutes the first time. If GitHub asks for a password, use a Personal Access Token from https://github.com/settings/tokens (scope: `repo`).
 
-After this, `cd ~\repodoctor2; .\start.ps1` is all you need.
+After this, the **TL;DR** command above is all you need.
 
 ---
 

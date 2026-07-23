@@ -16,6 +16,12 @@ const specCleaner = require('./lib/spec-cleaner');
 
 const app = express();
 
+// Netlify terminates TLS at the edge and forwards to this function over HTTP
+// with X-Forwarded-Proto: https. Trusting the proxy lets Express treat the
+// original request as secure, so req.ip reflects the real client IP and the
+// Secure session cookie below is actually emitted.
+app.set('trust proxy', true);
+
 // --- Nunjucks template engine ---
 const viewsDir = path.join(__dirname, 'views');
 const env = nunjucks.configure(viewsDir, {
@@ -61,6 +67,14 @@ app.use(cookieSession({
   keys: [sessionSigningKey()],
   maxAge: 30 * 60 * 1000,
   sameSite: 'lax',
+  // Secure in production (Netlify is HTTPS at the edge; with 'trust proxy'
+  // above, cookie-session sees the request as secure and emits the cookie).
+  // Relaxed only under the Netlify CLI dev server, which serves plain HTTP —
+  // there a Secure cookie throws "Cannot send secure cookie over unencrypted
+  // connection" and 500s every page. Defaults to secure unless explicitly in
+  // that dev context, so production is never silently downgraded.
+  secure: process.env.NETLIFY_DEV !== 'true',
+  httpOnly: true,
 }));
 
 /**
@@ -136,6 +150,62 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// --- Login throttle + constant-time compare ---
+
+// Constant-time password comparison. Hash both sides to a fixed length first
+// so timingSafeEqual never throws on a length mismatch (and length isn't
+// leaked through timing).
+function safeEqual(a, b) {
+  const ha = crypto.createHash('sha256').update(String(a)).digest();
+  const hb = crypto.createHash('sha256').update(String(b)).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
+// In-memory brute-force throttle keyed by client IP. NOTE: serverless
+// instances are ephemeral and a determined attacker's requests may land on
+// different instances, so this is a speed bump, not an airtight limit — pair
+// it with a long, high-entropy SITE_PASSWORD.
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+const loginAttempts = new Map(); // ip -> { count, resetAt }
+
+function loginLockMs(ip) {
+  const rec = loginAttempts.get(ip);
+  if (!rec) return 0;
+  if (Date.now() > rec.resetAt) { loginAttempts.delete(ip); return 0; }
+  return rec.count >= LOGIN_MAX_ATTEMPTS ? rec.resetAt - Date.now() : 0;
+}
+
+function recordLoginFailure(ip) {
+  const now = Date.now();
+  // Bound the map so a flood of distinct keys can't grow it without limit:
+  // once it's large, drop every entry whose lockout window has expired.
+  if (loginAttempts.size > 1000) {
+    for (const [k, v] of loginAttempts) {
+      if (now > v.resetAt) loginAttempts.delete(k);
+    }
+  }
+  const rec = loginAttempts.get(ip);
+  if (!rec || now > rec.resetAt) {
+    loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_LOCKOUT_MS });
+  } else {
+    rec.count += 1;
+  }
+}
+
+function clearLoginFailures(ip) {
+  loginAttempts.delete(ip);
+}
+
+// Netlify's edge sets x-nf-client-connection-ip to the real client IP. Prefer
+// it over req.ip: under 'trust proxy' req.ip is the left-most X-Forwarded-For
+// entry, which a client can spoof to get a fresh throttle bucket every request
+// (bypassing the lockout) or, if XFF is ever absent, collapse all clients into
+// one bucket and lock everyone out. Fall back to req.ip for local dev.
+function clientIp(req) {
+  return req.headers['x-nf-client-connection-ip'] || req.ip || 'unknown';
+}
+
 // --- Auth Routes ---
 
 app.get('/login', (req, res) => {
@@ -156,11 +226,19 @@ app.post('/login', asyncRoute(async (req, res) => {
       req.flash('error', 'SITE_PASSWORD is not configured — set it in the Netlify environment before logging in.');
       return res.redirect('/login');
     }
+    const ip = clientIp(req);
+    const lockMs = loginLockMs(ip);
+    if (lockMs > 0) {
+      req.flash('error', `Too many failed attempts. Try again in ${Math.ceil(lockMs / 60000)} minute(s).`);
+      return res.redirect('/login');
+    }
     const entered = req.body.password || '';
-    if (entered !== sitePassword) {
+    if (!safeEqual(entered, sitePassword)) {
+      recordLoginFailure(ip);
       req.flash('error', 'Wrong password. Try again.');
       return res.redirect('/login');
     }
+    clearLoginFailures(ip);
     tryEnvCredentials();
     req.session.authenticated = true;
     try {
@@ -346,7 +424,9 @@ app.get('/settings', requireAuth, (req, res) => {
 });
 
 app.post('/settings', requireAuth, (req, res) => {
-  const action = req.body.action;
+  // Guard req.body: body-parser leaves it undefined for a foreign/empty
+  // Content-Type, and this handler isn't wrapped by asyncRoute.
+  const action = (req.body || {}).action;
 
   if (action === 'save_preferences') {
     const prefs = models.getPreferences();

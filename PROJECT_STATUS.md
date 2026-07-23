@@ -1,14 +1,25 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-06-12 (Session 15b)
-**Current Branch:** `main` — Session 15 + 15b merged 2026-06-12
-**Overall Progress:** ~96%
+**Last Updated:** 2026-07-23 (Session 17 — local-setup fix, security hardening, full bug audit)
+**Current Branch:** `claude/local-setup-instructions-vgxwrp` (not yet merged to `main`)
+**Overall Progress:** ~97%
 
 ---
 
 ## Snapshot
 
-RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch counts, required-spec-file presence, code size, AI-generated project summaries, named groups for filtering, a Stats view with Commits / Code Size bar charts across time periods (aggregatable by group), an aggregated What's Next view, a per-repo Codebase Tracker, and a Chat Briefing screen that composes a single portfolio document for pasting into a Claude chat session. Runs locally; also deployed on Netlify as a Node.js serverless app (Netlify lags Flask).
+RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch counts, required-spec-file presence, code size, AI-generated project summaries, named groups for filtering, a Stats view with Commits / Code Size bar charts across time periods (aggregatable by group), an aggregated What's Next view, a per-repo Codebase Tracker, and a Chat Briefing screen that composes a single portfolio document for pasting into a Claude chat session. **Runs locally as a Flask app — this is the supported way to use it.** A Node.js/Netlify serverless port still lives in `netlify/` for reference, but the hosted deployment was decommissioned on 2026-07-23.
+
+---
+
+## Latest — Session 17 (2026-07-23)
+
+Focused on making local setup foolproof and hardening the app. See `SESSION_NOTES.md` for the full log.
+
+- **Local run, one command.** A brand-new computer and an old one now use the exact same paste (README.md, RUN_LOCAL.md, SETUP_PC/MAC.md, GET_LATEST_PC.md all unified). The old split between "first time" and "every time" was the trap that failed on a fresh PC. Added `README.md` as the front door. `start.ps1` now checks for Git and stops cleanly if `git pull` fails.
+- **Security hardening.** Login brute-force throttle + constant-time compare on the Netlify port; Secure/HttpOnly session cookie; SESSION_COOKIE_SAMESITE=Lax on the local app (Safari doesn't default to it); Werkzeug debug mode OFF by default (opt in with `REPODOCTOR_DEBUG=1`); `/logout` global-state wipe gated behind an authenticated session; escaped remaining unescaped template data. Patched 4 Netlify dependency CVEs (Express 4.21 → 4.22.2).
+- **Comprehensive bug audit.** A 5-agent line-by-line audit fixed 2 HIGH crash bugs (tracker-validator type crashes; null-project 500 on repo-detail) plus a batch of medium/low robustness issues (network-error handling, lost-update locks, log rotation, null guards, exact per-model pricing). Added `tests/test_bug_fixes.py`.
+- **Tests:** 223 passing (was 209 + 14 new regression tests).
 
 ---
 
@@ -87,8 +98,8 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 ### Other
 - Repo detail: Product Spec / Project Status / Session Notes panels, "What's Next" hero, conversation timeline
 - Activity log with color-coded messages
-- Netlify deployment (Node.js + Express + serverless-http) — older feature set
-- **Tests:** 136 passing (97 from Session 13 + 39 new for the Codebase Tracker). 5 of the 39 tracker tests skip in remote envs lacking the `anthropic` SDK; they run locally on Mac.
+- Netlify serverless port (Node.js + Express + serverless-http) — older feature set; hosted deployment decommissioned 2026-07-23, code retained in `netlify/` for reference
+- **Tests:** 223 passing (`pytest`), including `tests/test_bug_fixes.py` (Session 16 regression tests). A few tracker tests skip in envs lacking the `anthropic` SDK.
 
 ---
 
@@ -100,13 +111,13 @@ Nothing actively in progress. All Session 15 work (Chat Briefing screen + 15b re
 
 ## What's Broken / Known Issues
 
-- **Netlify version is behind Flask version.** All April/May features need porting to `netlify/functions/api/`.
-- **Netlify free tier 10s function timeout.** Large GitHub accounts can still time out even with parallelized scans.
+- **Netlify serverless port is behind Flask and its hosted deployment is decommissioned (2026-07-23).** The code stays in `netlify/` for reference; local Flask is the supported path. Redeploying would mean re-adding env vars in Netlify (and rotating the PAT) plus porting the April/May features listed under Next Steps.
 - **Truncated git trees.** Very large repos can have a truncated tree response; a warning is logged and some deep files may be missed.
 - **Scan is slightly slower.** `/languages` call per repo doubles API calls vs. previous. Still sequential; parallelization on the backlog.
 - **Stats first-load latency.** Commit stats page through up to 5000 commits per repo × N repos — first visit after a scan can take noticeably longer for heavy accounts. `?refresh=1` forces recompute; normal loads are cache hits.
 - **Anthropic key not verified at login.** An invalid/empty Anthropic key only surfaces when the user generates summaries/briefs/Henry analyses, where it shows up as a per-repo error in the progress overlay. Flagged in audit; low-frequency since the key rarely changes after first setup.
-- **`/login/reset` has no CSRF protection.** Localhost-only app + same-origin requirement on form POSTs mitigate the risk; revisit if the app ever leaves localhost.
+- ~~`/login/reset` has no CSRF protection~~ — FIXED: both credential-reset endpoints require a per-boot anti-CSRF token, `/logout`'s global-state wipe is gated behind an authenticated session, and the local session cookie is now `SameSite=Lax` + `HttpOnly` (Session 16).
+- **Known limitations left as-is (Session 16 audit).** Documented, low-severity, deferred by design: repo lookups keyed by name alone can collide if two collaborator repos share a name; the Netlify port's in-memory scan state isn't shared across serverless instances (moot while decommissioned); GitHub pagination can silently truncate on a mid-list rate-limit (rare for a personal account). See `SESSION_NOTES.md`.
 - ~~`_save_json` has no disk-full / permission error handling~~ — FIXED Session 15b: all JSON/spec/credential writes are atomic (temp file + rename) with errors logged.
 
 ---
@@ -119,12 +130,12 @@ Nothing actively in progress. All Session 15 work (Chat Briefing screen + 15b re
 
 ## Next Steps (in priority order)
 
-1. **Pull latest on each machine.** PC: `cd ~\repodoctor2; .\start.ps1` (pulls `main` automatically, then launches). Mac: `cd /Users/christreadaway/claudesync2/repodoctor2 && git pull origin main`, then restart Flask.
+1. **Run locally on each machine — one command.** Paste the block from `README.md` / `RUN_LOCAL.md`: Windows uses `.\start.ps1`, Mac uses `./start.command`. It clones if the repo is missing, otherwise pulls `main` and launches — the same command works on a brand-new computer or an old one.
 2. **Generate chat briefs across the portfolio.** Briefing tab → GENERATE BRIEFS, watch the per-repo progress, then COPY FOR CLAUDE CHAT and paste into a Claude chat session.
 3. **Try the tracker against a real repo.** Click Tracker in the nav, pick a repo (e.g. parentpoint, catholicevents), click GENERATE TRACKER. Verify the eight tabs populate and the next-actions prompts copy cleanly into Claude Code.
 4. **Generate trackers across the portfolio** to seed the load-bearing IDs. Re-generations from this point on will preserve those IDs.
 5. **Wire tracker `next_actions` into What's Next** so open P0/P1 actions show up in the simple aggregated inbox alongside the project-summary bullets (Roadmap item 1).
-6. **Port April/May features to Netlify** — auth-error handling, Stats (with group filter + rollup), What's Next, groups persistence, recursive search, Size column, refreshed nav, recent-updated sort, business-spec aliasing, unassigned-projects list. (Tracker stays Flask-only by design — local JSON storage doesn't fit serverless.)
+6. **(Deprioritized) Netlify port.** The hosted deployment is decommissioned — only revisit if you decide to redeploy. Would need the April/May features ported (auth-error handling, Stats with group filter + rollup, What's Next, groups persistence, recursive search, Size column, refreshed nav, recent-updated sort, business-spec aliasing, unassigned-projects list) plus env vars re-added in Netlify. Tracker stays Flask-only by design.
 7. **Parallelize initial scan** using `ThreadPoolExecutor` (same pattern as `/stats`).
 8. **Verify Anthropic key at login** the same way GitHub PAT is verified, so bad keys are caught up front.
 
@@ -132,21 +143,21 @@ Nothing actively in progress. All Session 15 work (Chat Briefing screen + 15b re
 
 ## Tech Stack
 
-| Layer | Local (Flask) | Deployed (Netlify) |
+| Layer | Local (Flask) — supported | Netlify port (decommissioned 2026-07-23) |
 |---|---|---|
 | Backend | Python 3 + Flask | Node.js + Express + serverless-http |
 | AI | `anthropic` SDK (Claude Haiku for summaries) | `@anthropic-ai/sdk` |
 | GitHub | REST API v3 + `requests` | REST API v3 + `node-fetch` |
-| Security | Fernet + PBKDF2 | — (relies on environment) |
+| Security | Fernet + PBKDF2; SameSite=Lax + HttpOnly cookie; debug off by default | — (relies on environment) |
 | Storage | Local JSON in `config/`, `data/`, and `~/.repodoctor/` | Ephemeral per-invocation |
 | Frontend | Jinja2 templates + retro terminal CSS | EJS-style views + same CSS |
-| Tests | `unittest` (97 passing) | — |
+| Tests | `pytest` (223 passing) | — |
 
 ---
 
 ## File Paths / Workflow
 
-- Start command: `cd ~/repodoctor2 && python3 app.py` (runs on `http://127.0.0.1:5001`)
+- Start: paste the one-command block from `README.md` (or run `./start.command` on Mac / `.\start.ps1` on Windows). Direct: `cd ~/repodoctor2 && python3 app.py` (runs on `http://127.0.0.1:5001`). Set `REPODOCTOR_DEBUG=1` to turn Flask debug mode on (off by default).
 - Netlify build artifacts: `netlify_functions/` (gitignored)
 - **User data (survives codebase wipes):** `~/.repodoctor/groups.json`
 - User data in repo (all gitignored, do not survive a fresh clone): `config/credentials.enc`, `config/groups.json` (legacy), `data/scan_history.json`, `data/analysis_cache.json`, `data/action_log.json`, `data/project_summaries.json`, `data/specs/`

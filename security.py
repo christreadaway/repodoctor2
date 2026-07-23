@@ -48,7 +48,9 @@ def encrypt_credentials(password: str, github_pat: str, anthropic_key: str) -> N
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, CREDENTIALS_PATH)
-    except OSError:
+    except Exception:
+        # Broad on purpose: any failure between mkstemp and os.replace must
+        # clean up the temp file, not just OSError (matches models._atomic_write).
         try:
             os.remove(tmp_path)
         except OSError:

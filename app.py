@@ -70,6 +70,16 @@ def _load_or_create_secret_key() -> str:
 
 app = Flask(__name__)
 app.secret_key = _load_or_create_secret_key()
+# Harden the session cookie. HttpOnly keeps client JS from reading it;
+# SameSite=Lax stops other sites from riding a logged-in session with
+# cross-site POSTs (Chrome/Firefox default to Lax, but Safari does not — and
+# this app runs on a Mac). SESSION_COOKIE_SECURE is deliberately left off: the
+# local app is served over http://127.0.0.1, where a Secure cookie is never
+# sent, which would break login.
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
 # Anti-CSRF token for the destructive credential-reset endpoints. /login/reset
 # is deliberately reachable without auth (recovery from a revoked PAT), which
@@ -150,6 +160,18 @@ def _handle_github_auth_error(e):
     behavior for free.
     """
     flash(GITHUB_AUTH_REMEDY, "error")
+    target = url_for("dashboard") if session.get("authenticated") else url_for("login")
+    return redirect(target)
+
+
+@app.errorhandler(requests.RequestException)
+def _handle_github_network_error(e):
+    """A transient network failure talking to GitHub (timeout, DNS, connection
+    reset) is not a GitHubAuthError, so without this it would surface as a raw
+    500. Flash a retry message and bounce — covers the unguarded get_repos()
+    in scan() and the GitHub calls in repo_detail / debug_files."""
+    logger.warning("GitHub network error on %s: %s", request.path, e)
+    flash("Couldn't reach GitHub — check your internet connection and try again.", "error")
     target = url_for("dashboard") if session.get("authenticated") else url_for("login")
     return redirect(target)
 
@@ -307,8 +329,14 @@ def login():
 @app.route("/logout")
 def logout():
     global _github_client, _credentials
-    _github_client = None
-    _credentials = None
+    # Only tear down the shared client/credentials for an actually-authenticated
+    # request. Without this gate a cross-origin GET (e.g. <img src=".../logout">)
+    # — which SameSite=Lax already strips the session cookie from, so it isn't
+    # authenticated — could still null the process-global client and knock the
+    # real user offline.
+    if session.get("authenticated"):
+        _github_client = None
+        _credentials = None
     session.clear()
     return redirect(url_for("login"))
 
@@ -507,15 +535,21 @@ def settings():
         action = request.form.get("action")
 
         if action == "save_preferences":
-            prefs["local_root"] = request.form.get("local_root", "~/claudesync2")
+            local_root = request.form.get("local_root", "~/claudesync2")
             requested_model = request.form.get("ai_model", ai.DEFAULT_MODEL)
-            prefs["ai_model"] = (
-                requested_model if requested_model in ai.VALID_MODELS else ai.DEFAULT_MODEL
-            )
-            prefs["display_mode"] = request.form.get("display_mode", "plain_english")
-            excluded = request.form.get("excluded_repos", "")
-            prefs["excluded_repos"] = [r.strip() for r in excluded.split(",") if r.strip()]
-            models.save_preferences(prefs)
+            ai_model = requested_model if requested_model in ai.VALID_MODELS else ai.DEFAULT_MODEL
+            display_mode = request.form.get("display_mode", "plain_english")
+            excluded_raw = request.form.get("excluded_repos", "")
+            excluded = [r.strip() for r in excluded_raw.split(",") if r.strip()]
+
+            # Atomic get-modify-save under the store lock (returns the saved
+            # prefs so downstream rendering stays consistent).
+            def _apply(p):
+                p["local_root"] = local_root
+                p["ai_model"] = ai_model
+                p["display_mode"] = display_mode
+                p["excluded_repos"] = excluded
+            prefs = models.update_preferences(_apply)
             flash("Preferences saved.", "success")
 
         elif action == "save_spec":
@@ -608,8 +642,9 @@ def _resolve_active_group(groups: dict, persist: bool = True) -> str:
     if requested is not None:
         active_group = requested if requested in groups else ""
         if persist and prefs.get("active_group", "") != active_group:
-            prefs["active_group"] = active_group
-            models.save_preferences(prefs)
+            # Atomic get-modify-save so a concurrent prefs write (another tab)
+            # doesn't clobber this active_group update, or vice versa.
+            models.update_preferences(lambda p: p.__setitem__("active_group", active_group))
         return active_group
     active_group = prefs.get("active_group", "")
     if active_group and active_group not in groups:
@@ -1087,10 +1122,14 @@ def stats():
 
     force = request.args.get("refresh") == "1"
     key = _stats_cache_key()
-    if not force and _stats_cache and _stats_cache.get("key") == key:
+    # Bind the global to a local once: a concurrent POST /scan sets _stats_cache
+    # to None, and reading it twice (truthiness then .get) could otherwise race
+    # into an AttributeError on None.
+    cache = _stats_cache
+    if not force and cache and cache.get("key") == key:
         return render_template(
             "stats.html",
-            repos=_stats_cache["repos"],
+            repos=cache["repos"],
             scan_results=_scan_results,
             periods=list(PERIOD_DAYS.keys()),
             groups=groups,
@@ -1362,6 +1401,11 @@ def _seed_program_groups():
     group is not resurrected on the next visit."""
     meta = models.get_program_meta()
     if meta.get("_seeded"):
+        return
+    # Don't seed (or burn the one-shot marker) before a scan exists — otherwise
+    # the Education group seeds empty and, with the marker set, never
+    # re-populates once repos are actually scanned.
+    if not (_scan_results and _scan_results.get("repos")):
         return
     groups = models.get_groups()
     scanned = {r["name"].lower(): r["name"]
@@ -1824,6 +1868,11 @@ def tracker_generate(owner, name):
         )
         flash(f"Tracker generation failed: {e}", "error")
         return redirect(url_for("tracker_view", owner=owner, name=name))
+    except gh.GitHubAuthError:
+        # Surface the actionable PAT-reset remedy via the global handler
+        # instead of a generic "generation failed: GitHubAuthError" message,
+        # matching the other AI-generation routes.
+        raise
     except Exception as e:
         models.log_tracker_event(
             "generate_exception", owner=owner, repo=name, error=str(e)[:500],
@@ -1902,26 +1951,28 @@ def tracker_action_status(owner, name, action_id):
         flash(f"Bad status '{new_status}'.", "error")
         return redirect(url_for("tracker_view", owner=owner, name=name))
 
-    tracker = models.get_tracker(owner, name)
-    if not tracker:
+    # Atomic get-modify-save under the store lock so two quick status clicks
+    # (or a click racing a regeneration's save) can't lose each other's write.
+    found = {"ok": False}
+
+    def _apply(tracker):
+        for n in tracker.get("next_actions") or []:
+            if n.get("id") == action_id:
+                n["status"] = new_status
+                if new_note or new_status in ("blocked", "dismissed"):
+                    # Always record a note for blocked/dismissed so the UI
+                    # can show WHY. Empty string is fine if user didn't supply.
+                    n["status_note"] = new_note
+                found["ok"] = True
+                break
+
+    tracker = models.update_tracker(owner, name, _apply)
+    if tracker is None:
         flash("No tracker found for this repo.", "error")
         return redirect(url_for("tracker_view", owner=owner, name=name))
-
-    updated = False
-    for n in tracker.get("next_actions") or []:
-        if n.get("id") == action_id:
-            n["status"] = new_status
-            if new_note or new_status in ("blocked", "dismissed"):
-                # Always record a note for blocked/dismissed so the UI
-                # can show WHY. Empty string is fine if user didn't supply.
-                n["status_note"] = new_note
-            updated = True
-            break
-    if not updated:
+    if not found["ok"]:
         flash(f"Action {action_id} not found.", "error")
         return redirect(url_for("tracker_view", owner=owner, name=name))
-
-    models.save_tracker(owner, name, tracker)
     models.log_tracker_event(
         "action_status_update",
         owner=owner, repo=name, action_id=action_id,
@@ -2280,6 +2331,10 @@ def tracker_action_status(owner, name, action_id):
 
 if __name__ == "__main__":
     import logging
-    logging.basicConfig(level=logging.DEBUG)
+    # Werkzeug's debug mode exposes an interactive, code-executing console on
+    # error pages — handy for a quick local hack, dangerous for an app holding
+    # a GitHub PAT. Default it OFF; opt in with REPODOCTOR_DEBUG=1 when needed.
+    debug_mode = os.environ.get("REPODOCTOR_DEBUG", "").lower() in ("1", "true", "yes")
+    logging.basicConfig(level=logging.DEBUG if debug_mode else logging.INFO)
     models._ensure_dirs()
-    app.run(host="127.0.0.1", port=5001, debug=True)
+    app.run(host="127.0.0.1", port=5001, debug=debug_mode)

@@ -169,8 +169,13 @@ def gather_repo_inputs(
         since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=30)
         commits = client.get_commits_since(owner, repo, since.isoformat())
         for c in (commits or [])[:MAX_COMMITS]:
-            msg = (c.get("commit", {}).get("message") or "").split("\n")[0]
-            date = (c.get("commit", {}).get("committer", {}) or {}).get("date", "")[:10]
+            commit = c.get("commit") or {}
+            msg = (commit.get("message") or "").split("\n")[0]
+            committer = commit.get("committer") or {}
+            # .get("date") can be None (key present, value null); slicing None
+            # would raise and abort the whole loop, silently dropping every
+            # commit title from the tracker prompt.
+            date = (committer.get("date") or "")[:10]
             if msg:
                 inputs["recent_commits"].append({"date": date, "title": msg})
     except Exception as e:

@@ -216,7 +216,11 @@ def validate_tracker(tracker: dict) -> list[str]:
         seen: set[str] = set()
         for row in rows:
             rid = row.get("id", "")
-            _check(errors, bool(ID_PATTERNS[prefix].match(rid or "")),
+            # The tracker JSON comes straight from the LLM, so a row id may be
+            # a non-string (e.g. 7 instead of "M7"). Coerce before matching so
+            # the validator reports the bad id instead of raising TypeError and
+            # bypassing the generator's retry loop.
+            _check(errors, bool(ID_PATTERNS[prefix].match(rid if isinstance(rid, str) else "")),
                    f"{label}: bad ID '{rid}' (must match ^{prefix}\\d+$)")
             _check(errors, rid not in seen, f"{label}: duplicate ID '{rid}'")
             seen.add(rid)
@@ -277,8 +281,12 @@ def validate_tracker(tracker: dict) -> list[str]:
         _check(errors, status in NEXT_ACTION_STATUSES,
                f"next_action {n.get('id')}: status '{status}' not in {NEXT_ACTION_STATUSES}")
         prompt = n.get("prompt") or ""
-        _check(errors, isinstance(prompt, str) and len(prompt.strip()) >= 50,
-               f"next_action {n.get('id')}: prompt must be ≥50 chars (got {len(prompt.strip())})")
+        # Compute the length safely: the f-string message is evaluated eagerly,
+        # so len(prompt.strip()) on a non-string prompt would raise before the
+        # isinstance guard in the condition could short-circuit it.
+        prompt_len = len(prompt.strip()) if isinstance(prompt, str) else 0
+        _check(errors, isinstance(prompt, str) and prompt_len >= 50,
+               f"next_action {n.get('id')}: prompt must be ≥50 chars (got {prompt_len})")
         for rid in n.get("related_ids", []) or []:
             _check(errors, rid in valid_any_id,
                    f"next_action {n.get('id')}: related_ids '{rid}' is not a real ID in this tracker")
@@ -300,7 +308,7 @@ def validate_tracker(tracker: dict) -> list[str]:
     # sort_recent_changes() before the tracker is saved.
     for c in recent_changes:
         date = c.get("date", "")
-        _check(errors, bool(DATE_PATTERN.match(date or "")),
+        _check(errors, bool(DATE_PATTERN.match(date if isinstance(date, str) else "")),
                f"recent_change '{c.get('title', '')}': bad date '{date}' (must be YYYY-MM-DD)")
         _check(errors, c.get("kind") in CHANGE_KINDS,
                f"recent_change '{c.get('title', '')}': kind '{c.get('kind')}' not in {CHANGE_KINDS}")
@@ -316,7 +324,10 @@ def sort_recent_changes(tracker: dict) -> None:
     Called by the generator before saving so the model's ordering doesn't
     matter — we just normalise it. Entries with no date sink to the end."""
     rows = [c for c in (tracker.get("recent_changes") or []) if isinstance(c, dict)]
-    rows.sort(key=lambda c: c.get("date") or "0000-00-00", reverse=True)
+    # str() the key: a non-string date (e.g. an int the model emitted) mixed
+    # with string dates would otherwise raise TypeError on comparison, and this
+    # sort runs BEFORE validate_tracker, so it would crash generation outright.
+    rows.sort(key=lambda c: str(c.get("date") or "0000-00-00"), reverse=True)
     tracker["recent_changes"] = rows
 
 
@@ -360,7 +371,7 @@ def next_id(prefix: str, existing_ids: Iterable[str]) -> str:
         raise ValueError(f"Unknown prefix: {prefix}")
     max_n = 0
     for eid in existing_ids:
-        if not eid or not pattern.match(eid):
+        if not eid or not isinstance(eid, str) or not pattern.match(eid):
             continue
         try:
             n = int(eid[1:])

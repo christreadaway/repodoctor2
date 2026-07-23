@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header">
     <h1>My Repositories</h1>
-    <form method="POST" action="/scan" class="inline-form">
+    <form method="POST" action="/scan" class="inline-form scan-form">
         <button type="submit" class="btn btn-primary" id="scan-btn">
             {% if scan_results %}RE-SCAN{% else %}SCAN REPOS{% endif %}
         </button>
@@ -18,7 +18,7 @@
     </div>
 
     <div class="onboarding-action">
-        <form method="POST" action="/scan" class="inline-form">
+        <form method="POST" action="/scan" class="inline-form scan-form">
             <button type="submit" class="btn btn-primary btn-large">SCAN MY REPOS</button>
         </form>
         <p class="text-secondary">This reads your GitHub repos. It does not modify anything.</p>

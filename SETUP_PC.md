@@ -1,12 +1,12 @@
 # RepoDoctor2 — Windows Setup
 
-One paste. Everything installs, clones, and launches.
+One paste. Works whether this is a brand-new computer or you've run it here before — installs what's missing, clones if needed, and launches.
 
 Requires Windows 10 or 11 (which ship with `winget`).
 
 ---
 
-## First-Time Setup + Launch
+## Setup + Launch
 
 1. Press **Windows key**, type `powershell`, press **Enter**.
 2. Paste this **entire block** and press **Enter**:
@@ -17,32 +17,22 @@ winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-pa
 winget install -e --id Git.Git --accept-source-agreements --accept-package-agreements
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 cd ~
-git clone https://github.com/christreadaway/repodoctor2.git repodoctor2
-cd ~\repodoctor2
+if (-not (Test-Path .\repodoctor2)) { git clone https://github.com/christreadaway/repodoctor2.git repodoctor2 }
+cd .\repodoctor2
 .\start.ps1
 ```
 
-Takes 2–5 minutes. Your browser opens to http://127.0.0.1:5001 when it's ready.
+First run takes 2–5 minutes. Every run after that takes a few seconds — `start.ps1` pulls the latest code, activates the virtual environment, refreshes dependencies, and starts the app.
 
 If `winget` reports Python or Git already installed, that's fine — keep going.
 
----
-
-## Every Future Session
-
-```powershell
-cd ~\repodoctor2; .\start.ps1
-```
-
-`start.ps1` pulls latest code, activates the virtual environment, refreshes dependencies, and starts the app.
-
-Press **Ctrl + C** in PowerShell to stop the server.
+Your browser opens to http://127.0.0.1:5001 when it's ready. Press **Ctrl + C** in PowerShell to stop the server.
 
 ---
 
 ## Desktop Shortcut (one-click launch)
 
-Run this **once** in PowerShell. It creates a "RepoDoctor" icon on your desktop. Double-click it any time to launch the app:
+Run this **once** in PowerShell, after you've done Setup + Launch above at least one time on this computer. It creates a "RepoDoctor" icon on your desktop. Double-click it any time to launch the app:
 
 ```powershell
 $DesktopPath = [Environment]::GetFolderPath("Desktop")
@@ -60,13 +50,15 @@ Write-Host "Shortcut created at: $DesktopPath\RepoDoctor.lnk" -ForegroundColor G
 
 When you double-click **RepoDoctor** on your desktop, a PowerShell window opens, the app starts, and your browser opens to http://127.0.0.1:5001. Closing the PowerShell window stops the server.
 
+⚠️ The shortcut points at `repodoctor2` in your user folder — it only works once that folder exists, so run Setup + Launch first on any new computer before creating the shortcut.
+
 ---
 
 ## Troubleshooting
 
 **`winget` not recognized** → Update Windows, or install from https://aka.ms/getwinget.
 
-**`python` or `git` not recognized after the paste** → Close PowerShell, reopen it, then run `cd ~\repodoctor2; .\start.ps1`.
+**`python` or `git` not recognized after the paste** → Close PowerShell, reopen it, then paste the Setup + Launch block again.
 
 **`Activate.ps1 cannot be loaded`** → Run `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force`, then retry.
 

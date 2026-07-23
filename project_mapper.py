@@ -23,10 +23,15 @@ def _ensure_dirs():
 
 
 def _load_config() -> dict:
+    default = {"mappings": {}, "dismissed": []}
     if os.path.isfile(CONFIG_FILE):
-        with open(CONFIG_FILE) as f:
-            return json.load(f)
-    return {"mappings": {}, "dismissed": []}
+        try:
+            with open(CONFIG_FILE) as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else default
+        except (json.JSONDecodeError, OSError):
+            return default
+    return default
 
 
 def _save_config(config: dict):
@@ -129,14 +134,19 @@ def _parse_conversation(item: dict) -> dict | None:
                 content = ""
             name = content[:120] if content else "Untitled conversation"
 
-    # Extract project name
+    # Extract project name. Real exports carry an explicit null for chats not
+    # assigned to a project (project.name: null, project_name: null, ...), and
+    # .get() returns that null rather than the default — so coerce to a string
+    # here so a None never persists and crashes .lower() downstream.
     project = ""
     if "project" in item and isinstance(item["project"], dict):
-        project = item["project"].get("name", "")
+        project = item["project"].get("name") or ""
     elif "project_name" in item:
-        project = item["project_name"]
+        project = item.get("project_name") or ""
     elif "project_uuid" in item:
-        project = item.get("project_title", "")
+        project = item.get("project_title") or ""
+    if not isinstance(project, str):
+        project = str(project)
 
     # Extract date. Real Claude exports carry ISO timestamps (offsets or
     # microseconds+Z — fromisoformat handles every shape the old strptime
@@ -209,8 +219,15 @@ def get_conversations() -> list[dict]:
     path = os.path.join(PROJECTS_DIR, "conversations.json")
     if not os.path.isfile(path):
         return []
-    with open(path) as f:
-        return json.load(f)
+    # parse_claude_export writes this non-atomically, so a crash mid-write can
+    # leave truncated JSON. Tolerate corruption instead of 500ing every
+    # repo-detail page until the file is manually deleted.
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, OSError):
+        return []
 
 
 def map_conversations_to_repos(conversations: list[dict], repos: list[str]) -> dict:
@@ -247,9 +264,9 @@ def map_conversations_to_repos(conversations: list[dict], repos: list[str]) -> d
             auto_matched.append(conv)
             continue
 
-        project_name = conv.get("project", "").lower().strip()
-        topic = conv.get("name", "").lower()
-        excerpt = conv.get("excerpt", "").lower()
+        project_name = (conv.get("project") or "").lower().strip()
+        topic = (conv.get("name") or "").lower()
+        excerpt = (conv.get("excerpt") or "").lower()
 
         matched = False
 
@@ -371,9 +388,9 @@ def get_conversations_for_repo(repo_name: str) -> list[dict]:
             result.append(conv)
             continue
         # Check project name match
-        if conv.get("project", "").lower() == repo_name.lower():
+        if (conv.get("project") or "").lower() == repo_name.lower():
             result.append(conv)
             continue
 
-    result.sort(key=lambda c: c.get("date", ""), reverse=True)
+    result.sort(key=lambda c: c.get("date") or "", reverse=True)
     return result
