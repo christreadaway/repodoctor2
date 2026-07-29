@@ -1,11 +1,42 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 17
-**Date Range:** 2025-02-14 to 2026-07-23
-**Last Updated:** 2026-07-23 (Session 17)
+**Total Sessions Logged:** 18
+**Date Range:** 2025-02-14 to 2026-07-29
+**Last Updated:** 2026-07-29 (Session 18)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 18 — 2026-07-29 (Yesterday session-recap screen + Markdown Docs Explorer)
+
+Branch: `claude/yesterday-work-summary-zqlr51`. Two new screens from one request each. The unifying insight: Chris runs every project through Claude Code on the web, and each web session becomes a `claude/<slug>-<id>` branch (usually with a PR). So GitHub already holds a faithful record of "what I was doing" — no transcript access needed.
+
+### What We Did
+
+**1. Yesterday — "what was I doing, and where did I leave off?" (`/yesterday`).**
+A cross-repo, per-session recap. A session = one branch's activity inside a time window. New module `sessions.py` gathers them:
+- Prunes repos cheaply by the cached scan's `pushed_at` (a repo not pushed since the window opened can't have commits in it).
+- Per candidate repo, lists branches + PRs (sorted newest-updated, stops paging once older than the window) and builds sessions three ways: **PRs** (merged/open/closed — commits pulled from the PR-commits endpoint so a branch that merged yesterday still shows its work), **bare branches** with in-window commits (via compare, capped at 40/repo with a logged warning so a repo full of stale branches can't run away), and **direct-to-default** commits (merge commits dropped, PR-covered shas deduped).
+- Deterministic **what's-next** classifier — a pure function of the git facts, so the page works with zero AI: MERGE TO MAIN (open PR, with a rebase note if behind), CONTINUE, FINISH IT (WIP heuristic on the last commit message), DONE (merged or already in main), DECIDE (closed-unmerged PR), CONFIRM LIVE (direct-to-main).
+- Optional per-session AI recap (what you did / how you directed Claude — inferred from the commit arc + PR title and honestly hedged, since no transcript is read / what's next). Driven by the shared client-side generation queue, one POST per session (`/api/yesterday/summarize/<token>`, token = base64url of `repo\x1fbranch` so branch slashes don't break the URL). Cached in `data/session_recaps.json` keyed `repo::branch::window`, stale when the branch tip sha moves.
+- Range presets (Yesterday / Today / Last 3 / Last 7) + a date picker; days are computed in America/Chicago so "yesterday" is Chris's yesterday. **COPY FOR CLAUDE** / **DOWNLOAD .MD** (`/yesterday/export.md`) produce a paste-ready "where I left off" doc. Every gather + generation logs to `data/logs/sessions.log`.
+
+**2. Docs Explorer — read each repo's Markdown in the browser (`/docs`).**
+Repo picker + folder-grouped sidebar (root docs first, README/PRODUCT_SPEC/PROJECT_STATUS/SESSION_NOTES/CLAUDE ahead of the rest), RAW/RENDERED toggle, ON GITHUB link. One tree call lists the `.md` files (vendor dirs excluded, `docs_explorer.py`); one content call fetches the selected file. A crafted `?path=` only renders if it's in the repo's own md listing — verified in a test that the crafted path is never fetched.
+
+**3. Dependency-free, XSS-safe Markdown renderer (`md_render.py`).**
+Deliberately NOT the `markdown` package: the Mac launcher installs requirements exactly once (a `venv/.deps-installed` stamp), so a new import would throw `ModuleNotFoundError` on every existing install's next launch — breaking the "one command that always works" promise. So it's stdlib-only. Safety is by construction: every line is HTML-escaped BEFORE any Markdown token is applied (no raw HTML/`<script>` survives), and link targets are scheme-checked (http/https/mailto/relative only, so `[x](javascript:…)` renders as inert text). Handles headings, fenced/inline code, bold/italic, links, nested lists, blockquotes, tables, and rules.
+
+### GitHub client additions
+`get_pull_commits()` (commits of a PR regardless of merge state); `get_pulls()` gained `sort`/`direction`/`max_pages`; `get_commits_since()` gained `until_iso` to bound a single-day window on the recent side.
+
+### Tests
+**308 passing** (was 223). New: `tests/test_sessions.py` (48), `tests/test_md_render.py` (21), `tests/test_docs.py` (16). Ran the full suite in a venv (system had a `blinker` conflict; `python3 -m venv .venv` sidesteps it).
+
+### Where it left off
+Both screens built, tested, and wired into the nav (Yesterday next to What's Next; Docs after Briefing). Not yet merged to `main` — open a PR from `claude/yesterday-work-summary-zqlr51`.
 
 ---
 

@@ -303,6 +303,27 @@ def save_brief(repo_name: str, brief: dict):
         _save_json(BRIEFS_PATH, briefs)
 
 
+# --- Session Recaps (Yesterday screen) ---
+#
+# Plain-English AI recaps of one Claude Code session (= one branch's activity
+# in a time window), keyed "{repo}::{branch}::{window_key}". Each recap stores
+# the branch tip sha it was written from so it self-heals when the branch moves.
+
+SESSION_RECAPS_PATH = os.path.join(DATA_DIR, "session_recaps.json")
+
+
+def get_session_recaps() -> dict:
+    return _load_json(SESSION_RECAPS_PATH) or {}
+
+
+def save_session_recap(key: str, recap: dict):
+    with _STORE_LOCK:
+        recaps = get_session_recaps()
+        recap["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        recaps[key] = recap
+        _save_json(SESSION_RECAPS_PATH, recaps)
+
+
 # --- Henry Branch Summaries ---
 #
 # Keyed by "{repo_name}/{branch_name}" so multiple henry-named branches in the
@@ -636,6 +657,18 @@ def log_briefing_event(event: str, **fields):
 def tail_briefing_log(n: int = 100) -> list[dict]:
     """Return the last n events from the briefing log."""
     return _tail_log(BRIEFING_LOG_PATH, n)
+
+
+SESSIONS_LOG_PATH = os.path.join(DATA_DIR, "logs", "sessions.log")
+
+
+def log_sessions_event(event: str, **fields):
+    _append_log_event(SESSIONS_LOG_PATH, event, fields)
+
+
+def tail_sessions_log(n: int = 100) -> list[dict]:
+    """Return the last n events from the Yesterday/session-recap log."""
+    return _tail_log(SESSIONS_LOG_PATH, n)
 
 
 # --- Session Cost Tracking ---

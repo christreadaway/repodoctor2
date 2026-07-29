@@ -9,6 +9,7 @@ import datetime
 import logging
 import os
 import secrets
+import time
 
 import requests
 
@@ -36,6 +37,9 @@ import firestore_detector
 import tracker_data
 import tracker_generator
 import briefing
+import sessions
+import docs_explorer
+import md_render
 import program
 
 def _load_or_create_secret_key() -> str:
@@ -1372,6 +1376,219 @@ def briefing_generate_one(name):
     )
     models.log_action("generate_brief", name, "all", f"stage={brief.get('stage')}")
     return jsonify({"ok": True, "repo": name, "stage": brief.get("stage")})
+
+
+# --- Yesterday (cross-repo session recap) ---
+#
+# "What was I doing yesterday, and where did I leave off?" Each Claude Code web
+# session is a claude/<slug> branch, so this screen reconstructs the day's work
+# across every repo from GitHub commits + PR state, broken out by session, with
+# a deterministic "what's next" call and an on-demand plain-English AI recap.
+# Unlike the Briefing screen this gathers LIVE from GitHub on each visit (the
+# whole point is freshness); every gather + generation logs to
+# data/logs/sessions.log for paste-back debugging.
+
+_RANGE_PRESETS = [
+    ("yesterday", "Yesterday"),
+    ("today", "Today"),
+    ("last3", "Last 3 days"),
+    ("last7", "Last 7 days"),
+]
+
+
+def _yesterday_repos() -> list[dict]:
+    """Every repo in the latest scan — Yesterday spans the whole portfolio."""
+    return list(_scan_results.get("repos", []) if _scan_results else [])
+
+
+@app.route("/yesterday")
+@_require_auth
+def yesterday_view():
+    window = sessions.resolve_window(request.args)
+
+    if not _scan_results:
+        return render_template("yesterday.html", scan_results=None, window=window,
+                               range_presets=_RANGE_PRESETS)
+
+    client = _get_github_client()
+    if not client:
+        return render_template("yesterday.html", scan_results=_scan_results,
+                               not_connected=True, window=window,
+                               range_presets=_RANGE_PRESETS, sessions=[])
+
+    t0 = time.monotonic()
+    session_list = sessions.gather_sessions(client, _yesterday_repos(), window)
+    sessions.attach_recaps(session_list, models.get_session_recaps())
+    counts = sessions.summarize_counts(session_list)
+    markdown = sessions.compose_markdown(
+        session_list, session.get("github_user", ""), window.label)
+    models.log_sessions_event(
+        "view", range=window.key, sessions=len(session_list),
+        repos=counts["repos"], elapsed_ms=int((time.monotonic() - t0) * 1000),
+    )
+
+    return render_template(
+        "yesterday.html",
+        scan_results=_scan_results,
+        not_connected=False,
+        window=window,
+        range_presets=_RANGE_PRESETS,
+        sessions=session_list,
+        counts=counts,
+        markdown=markdown,
+        targets_all=[s["token"] for s in session_list],
+        targets_needs=[s["token"] for s in session_list if s["needs_summary"]],
+    )
+
+
+@app.route("/yesterday/export.md")
+@_require_auth
+def yesterday_export():
+    """The same recap the COPY button produces, as a downloadable .md file."""
+    window = sessions.resolve_window(request.args)
+    client = _get_github_client()
+    if not _scan_results or not client:
+        flash(NOT_CONNECTED_REMEDY if _scan_results else
+              "No scan data yet — run a scan first.", "error")
+        return redirect(url_for("yesterday_view", range=window.preset))
+
+    session_list = sessions.gather_sessions(client, _yesterday_repos(), window)
+    sessions.attach_recaps(session_list, models.get_session_recaps())
+    markdown = sessions.compose_markdown(
+        session_list, session.get("github_user", ""), window.label)
+    safe_key = window.key.replace(":", "-")
+    filename = f"where-i-left-off-{safe_key}.md"
+    return Response(
+        markdown,
+        mimetype="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.route("/api/yesterday/summarize/<token>", methods=["POST"])
+@_require_auth_api
+def yesterday_summarize_one(token):
+    """Generate the plain-English recap for ONE session. The Yesterday page
+    drives this once per session with live progress; the server re-gathers the
+    session and re-checks staleness so a fresh recap is never paid for twice."""
+    client = _get_github_client()
+    creds = _get_credentials()
+    if not client or not creds:
+        return jsonify({"error": NOT_CONNECTED_REMEDY}), 401
+
+    decoded = sessions.decode_token(token)
+    if not decoded:
+        return jsonify({"error": "Unrecognized session id — reload the page."}), 400
+    repo_name, branch = decoded
+    repo = _find_repo_by_name(repo_name)
+    if not repo:
+        return jsonify({"error": f"Repo '{repo_name}' not in the latest scan. Run a scan first."}), 404
+
+    body = (request.json or {}) if request.is_json else {}
+    window = sessions.resolve_window(body)
+    force = bool(body.get("force"))
+
+    try:
+        session_obj = sessions.gather_one_session(client, repo, branch, window)
+    except gh.GitHubAuthError:
+        return jsonify({"error": GITHUB_AUTH_REMEDY}), 401
+    if not session_obj:
+        # The branch no longer has activity in this window (e.g. deleted). Not
+        # an error — just nothing to summarize.
+        return jsonify({"ok": True, "skipped": "gone"})
+
+    existing = models.get_session_recaps().get(session_obj["recap_key"])
+    if existing and not force and not sessions.is_recap_stale(existing, session_obj):
+        return jsonify({"ok": True, "skipped": "fresh"})
+
+    model = models.get_ai_model()
+    try:
+        recap = sessions.summarize_session(creds["anthropic_key"], session_obj, model=model)
+    except Exception as e:
+        models.log_sessions_event(
+            "summarize_error", repo=repo_name, branch=branch,
+            error=f"{type(e).__name__}: {str(e)[:300]}",
+        )
+        return jsonify({"error": f"{type(e).__name__}: {str(e)[:200]}"}), 502
+
+    usage = recap.pop("_usage", {})
+    if usage:
+        in_tok = usage.get("input_tokens", 0)
+        out_tok = usage.get("output_tokens", 0)
+        _session_cost.add(in_tok, out_tok, ai.estimate_cost(in_tok, out_tok, model=model))
+    recap["_source_sha"] = session_obj.get("last_sha", "")
+    recap["_window_key"] = window.key
+    models.save_session_recap(session_obj["recap_key"], recap)
+    models.log_sessions_event(
+        "summarize_done", repo=repo_name, branch=branch, window=window.key,
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+    )
+    return jsonify({"ok": True, "headline": recap.get("headline", "")})
+
+
+# --- Docs Explorer ---
+#
+# Quick access to the Markdown files in each repo, rendered in the browser.
+# One tree call lists a repo's .md files (vendor dirs excluded, root docs
+# first); one content call fetches the selected file, rendered to SAFE HTML by
+# the dependency-free md_render (every line escaped before markup, link schemes
+# checked). A ?raw=1 toggle shows the source instead.
+
+@app.route("/docs")
+@_require_auth
+def docs_index():
+    if not _scan_results:
+        return render_template("docs.html", scan_results=None)
+
+    client = _get_github_client()
+    if not client:
+        return render_template("docs.html", scan_results=_scan_results,
+                               not_connected=True, repos=[])
+
+    repos = sorted(_scan_results.get("repos", []),
+                   key=lambda r: briefing.last_push_ts(r) or "", reverse=True)
+    if not repos:
+        return render_template("docs.html", scan_results=_scan_results, repos=[])
+
+    repo = _find_repo_by_name(request.args.get("repo") or "") or repos[0]
+    ref = request.args.get("ref") or repo.get("default_branch", "main")
+
+    files = docs_explorer.list_md_files(client, repo["owner"], repo["name"], ref)
+    groups = docs_explorer.group_by_dir(files)
+
+    selected = request.args.get("path")
+    if not selected or not docs_explorer.is_allowed_path(selected, files):
+        selected = docs_explorer.pick_default(files)
+
+    content = None
+    rendered = None
+    file_url = ""
+    view_raw = request.args.get("raw") == "1"
+    if selected:
+        content = client.get_file_content(repo["owner"], repo["name"], selected, ref=ref) or ""
+        if not view_raw:
+            rendered = md_render.render_markdown(content)
+        html_url = repo.get("html_url", "")
+        file_url = f"{html_url}/blob/{ref}/{selected}" if html_url else ""
+        logger.info("docs view repo=%s ref=%s path=%s (%d bytes)",
+                    repo["name"], ref, selected, len(content))
+
+    return render_template(
+        "docs.html",
+        scan_results=_scan_results,
+        not_connected=False,
+        repos=repos,
+        active_repo=repo,
+        ref=ref,
+        groups=groups,
+        file_count=len(files),
+        selected=selected,
+        content=content,
+        rendered=rendered,
+        view_raw=view_raw,
+        file_url=file_url,
+    )
 
 
 # --- Program (cross-project rollup) ---

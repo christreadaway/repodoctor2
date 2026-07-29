@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}RepoDoctor — Docs{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Docs</h1>
+    <div class="page-actions">
+        {% if repos %}
+        <select class="docs-repo-select" onchange="if(this.value) location.href=this.value;">
+            {% for r in repos %}
+            <option value="{{ url_for('docs_index', repo=r.name) }}"
+                    {% if r.name == active_repo.name %}selected{% endif %}>{{ r.name }}</option>
+            {% endfor %}
+        </select>
+        {% if selected %}
+        {% if view_raw %}
+        <a href="{{ url_for('docs_index', repo=active_repo.name, path=selected, ref=ref) }}" class="btn btn-secondary">RENDERED</a>
+        {% else %}
+        <a href="{{ url_for('docs_index', repo=active_repo.name, path=selected, ref=ref, raw='1') }}" class="btn btn-secondary">RAW</a>
+        {% endif %}
+        {% if file_url %}<a href="{{ file_url }}" target="_blank" rel="noopener" class="btn btn-secondary">ON GITHUB</a>{% endif %}
+        {% endif %}
+        {% endif %}
+    </div>
+</div>
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first, then browse each repo's docs here.</p>
+    </div>
+</div>
+{% elif not_connected %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>Not connected to GitHub.</h2>
+        <p>Docs reads files live from GitHub, and the app has restarted since you logged in. <a href="{{ url_for('logout') }}">Log out</a> and back in, then reload.</p>
+    </div>
+</div>
+{% elif not repos %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No repos in the latest scan.</h2>
+        <p>Run a scan on <a href="{{ url_for('dashboard') }}">My Repos</a> first.</p>
+    </div>
+</div>
+{% else %}
+
+<div class="docs-layout">
+    <aside class="docs-sidebar">
+        <div class="docs-sidebar-head">
+            <span class="docs-repo-name">{{ active_repo.name }}</span>
+            <span class="docs-file-count">{{ file_count }} .md file{% if file_count != 1 %}s{% endif %}</span>
+        </div>
+        {% if groups %}
+        {% for g in groups %}
+        <div class="docs-group">
+            <div class="docs-group-label">{{ g.label }}</div>
+            <ul class="docs-file-list">
+                {% for f in g.files %}
+                <li>
+                    <a href="{{ url_for('docs_index', repo=active_repo.name, path=f.path, ref=ref) }}"
+                       class="docs-file-link {% if f.path == selected %}active{% endif %}"
+                       title="{{ f.path }}">{{ f.name }}</a>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endfor %}
+        {% else %}
+        <p class="docs-empty">No Markdown files found in this repo.</p>
+        {% endif %}
+    </aside>
+
+    <section class="docs-main">
+        {% if selected %}
+        <div class="docs-file-path">{{ selected }} <span class="docs-ref">@ {{ ref }}</span></div>
+        {% if view_raw %}
+        <pre class="docs-raw">{{ content }}</pre>
+        {% elif rendered %}
+        <article class="md-body">{{ rendered|safe }}</article>
+        {% else %}
+        <p class="docs-empty">This file is empty.</p>
+        {% endif %}
+        {% else %}
+        <p class="docs-empty">Pick a Markdown file on the left to read it here.</p>
+        {% endif %}
+    </section>
+</div>
+{% endif %}
+{% endblock %}
