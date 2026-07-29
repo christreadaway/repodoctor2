@@ -1,14 +1,24 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-07-23 (Session 17 — local-setup fix, security hardening, full bug audit)
-**Current Branch:** `claude/local-setup-instructions-vgxwrp` (not yet merged to `main`)
+**Last Updated:** 2026-07-29 (Session 18 — Yesterday session-recap screen + Markdown Docs Explorer)
+**Current Branch:** `claude/yesterday-work-summary-zqlr51` (not yet merged to `main`)
 **Overall Progress:** ~97%
 
 ---
 
 ## Snapshot
 
-RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch counts, required-spec-file presence, code size, AI-generated project summaries, named groups for filtering, a Stats view with Commits / Code Size bar charts across time periods (aggregatable by group), an aggregated What's Next view, a per-repo Codebase Tracker, and a Chat Briefing screen that composes a single portfolio document for pasting into a Claude chat session. **Runs locally as a Flask app — this is the supported way to use it.** A Node.js/Netlify serverless port still lives in `netlify/` for reference, but the hosted deployment was decommissioned on 2026-07-23.
+RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch counts, required-spec-file presence, code size, AI-generated project summaries, named groups for filtering, a Stats view with Commits / Code Size bar charts across time periods (aggregatable by group), an aggregated What's Next view, a per-repo Codebase Tracker, a Chat Briefing screen that composes a single portfolio document for pasting into a Claude chat session, a **Yesterday** screen that reconstructs what you were doing across every repo (broken out by session, with a where-you-left-off call), and a **Docs Explorer** for reading each repo's Markdown files in the browser. **Runs locally as a Flask app — this is the supported way to use it.** A Node.js/Netlify serverless port still lives in `netlify/` for reference, but the hosted deployment was decommissioned on 2026-07-23.
+
+---
+
+## Latest — Session 18 (2026-07-29)
+
+Two new screens, both driven by the same insight: every Claude Code web session shows up in GitHub as a `claude/<slug>` branch, so branches + PR state are enough to reconstruct "what was I doing." See `SESSION_NOTES.md` for the full log.
+
+- **Yesterday (`/yesterday`, nav: Yesterday).** "What was I doing yesterday, and where did I leave off?" Reconstructs the day's work across every repo from GitHub commits + PR state, **broken out by session** (one card per branch). Each card shows the topic, the commits (with local times), PR status, and a deterministic **what's-next** call — MERGE TO MAIN / CONTINUE / FINISH IT / DONE / DECIDE / CONFIRM LIVE. Range presets (Yesterday / Today / Last 3 / Last 7) + a date picker. On demand, a per-session plain-English AI recap (what you did, how you directed Claude — inferred from the commit arc, honestly hedged since no transcript is read, and what's next), cached in `data/session_recaps.json` and regenerated only when the branch tip moves. **COPY FOR CLAUDE** / **DOWNLOAD .MD** produce a paste-ready "where I left off" document. Every gather + generation logs to `data/logs/sessions.log`.
+- **Docs Explorer (`/docs`, nav: Docs).** Quick access to the Markdown files in each repo, rendered in the browser. Repo picker + folder-grouped sidebar (root docs first: README, PRODUCT_SPEC, PROJECT_STATUS, SESSION_NOTES, CLAUDE), a RAW toggle, and an ON GITHUB link. Markdown is rendered by a **dependency-free, escape-first renderer** (`md_render.py`) — every line is HTML-escaped before any markup is applied and link schemes are checked, so no raw HTML/`<script>` or `javascript:` link from a repo's docs can reach the browser. No new runtime dependency was added (the Mac launcher installs deps only once, so a new import would break existing installs).
+- **Tests:** 308 passing (was 223 → +37 Yesterday, +21 md_render, +16 Docs, plus the pre-existing suite). New: `tests/test_sessions.py`, `tests/test_md_render.py`, `tests/test_docs.py`.
 
 ---
 
@@ -32,6 +42,18 @@ Focused on making local setup foolproof and hardening the app. See `SESSION_NOTE
 - **Smart regeneration:** default generation skips repos not pushed-to since their brief (`STALE` badge when out of date); REGENERATE ALL forces the group in view. Briefs cached in `data/briefs.json`; every generation logged to `data/logs/briefing.log` (same one-JSON-per-line format as `tracker.log`).
 - **Incremental generation (15b):** one repo per request via `POST /api/briefing/generate/<name>` driven by a client-side queue — live "3 of 12" progress overlay, CANCEL, per-repo errors that never kill the batch or overwrite a good brief.
 - Group tabs filter screen, generation, and export alike.
+
+### Yesterday — session recap (NEW 2026-07-29 Session 18)
+- `/yesterday` (nav: Yesterday) — cross-repo answer to "what was I doing, and where did I leave off?" A **session** = one Claude Code branch's activity in a time window, reconstructed from GitHub (there is no access to the Claude Code transcript, so "how you directed Claude" is inferred from the commit messages + PR title and honestly hedged).
+- Gathering (`sessions.py`): prunes repos by cached `pushed_at`, then per candidate repo pulls branches + PRs (newest-updated first, stops paging once older than the window) and builds sessions three ways — **merged/closed/open PRs** (commits via the PR-commits endpoint, so a session that merged yesterday still shows its work), **bare branches** with in-window commits (via compare, capped at 40/repo with a logged warning), and **direct-to-default** commits (merge commits dropped, PR-covered shas deduped).
+- Deterministic **what's-next** classifier (pure function of the git facts, so the page is useful with zero AI): MERGE TO MAIN (open PR) / CONTINUE / FINISH IT (WIP heuristic on the last commit) / DONE (merged or already in main) / DECIDE (closed-unmerged PR) / CONFIRM LIVE (direct-to-main).
+- Per-session AI recap on demand (client-side queue, one POST per session via `POST /api/yesterday/summarize/<token>`), cached in `data/session_recaps.json` keyed `repo::branch::window`, stale when the branch tip sha changes. Range presets + date picker; **COPY FOR CLAUDE** / **DOWNLOAD .MD** at `/yesterday/export.md`. Every gather + generation logged to `data/logs/sessions.log`.
+- 48 unit tests (`tests/test_sessions.py`): window resolution, topic/token parsing, the classifier, commit-window filtering, mocked cross-repo gather (all three session kinds + dedup + prune + failure isolation), recap staleness, Markdown, and the routes.
+
+### Docs Explorer (NEW 2026-07-29 Session 18)
+- `/docs` (nav: Docs) — read the Markdown files in any repo, rendered in the browser. Repo picker + folder-grouped sidebar (root docs first, in the order README / PRODUCT_SPEC / PROJECT_STATUS / SESSION_NOTES / CLAUDE / PROJECT_RULES), a RAW/RENDERED toggle, and an ON GITHUB link. One tree call lists the `.md` files (vendor dirs excluded); one content call fetches the selected file. A crafted `?path=` is rejected unless it's in the repo's own md listing (verified: never fetched).
+- Rendering (`md_render.py`) is **dependency-free and XSS-safe by construction**: every line is HTML-escaped BEFORE any Markdown token is applied, and link targets are scheme-checked (http/https/mailto/relative only), so no raw HTML/`<script>` or `javascript:`/`data:` link from a repo's docs can render. Handles headings, fenced/inline code, bold/italic, links, nested lists, blockquotes, tables, and horizontal rules; anything unrecognized stays plain escaped text. No new runtime dependency (the Mac launcher stamps deps as installed once, so an added import would break existing installs).
+- 37 unit tests (`tests/test_md_render.py` safety + blocks + inline + nesting + robustness; `tests/test_docs.py` listing/grouping + routes + path-validation).
 
 ### Codebase Tracker (NEW 2026-05-19 Session 14)
 - Per-repo deep view at `/tracker` accessible from a dedicated nav link. Dropdown picks any scanned repo; landing page auto-redirects to the most recently generated tracker when one exists.

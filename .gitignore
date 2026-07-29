@@ -23,6 +23,7 @@ data/action_log.json
 data/project_summaries.json
 data/henry_summaries.json
 data/briefs.json
+data/session_recaps.json
 data/*.json.corrupt
 data/specs/
 data/trackers/

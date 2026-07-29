@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}RepoDoctor — Yesterday{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Yesterday</h1>
+    <div class="page-actions">
+        {% if sessions %}
+        <button type="button" class="btn btn-primary" id="copy-yesterday-btn">COPY FOR CLAUDE</button>
+        <a href="{{ url_for('yesterday_export', range=window.preset, date=(window.key[5:] if window.preset == 'date' else None)) }}" class="btn btn-secondary">DOWNLOAD .MD</a>
+        <button type="button" class="btn btn-secondary" id="summarize-needs-btn"
+                {% if not targets_needs %}disabled title="Every session in view already has an AI recap."{% endif %}>
+            SUMMARIZE ({{ targets_needs|length }})
+        </button>
+        {% if targets_all and targets_needs|length != targets_all|length %}
+        <button type="button" class="btn btn-secondary" id="summarize-all-btn">REDO ALL ({{ targets_all|length }})</button>
+        {% endif %}
+        {% endif %}
+    </div>
+</div>
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first, then come back to see what you were working on.</p>
+    </div>
+</div>
+{% elif not_connected %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>Not connected to GitHub.</h2>
+        <p>Yesterday reads live activity from GitHub, and the app has restarted since you logged in. <a href="{{ url_for('logout') }}">Log out</a> and back in, then reload.</p>
+    </div>
+</div>
+{% else %}
+
+<p class="projects-hint">
+    What you were doing, broken out by session, across every repo. Each session is one Claude Code branch —
+    the app reads your commits and pull-request status from GitHub to reconstruct the work and figure out
+    where you left off. <strong>SUMMARIZE</strong> adds a plain-English AI recap per session (~$0.005 each on Haiku).
+    <em>No Claude Code transcript is read — "how you directed Claude" is inferred from your commit messages.</em>
+</p>
+
+<div class="group-bar yesterday-rangebar">
+    <div class="group-tabs">
+        {% for preset, label in range_presets %}
+        <a href="{{ url_for('yesterday_view', range=preset) }}"
+           class="group-tab {% if window.preset == preset %}active{% endif %}">{{ label }}</a>
+        {% endfor %}
+        {% if window.preset == 'date' %}
+        <span class="group-tab active">{{ window.label }}</span>
+        {% endif %}
+    </div>
+    <form class="yesterday-datepick" method="get" action="{{ url_for('yesterday_view') }}">
+        <label for="date">Pick a day</label>
+        <input type="date" id="date" name="date" value="{{ window.key[5:] if window.preset == 'date' else '' }}"
+               onchange="this.form.submit()">
+    </form>
+</div>
+
+{% if sessions %}
+<div class="briefing-stats yesterday-stats">
+    <span class="briefing-stat"><strong>{{ counts.sessions }}</strong> session{% if counts.sessions != 1 %}s{% endif %}</span>
+    <span class="briefing-stat"><strong>{{ counts.repos }}</strong> repo{% if counts.repos != 1 %}s{% endif %}</span>
+    {% if counts.needs_merge %}<span class="briefing-stat briefing-stat-warn"><strong>{{ counts.needs_merge }}</strong> ready to merge</span>{% endif %}
+    {% if counts.in_progress %}<span class="briefing-stat briefing-stat-missing"><strong>{{ counts.in_progress }}</strong> in progress</span>{% endif %}
+    {% if counts.done %}<span class="briefing-stat briefing-stat-ok"><strong>{{ counts.done }}</strong> merged/done</span>{% endif %}
+</div>
+
+<textarea id="yesterday-markdown" hidden readonly>{{ markdown }}</textarea>
+
+<div class="sessions-list">
+    {% for s in sessions %}
+    <div class="session-card {% if s.recap %}has-recap{% endif %}">
+        <div class="session-card-header">
+            <div class="session-title">
+                <a href="{{ url_for('repo_detail', owner=s.owner, name=s.repo) }}" class="session-repo">{{ s.repo }}</a>
+                <span class="session-topic">{{ s.topic }}</span>
+            </div>
+            <span class="chip next-{{ s.next_kind }}" title="{{ s.next_text }}">{{ s.next_label }}</span>
+        </div>
+
+        <div class="session-meta">
+            <span class="session-branch">{{ s.branch }}</span>
+            {% if s.pr %}
+            <a href="{{ s.pr.html_url }}" target="_blank" rel="noopener"
+               class="session-pr session-pr-{{ 'merged' if s.pr.merged else s.pr.state }}">
+               PR #{{ s.pr.number }} · {{ 'merged' if s.pr.merged else s.pr.state }}</a>
+            {% endif %}
+            <span class="session-count">{{ s.commit_count }} commit{% if s.commit_count != 1 %}s{% endif %}</span>
+            {% if s.last_commit_at %}<span class="session-when">last {{ s.last_commit_at|central_time }}</span>{% endif %}
+        </div>
+
+        {% if s.recap %}
+        {% if s.recap.what_you_did %}
+        <div class="session-section">
+            <div class="session-section-label">What you did</div>
+            <p class="session-section-text">{{ s.recap.what_you_did }}</p>
+        </div>
+        {% endif %}
+        {% if s.recap.how_you_directed_claude %}
+        <div class="session-section">
+            <div class="session-section-label">How you directed Claude</div>
+            <p class="session-section-text">{{ s.recap.how_you_directed_claude }}</p>
+        </div>
+        {% endif %}
+        <div class="session-section">
+            <div class="session-section-label session-label-next">What's next</div>
+            <p class="session-section-text">{{ s.recap.whats_next or s.next_text }}</p>
+        </div>
+        {% else %}
+        <div class="session-section">
+            <div class="session-section-label session-label-next">What's next</div>
+            <p class="session-section-text">{{ s.next_text }}</p>
+        </div>
+        {% endif %}
+
+        {% if s.commits %}
+        <details class="session-commits">
+            <summary>{{ s.commit_count }} commit{% if s.commit_count != 1 %}s{% endif %} this period</summary>
+            <ul class="session-commit-list">
+                {% for c in s.commits %}
+                <li>
+                    <span class="session-commit-msg">{{ c.summary }}</span>
+                    <span class="session-commit-time">{{ c.date|central_time }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </details>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+{% else %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>Nothing here for {{ window.label }}.</h2>
+        <p>No branches had commits in this window. Try a wider range above, or
+        <a href="{{ url_for('yesterday_view', range='last7') }}">look back 7 days</a>.</p>
+    </div>
+</div>
+{% endif %}
+
+<script type="application/json" id="yesterday-targets">{{ {"all": targets_all or [], "needs": targets_needs or [], "body": ({"date": window.key[5:]} if window.preset == 'date' else {"range": window.preset})}|tojson }}</script>
+<script>
+(function () {
+    var copyBtn = document.getElementById('copy-yesterday-btn');
+    var source = document.getElementById('yesterday-markdown');
+    if (copyBtn && source) {
+        copyBtn.addEventListener('click', function () {
+            window.copyToClipboard(source.value, copyBtn);
+        });
+    }
+
+    var cfgEl = document.getElementById('yesterday-targets');
+    var cfg = cfgEl ? JSON.parse(cfgEl.textContent) : {all: [], needs: [], body: {}};
+    var detail = 'Reading each session’s commits + PR status, then writing a plain-English recap. A few seconds per session.';
+
+    function urlFor(token) {
+        return '/api/yesterday/summarize/' + encodeURIComponent(token);
+    }
+
+    var needsBtn = document.getElementById('summarize-needs-btn');
+    if (needsBtn) {
+        needsBtn.addEventListener('click', function () {
+            window.runGenerationQueue({
+                targets: cfg.needs, urlFor: urlFor, body: cfg.body,
+                title: 'SUMMARIZING', detail: detail,
+            });
+        });
+    }
+
+    var allBtn = document.getElementById('summarize-all-btn');
+    if (allBtn) {
+        allBtn.addEventListener('click', function () {
+            if (!confirm('Redo AI recaps for all ' + cfg.all.length + ' session(s)? Uses the API for each.')) return;
+            var body = Object.assign({force: true}, cfg.body);
+            window.runGenerationQueue({
+                targets: cfg.all, urlFor: urlFor, body: body,
+                title: 'SUMMARIZING', detail: detail,
+            });
+        });
+    }
+})();
+</script>
+{% endif %}
+{% endblock %}

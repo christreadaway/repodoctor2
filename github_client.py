@@ -148,11 +148,36 @@ class GitHubClient:
             return resp.json()
         return None
 
-    def get_pulls(self, owner: str, repo: str, state: str = "open") -> list[dict]:
-        """Fetch all pull requests for a repo (paginated)."""
+    def get_pulls(self, owner: str, repo: str, state: str = "open",
+                  sort: str | None = None, direction: str | None = None,
+                  max_pages: int | None = None) -> list[dict]:
+        """Fetch pull requests for a repo (paginated).
+
+        `sort`/`direction` map to GitHub's list-PRs params (e.g.
+        sort='updated', direction='desc') so callers wanting the most
+        recently touched PRs first don't have to page through everything.
+        """
+        params: dict = {"state": state}
+        if sort:
+            params["sort"] = sort
+        if direction:
+            params["direction"] = direction
         return self._get_paginated(
             f"{GITHUB_API}/repos/{owner}/{repo}/pulls",
-            f"get_pulls {owner}/{repo}", params={"state": state},
+            f"get_pulls {owner}/{repo}", params=params, max_pages=max_pages,
+        )
+
+    def get_pull_commits(self, owner: str, repo: str, number: int,
+                         max_pages: int = 3) -> list[dict]:
+        """Commits that belong to a pull request, oldest-first.
+
+        Works regardless of merge state (unlike compare, which returns no
+        commits once the head branch is fully merged into the base), so a
+        session that merged yesterday still yields its commit history.
+        """
+        return self._get_paginated(
+            f"{GITHUB_API}/repos/{owner}/{repo}/pulls/{number}/commits",
+            f"get_pull_commits {owner}/{repo}#{number}", max_pages=max_pages,
         )
 
     def get_tags(self, owner: str, repo: str) -> list[dict]:
@@ -398,13 +423,18 @@ class GitHubClient:
         return {}
 
     def get_commits_since(self, owner: str, repo: str, since_iso: str,
-                          ref: str | None = None, max_pages: int = 3) -> list[dict]:
-        """Fetch commits on `ref` since the given ISO timestamp.
+                          ref: str | None = None, max_pages: int = 3,
+                          until_iso: str | None = None) -> list[dict]:
+        """Fetch commits on `ref` between since_iso and (optional) until_iso.
 
         Returns up to max_pages * 100 commits. Each commit dict contains at
-        minimum a `commit.author.date` / `commit.committer.date`.
+        minimum a `commit.author.date` / `commit.committer.date`. `until_iso`
+        bounds the window on the recent side so a single-day view doesn't
+        pull in everything committed after the target day.
         """
         params: dict = {"since": since_iso}
+        if until_iso:
+            params["until"] = until_iso
         if ref:
             params["sha"] = ref
         return self._get_paginated(
