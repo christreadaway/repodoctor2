@@ -449,7 +449,7 @@ class GitHubClient:
         The compare API returns at most 250 commits, oldest-first — for
         bigger branches commits[-1] is NOT the tip, which would misclassify
         an actively-developed branch as STALE. When truncated, fetch the
-        real tip date. Shared by scan_repo and the Henry page.
+        real tip date. Used by scan_repo.
         """
         commits = comparison.get("commits") or []
         if not commits:
@@ -580,9 +580,9 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
 
     # Branches with "henry" in the name are excluded from the dashboard count
     # (per Chris's preference). They're still listed in branch_names so the
-    # Henry page can find them, but they don't inflate the per-repo or
-    # cross-repo totals on My Repos. Default branch is never treated as
-    # "henry" even if its name happens to contain the substring.
+    # expandable branch list can show them, but they don't inflate the
+    # per-repo or cross-repo totals on My Repos. Default branch is never
+    # treated as "henry" even if its name happens to contain the substring.
     henry_branch_count = sum(
         1 for b in branches
         if "henry" in b["name"].lower() and b["name"] != default_branch

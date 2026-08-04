@@ -727,6 +727,30 @@ def delete_group_route():
     return redirect(url_for("projects"))
 
 
+# Enforced via structured outputs so the model cannot answer with prose —
+# the cause of the old "No JSON object found in AI response" failures.
+PROJECT_SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "what_it_does": {
+            "type": "string",
+            "description": "1-2 sentence plain-English description of what this project does",
+        },
+        "how_finished": {
+            "type": "string",
+            "description": "1-2 sentence assessment of how complete/finished the project is",
+        },
+        "next_steps": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Up to 5 short bullets: what needs to be built or tested next",
+        },
+    },
+    "required": ["what_it_does", "how_finished", "next_steps"],
+    "additionalProperties": False,
+}
+
+
 def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
     """Generate + save the Projects-page summary for one repo. Returns the
     saved summary. Raises on AI failure — callers decide how to surface it
@@ -753,6 +777,7 @@ def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
             "next_steps": ["Add PRODUCT_SPEC.md with project description", "Add SESSION_NOTES.md with session tracking"],
         }
         models.save_project_summary(name, summary)
+        models.log_summary_event("generate_skipped", repo=name, reason="no docs or description")
         return summary
 
     context_text = "\n\n".join(context_parts)
@@ -761,34 +786,34 @@ def _generate_summary_for_repo(client, creds: dict, repo: dict) -> dict:
     model = models.get_ai_model()
 
     ai_client = anthropic.Anthropic(api_key=creds["anthropic_key"])
-    response = ai_client.messages.create(
+    summary, usage = ai.request_json(
+        ai_client,
         model=model,
-        max_tokens=500,
-        **ai.thinking_kwargs(model),
+        max_tokens=800,
+        schema=PROJECT_SUMMARY_SCHEMA,
         messages=[{
             "role": "user",
             "content": (
                 f"Project: {name}\n\n{context_text}\n\n"
-                "Based on the above, return ONLY valid JSON with:\n"
-                '1. "what_it_does": 1-2 sentence description of what this project does\n'
-                '2. "how_finished": 1-2 sentence assessment of how complete/finished the project is\n'
-                '3. "next_steps": array of up to 5 short bullet strings for what needs to be built or tested next\n'
-                "Return raw JSON only, no markdown fencing."
+                "Based on the above, write the project summary JSON: "
+                "what_it_does, how_finished, and up to 5 next_steps."
             ),
         }],
     )
-    raw = next(
-        (b.text for b in response.content if getattr(b, "type", "") == "text"), ""
-    ).strip()
-    summary = ai.extract_json_object(raw)
     # Ensure next_steps is capped at 5
     if "next_steps" in summary and len(summary["next_steps"]) > 5:
         summary["next_steps"] = summary["next_steps"][:5]
     models.save_project_summary(name, summary)
 
-    in_tok = response.usage.input_tokens
-    out_tok = response.usage.output_tokens
+    in_tok = usage["input_tokens"]
+    out_tok = usage["output_tokens"]
     _session_cost.add(in_tok, out_tok, ai.estimate_cost(in_tok, out_tok, model=model))
+    models.log_summary_event(
+        "generate_done", repo=name, model=model,
+        input_tokens=in_tok, output_tokens=out_tok,
+        docs=sorted(fetched["docs"].keys()),
+        next_steps=len(summary.get("next_steps") or []),
+    )
     return summary
 
 
@@ -811,234 +836,15 @@ def generate_project_summary_one(name):
     except gh.GitHubAuthError:
         return jsonify({"error": GITHUB_AUTH_REMEDY}), 401
     except Exception as e:
-        models.log_action("generate_summary_error", name, "all", str(e)[:200])
-        return jsonify({"error": f"{type(e).__name__}: {str(e)[:200]}"}), 502
+        # 300 chars so request_json's "the model replied: ..." diagnostic
+        # snippet survives into the log and the Projects-page error line.
+        detail = f"{type(e).__name__}: {str(e)[:300]}"
+        models.log_summary_event("generate_error", repo=name, error=detail)
+        models.log_action("generate_summary_error", name, "all", str(e)[:300])
+        return jsonify({"error": detail}), 502
 
     models.log_action("generate_summary", name, "all", "ok")
     return jsonify({"ok": True, "repo": name})
-
-
-# --- Henry Branches ---
-#
-# Scan all repos for branches whose name contains "henry" (case-insensitive)
-# and produce an AI summary of each branch vs. its repo's default branch.
-
-HENRY_KEYWORD = "henry"
-
-
-def _find_henry_branches(scan_results: dict | None) -> list[dict]:
-    """Return [{owner, repo, branch_name, default_branch, private}] for every
-    non-default branch whose name contains 'henry'."""
-    found = []
-    if not scan_results:
-        return found
-    for repo in scan_results.get("repos", []):
-        default_branch = repo.get("default_branch", "main")
-        for bname in repo.get("branch_names", []):
-            if HENRY_KEYWORD in bname.lower() and bname != default_branch:
-                found.append({
-                    "owner": repo["owner"],
-                    "repo": repo["name"],
-                    "full_name": repo["full_name"],
-                    "branch_name": bname,
-                    "default_branch": default_branch,
-                    "private": repo.get("private", False),
-                    "html_url": repo.get("html_url", ""),
-                })
-    return found
-
-
-@app.route("/henry")
-@_require_auth
-def henry():
-    summaries = models.get_henry_summaries()
-    branches = _find_henry_branches(_scan_results)
-    # Attach summary (if cached) and sort: summarized first, then alphabetical.
-    for b in branches:
-        b["summary"] = summaries.get(f"{b['repo']}/{b['branch_name']}")
-    branches.sort(key=lambda b: (b["summary"] is None, b["repo"].lower(), b["branch_name"].lower()))
-    return render_template(
-        "henry.html",
-        branches=branches,
-        scan_results=_scan_results,
-        any_summaries=bool(summaries),
-    )
-
-
-@app.route("/henry/generate", methods=["POST"])
-@_require_auth
-def generate_henry_summaries():
-    client = _get_github_client()
-    creds = _get_credentials()
-    if not client or not creds:
-        flash("Not authenticated.", "error")
-        return redirect(url_for("henry"))
-    if not _scan_results:
-        flash("Run a scan first from My Repos.", "error")
-        return redirect(url_for("henry"))
-
-    targets = _find_henry_branches(_scan_results)
-    if not targets:
-        flash('No branches with "henry" in the name were found in your latest scan.', "error")
-        return redirect(url_for("henry"))
-
-    generated = 0
-    failed = 0
-    # Honor the Settings model preference, like briefs and trackers do.
-    model = models.get_ai_model()
-    # Group by repo so we only fetch get_branches/get_pulls once per repo.
-    by_repo: dict[tuple[str, str], list[dict]] = {}
-    for t in targets:
-        by_repo.setdefault((t["owner"], t["repo"]), []).append(t)
-
-    for (owner, name), items in by_repo.items():
-        default_branch = items[0]["default_branch"]
-        try:
-            branches_full = client.get_branches(owner, name)
-        except gh.GitHubAuthError:
-            raise
-        except Exception as e:
-            for t in items:
-                models.save_henry_summary(name, t["branch_name"], _henry_error_record(t, str(e)))
-                failed += 1
-            continue
-        sha_lookup = {b["name"]: b["commit"]["sha"] for b in branches_full}
-        try:
-            pulls = client.get_pulls(owner, name)
-            pr_branches = {pr["head"]["ref"] for pr in pulls}
-        except gh.GitHubAuthError:
-            raise
-        except Exception:
-            pr_branches = set()
-
-        spec_text = models.get_spec(name)
-
-        for t in items:
-            bname = t["branch_name"]
-            # A transient network error on one branch must not 500 the whole
-            # batch — record the failure and keep going, like every other
-            # step in this loop.
-            try:
-                comparison = client.compare_branches(owner, name, default_branch, bname)
-            except gh.GitHubAuthError:
-                raise
-            except Exception as e:
-                models.save_henry_summary(name, bname, _henry_error_record(t, str(e)))
-                failed += 1
-                continue
-            if comparison is None:
-                models.save_henry_summary(name, bname, _henry_error_record(t, "Could not compare branch."))
-                failed += 1
-                continue
-
-            # Shared with scan_repo — handles the compare API's 250-commit cap.
-            last_commit_date, last_commit_author = client.branch_last_commit(
-                owner, name, bname, comparison,
-            )
-            has_pr = bname in pr_branches
-            classification = client.classify_branch(comparison, last_commit_date, has_pr)
-
-            files_changed = [
-                {
-                    "filename": f["filename"],
-                    "additions": f["additions"],
-                    "deletions": f["deletions"],
-                    "status": f["status"],
-                }
-                for f in comparison.get("files", [])
-            ]
-            commit_messages = []
-            for c in comparison.get("commits", []):
-                c_commit = c.get("commit", {})
-                msg = (c_commit.get("message") or "").split("\n", 1)[0] or "(no message)"
-                c_author = c_commit.get("author") or {}
-                c_committer = c_commit.get("committer") or {}
-                commit_messages.append({
-                    "sha": (c.get("sha") or "")[:7],
-                    "message": msg,
-                    "author": c_author.get("name", "Unknown"),
-                    "date": c_committer.get("date"),
-                })
-
-            branch_data = {
-                "name": bname,
-                "classification": classification,
-                "ahead_by": comparison.get("ahead_by", 0),
-                "behind_by": comparison.get("behind_by", 0),
-                "last_commit_date": last_commit_date,
-                "last_commit_author": last_commit_author,
-                "has_pr": has_pr,
-                "commit_sha": sha_lookup.get(bname, ""),
-                "files_changed": files_changed,
-                "commit_messages": commit_messages,
-            }
-
-            try:
-                analysis = ai.analyze_branch(
-                    api_key=creds["anthropic_key"],
-                    repo_name=name,
-                    branch_data=branch_data,
-                    default_branch=default_branch,
-                    spec_text=spec_text,
-                    model=model,
-                )
-                usage = analysis.get("_usage", {})
-                in_tok = usage.get("input_tokens", 0)
-                out_tok = usage.get("output_tokens", 0)
-                cost = ai.estimate_cost(in_tok, out_tok, model=model)
-                _session_cost.add(in_tok, out_tok, cost)
-
-                models.save_henry_summary(name, bname, {
-                    "owner": owner,
-                    "repo": name,
-                    "branch_name": bname,
-                    "default_branch": default_branch,
-                    "html_url": t["html_url"],
-                    "private": t["private"],
-                    "plain_english_summary": analysis.get("plain_english_summary", ""),
-                    "screen_changes": analysis.get("screen_changes", []),
-                    "feature_assessment": analysis.get("feature_assessment", "UNCLEAR"),
-                    "risk_level": analysis.get("risk_level", "MEDIUM"),
-                    "conflict_prediction": analysis.get("conflict_prediction", ""),
-                    "merge_strategy": analysis.get("merge_strategy", "merge"),
-                    "ahead_by": branch_data["ahead_by"],
-                    "behind_by": branch_data["behind_by"],
-                    "classification": classification,
-                    "last_commit_date": last_commit_date,
-                    "last_commit_author": last_commit_author,
-                    "has_pr": has_pr,
-                    "files_count": len(files_changed),
-                    "commits_count": len(commit_messages),
-                    "commit_sha": branch_data["commit_sha"],
-                })
-                generated += 1
-            except Exception as e:
-                models.save_henry_summary(name, bname, _henry_error_record(t, str(e)))
-                failed += 1
-
-    flash(f"Henry branches summarized: {generated} done, {failed} failed.", "success")
-    models.log_action(
-        "generate_henry_summaries",
-        "all",
-        "all",
-        f"Generated {generated}, failed {failed}",
-    )
-    return redirect(url_for("henry"))
-
-
-def _henry_error_record(target: dict, err: str) -> dict:
-    return {
-        "owner": target["owner"],
-        "repo": target["repo"],
-        "branch_name": target["branch_name"],
-        "default_branch": target["default_branch"],
-        "html_url": target.get("html_url", ""),
-        "private": target.get("private", False),
-        "plain_english_summary": f"Summary failed: {err[:200]}",
-        "feature_assessment": "UNCLEAR",
-        "risk_level": "MEDIUM",
-        "error": err[:200],
-    }
 
 
 # --- Stats ---
@@ -2201,6 +2007,14 @@ def tracker_action_status(owner, name, action_id):
 
 # =====================================================================
 # COMMENTED OUT — full branch analysis features (will re-enable later)
+#
+# NOTE (2026-08-04): the AI engine these routes call — ai.analyze_branch,
+# ai.build_analysis_prompt, ai.estimate_tokens, and the branch-analyst
+# SYSTEM_PROMPT — was deleted from ai_analyzer.py when the Henry tab was
+# removed (Henry was its only live caller). To re-enable this block,
+# restore those functions from git history, then port them onto
+# ai.request_json + a JSON Schema the way the Projects summary does, so
+# the model can't answer with prose.
 # =====================================================================
 
 # # --- Repo Detail ---

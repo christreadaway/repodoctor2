@@ -32,7 +32,7 @@ import re
 import anthropic
 
 import github_client as gh
-from ai_analyzer import DEFAULT_MODEL, extract_json_object, extract_response_text, thinking_kwargs
+from ai_analyzer import DEFAULT_MODEL, request_json
 from briefing import last_push_ts, _parse_ts
 
 logger = logging.getLogger(__name__)
@@ -517,6 +517,21 @@ Rules:
 - Keep it tight — this is a memory jog, not a report.
 - If the facts are thin (one tiny commit), write less. Don't pad."""
 
+# Enforced via structured outputs (ai_analyzer.request_json) so the model
+# can't reply with prose. Mirrors normalize_recap, which stays as the final
+# guard.
+RECAP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "headline": {"type": "string"},
+        "what_you_did": {"type": "string"},
+        "how_you_directed_claude": {"type": "string"},
+        "whats_next": {"type": "string"},
+    },
+    "required": ["headline", "what_you_did", "how_you_directed_claude", "whats_next"],
+    "additionalProperties": False,
+}
+
 
 def build_summary_prompt(session: dict) -> str:
     pr = session.get("pr")
@@ -570,24 +585,25 @@ def summarize_session(api_key: str, session: dict, model: str = DEFAULT_MODEL) -
     _usage. A refusal/unparseable response degrades to an empty recap rather
     than raising (mirrors briefing.generate_brief)."""
     client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
-        model=model,
-        max_tokens=1200,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": build_summary_prompt(session)}],
-        **thinking_kwargs(model),
-    )
-    raw = extract_response_text(message)
+    # Structured outputs guarantee schema-valid JSON; a refusal or repeated
+    # truncation raises ValueError. Degrade to an empty recap instead of
+    # failing the whole generation, but log why.
     try:
-        parsed = extract_json_object(raw)
-    except ValueError:
+        parsed, usage = request_json(
+            client,
+            model=model,
+            max_tokens=1200,
+            schema=RECAP_SCHEMA,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": build_summary_prompt(session)}],
+        )
+    except ValueError as e:
+        logger.warning("session recap generation failed for %s/%s: %s",
+                       session.get("repo", "?"), session.get("branch", "?"), e)
         parsed = {}
+        usage = {"input_tokens": 0, "output_tokens": 0, "model": model}
     recap = normalize_recap(parsed)
-    recap["_usage"] = {
-        "input_tokens": message.usage.input_tokens,
-        "output_tokens": message.usage.output_tokens,
-        "model": model,
-    }
+    recap["_usage"] = usage
     return recap
 
 

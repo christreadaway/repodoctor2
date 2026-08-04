@@ -1,12 +1,11 @@
 """
-AI Analysis Engine for RepoDoctor.
-Uses the Anthropic API (Claude) to analyze branch content.
+AI helpers for RepoDoctor.
+Model catalog, cost estimation, and the shared Anthropic request path that
+every JSON-producing feature (project summaries, briefs, recaps) goes
+through.
 """
 
 import json
-import os
-
-import anthropic
 
 # Single source of truth for selectable models. Everything that needs a
 # model id, a Settings/tracker dropdown, or validation reads from here —
@@ -32,32 +31,6 @@ def thinking_kwargs(model: str) -> dict:
     if "sonnet-5" in model:
         return {"thinking": {"type": "disabled"}}
     return {}
-
-SYSTEM_PROMPT = """You are a Git branch analyst helping a non-developer understand their repository branches. Your job is to analyze branch data and produce clear, actionable recommendations.
-
-Rules:
-- Write all summaries in plain English — no jargon, no commit hashes in user-facing text
-- Explain what the branch DOES, not just what files it touches
-- Make Claude Code instructions complete and copy/paste ready — include cd, branch verification, and rollback steps
-- Map changes to spec features when a spec is available
-- Be conservative with risk — when in doubt, flag MEDIUM or HIGH
-- Return valid JSON only, no markdown fences or extra text
-
-Return a JSON object with these exact fields:
-{
-  "plain_english_summary": "ONE short sentence (max 20 words) describing what was done on this branch overall, written for a non-developer. No semicolons, no compound 'and X and Y' lists — just the headline.",
-  "screen_changes": [
-    {"screen": "Name of the screen/page/area (e.g. 'Dashboard', 'Henry Branches', 'Login', 'Settings'). If the change is not user-facing, use a short area name like 'Backend / API', 'Data model', or 'Build config'.", "change": "One short phrase describing what changed on that screen — start with a verb (Added, Removed, Renamed, Fixed, etc.)"}
-  ],
-  "feature_assessment": "SHOULD_MERGE | OPTIONAL | OBSOLETE | UNCLEAR",
-  "risk_level": "LOW | MEDIUM | HIGH",
-  "conflict_prediction": "Which files likely conflict and why, or 'No conflicts expected'",
-  "merge_strategy": "fast-forward | merge | rebase",
-  "claude_code_instructions": "Complete, copy/paste-ready text for Claude Code",
-  "spec_alignment": "Which features this relates to, or null if no spec provided"
-}
-
-For screen_changes: produce one bullet per distinct screen or area touched. Group multiple files for the same screen into a single bullet. Infer screen names from template/route names (e.g. templates/dashboard.html → 'Dashboard', templates/henry.html → 'Henry Branches'). Aim for 1–6 bullets — never more than 8."""
 
 
 def extract_response_text(message) -> str:
@@ -113,13 +86,78 @@ def extract_json_object(text: str) -> dict:
     raise ValueError("Unbalanced braces in AI response")
 
 
-def estimate_tokens(branch_data: dict, spec_text: str | None = None) -> int:
-    """Estimate token count for an analysis request."""
-    text = json.dumps(branch_data)
-    if spec_text:
-        text += spec_text
-    # Rough estimate: ~4 chars per token
-    return len(text) // 4 + 500  # 500 for system prompt overhead
+def request_json(
+    client,
+    *,
+    model: str,
+    messages: list,
+    schema: dict,
+    max_tokens: int,
+    system: str | None = None,
+) -> tuple[dict, dict]:
+    """Messages API call whose response must be a JSON object matching
+    `schema`. The single request path for every JSON-producing AI feature.
+
+    Uses structured outputs (output_config.format) so the API itself
+    constrains the model to emit valid JSON — the root fix for the
+    "No JSON object found in AI response" failures that happened when a
+    model answered a summary prompt with prose instead of JSON. Passed via
+    extra_body so it works on any anthropic SDK version we might have
+    installed (typed output_config support is newer than our pin).
+
+    The two documented cases where output can still deviate from the schema
+    are handled explicitly: max_tokens truncation gets one retry with double
+    the budget, and a safety refusal raises with a clear message. If parsing
+    still fails, the raised error includes the start of what the model
+    actually said, so the Projects-page error / action log is enough to
+    debug from.
+
+    Returns (parsed, usage) with usage = {input_tokens, output_tokens,
+    model} summed across attempts.
+    """
+    usage = {"input_tokens": 0, "output_tokens": 0, "model": model}
+
+    def _call(budget: int):
+        kwargs: dict = dict(
+            model=model,
+            max_tokens=budget,
+            messages=messages,
+            **thinking_kwargs(model),
+            extra_body={
+                "output_config": {
+                    "format": {"type": "json_schema", "schema": schema},
+                },
+            },
+        )
+        if system is not None:
+            kwargs["system"] = system
+        message = client.messages.create(**kwargs)
+        usage["input_tokens"] += message.usage.input_tokens
+        usage["output_tokens"] += message.usage.output_tokens
+        return message
+
+    message = _call(max_tokens)
+    if getattr(message, "stop_reason", None) == "max_tokens":
+        message = _call(max_tokens * 2)
+        if getattr(message, "stop_reason", None) == "max_tokens":
+            raise ValueError(
+                f"AI response was cut off by the output-token limit even "
+                f"after retrying with {max_tokens * 2} tokens. Regenerate, "
+                f"or switch models in Settings."
+            )
+
+    if getattr(message, "stop_reason", None) == "refusal":
+        raise ValueError(
+            "The AI declined this request (safety refusal). Regenerate, or "
+            "check the repo's docs for content that could trip a filter."
+        )
+
+    raw = extract_response_text(message)
+    try:
+        return extract_json_object(raw), usage
+    except ValueError as e:
+        snippet = " ".join(raw.split())[:160] or "(empty response)"
+        raise ValueError(f'{e}. The model ({model}) replied: "{snippet}"') from e
 
 
 def estimate_cost(input_tokens: int, output_tokens: int = 1000, model: str = DEFAULT_MODEL) -> float:
@@ -150,105 +188,3 @@ def estimate_cost(input_tokens: int, output_tokens: int = 1000, model: str = DEF
     input_cost = input_tokens * in_rate / 1_000_000
     output_cost = output_tokens * out_rate / 1_000_000
     return round(input_cost + output_cost, 4)
-
-
-def build_analysis_prompt(
-    repo_name: str,
-    branch_data: dict,
-    default_branch: str,
-    default_branch_commits: list[dict] | None = None,
-    spec_text: str | None = None,
-    local_path: str | None = None,
-) -> str:
-    """Build the user prompt for branch analysis."""
-    parts = [
-        f"Analyze this branch for repository: {repo_name}",
-        f"\nBranch: {branch_data['name']}",
-        f"Default branch: {default_branch}",
-        f"Commits ahead: {branch_data['ahead_by']}",
-        f"Commits behind: {branch_data['behind_by']}",
-        f"Classification: {branch_data['classification']}",
-        f"Last commit: {branch_data.get('last_commit_date', 'Unknown')}",
-        f"Last author: {branch_data.get('last_commit_author', 'Unknown')}",
-        f"Has open PR: {branch_data.get('has_pr', False)}",
-    ]
-
-    if branch_data.get("commit_messages"):
-        parts.append("\nCommit history (branch-only commits):")
-        for c in branch_data["commit_messages"]:
-            parts.append(f"  - {c['message']} (by {c['author']}, {c.get('date', '')})")
-
-    if branch_data.get("files_changed"):
-        parts.append("\nFiles changed:")
-        for f in branch_data["files_changed"]:
-            parts.append(f"  - {f['filename']}: +{f['additions']}/-{f['deletions']} ({f['status']})")
-
-    if default_branch_commits:
-        parts.append(f"\nRecent commits on {default_branch} (for context):")
-        for c in default_branch_commits[:10]:
-            msg = c["commit"]["message"].split("\n")[0] if c.get("commit") else "Unknown"
-            parts.append(f"  - {msg}")
-
-    if spec_text:
-        parts.append(f"\nProduct specification for this repo:\n{spec_text}")
-    else:
-        parts.append("\nNo product spec provided — omit spec_alignment from response (set to null).")
-
-    cd_path = local_path or f"~/claudesync2/{repo_name}"
-    parts.append(f"\nLocal project path for Claude Code instructions: {cd_path}")
-    parts.append(f"Use this exact path in the cd command of the instructions.")
-
-    return "\n".join(parts)
-
-
-def analyze_branch(
-    api_key: str,
-    repo_name: str,
-    branch_data: dict,
-    default_branch: str,
-    default_branch_commits: list[dict] | None = None,
-    spec_text: str | None = None,
-    local_path: str | None = None,
-    model: str = DEFAULT_MODEL,
-) -> dict:
-    """Analyze a branch using the Anthropic API. Returns structured analysis."""
-    client = anthropic.Anthropic(api_key=api_key)
-
-    user_prompt = build_analysis_prompt(
-        repo_name, branch_data, default_branch,
-        default_branch_commits, spec_text, local_path,
-    )
-
-    message = client.messages.create(
-        model=model,
-        max_tokens=2000,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
-        **thinking_kwargs(model),
-    )
-
-    response_text = extract_response_text(message)
-
-    try:
-        result = extract_json_object(response_text)
-    except (ValueError, json.JSONDecodeError):
-        result = {
-            "plain_english_summary": (
-                "AI response could not be parsed — see Claude Code instructions for manual review."
-            ),
-            "screen_changes": [],
-            "feature_assessment": "UNCLEAR",
-            "risk_level": "MEDIUM",
-            "conflict_prediction": "Unable to parse AI response",
-            "merge_strategy": "merge",
-            "claude_code_instructions": f"# AI analysis returned non-JSON response.\n# Manual review recommended for {branch_data['name']}",
-            "spec_alignment": None,
-        }
-
-    result["_usage"] = {
-        "input_tokens": message.usage.input_tokens,
-        "output_tokens": message.usage.output_tokens,
-        "model": model,
-    }
-
-    return result

@@ -80,20 +80,16 @@ Focused on making local setup foolproof and hardening the app. See `SESSION_NOTE
 - Sortable columns, sticky headers, per-file Y/- indicators, X/5 score
 - Size column (B / KB / MB) — numeric sort honors unit suffixes
 - "Current?" freshness column, expandable branch lists
-- **Henry branches excluded from the count (NEW 2026-05-15 Session 13):** per-repo Branches column and cross-repo Total Branches summary use `non_henry_branch_count`. Henry branches still appear in the expandable list, marked faded + italic with a `(henry)` suffix and tooltip explaining the exclusion.
+- **Henry branches excluded from the count (2026-05-15 Session 13):** per-repo Branches column and cross-repo Total Branches summary use `non_henry_branch_count`. Henry branches still appear in the expandable list, marked faded + italic with a `(henry)` suffix and tooltip explaining the exclusion. (The dedicated Henry tab was removed 2026-08-04; this count-exclusion behavior stays.)
 
 ### Projects
 - AI-generated summaries via Claude Haiku (~$0.001/project) — generated one repo per request (15b) with live progress, scoped to the group in view; failures report per-repo and never overwrite an existing good summary
-- Robust JSON parsing on the model response — handles fenced blocks, leading prose, and trailing commentary; empty/whitespace responses now raise a clear error rather than crashing
+- **Structured outputs enforce the JSON shape (NEW 2026-08-04):** every AI feature goes through `ai_analyzer.request_json`, which sends a JSON Schema with the request so the API constrains the model to emit valid JSON. Replaces "ask nicely for JSON, then parse whatever came back" — the model can no longer answer with prose, which is what produced the `No JSON object found in AI response` failures. Truncated responses auto-retry once at double the token budget; refusals and unparseable replies raise an error that quotes what the model actually said
+- **Own event log at `data/logs/summaries.log`** — one JSON object per line, copy/paste-able into Claude Code (matches tracker/briefing/sessions logs)
 - **Sorted by most recently updated (desc)** by default; missing dates sink to the bottom
 - **Project Groups** — tab-bar filter (All / named groups) + collapsible Manage Groups panel for create/rename/delete/assign
 - **Unassigned-projects section** at the bottom of Manage Groups — readonly chips listing every repo that isn't a member of any group, or an "Every project belongs to at least one group" empty-state
 - **5 default groups seeded on login** (School, Church, Catholic Games, Infrastructure, Fun) — temporary one-shot recovery; removal flagged in `CLAUDE.md`
-
-### Henry Branches
-- Per-branch AI summary (Haiku) of changes vs. default branch — what was done, screen-by-screen impact, risk, merge strategy, copy/paste Claude Code instructions
-- Same robust JSON extractor as Projects — no more raw-JSON-blob fallbacks when the model adds commentary after the code fence
-- **Defensive commit metadata access (NEW 2026-05-15):** commits with missing committer/author/message no longer KeyError
 
 ### Stats
 - Two views: **Commits**, **Code Size** (Lines Added removed — was broken on cold repos)
@@ -137,7 +133,7 @@ Nothing actively in progress. All Session 15 work (Chat Briefing screen + 15b re
 - **Truncated git trees.** Very large repos can have a truncated tree response; a warning is logged and some deep files may be missed.
 - **Scan is slightly slower.** `/languages` call per repo doubles API calls vs. previous. Still sequential; parallelization on the backlog.
 - **Stats first-load latency.** Commit stats page through up to 5000 commits per repo × N repos — first visit after a scan can take noticeably longer for heavy accounts. `?refresh=1` forces recompute; normal loads are cache hits.
-- **Anthropic key not verified at login.** An invalid/empty Anthropic key only surfaces when the user generates summaries/briefs/Henry analyses, where it shows up as a per-repo error in the progress overlay. Flagged in audit; low-frequency since the key rarely changes after first setup.
+- **Anthropic key not verified at login.** An invalid/empty Anthropic key only surfaces when the user generates summaries or briefs, where it shows up as a per-repo error in the progress overlay. Flagged in audit; low-frequency since the key rarely changes after first setup.
 - ~~`/login/reset` has no CSRF protection~~ — FIXED: both credential-reset endpoints require a per-boot anti-CSRF token, `/logout`'s global-state wipe is gated behind an authenticated session, and the local session cookie is now `SameSite=Lax` + `HttpOnly` (Session 16).
 - **Known limitations left as-is (Session 16 audit).** Documented, low-severity, deferred by design: repo lookups keyed by name alone can collide if two collaborator repos share a name; the Netlify port's in-memory scan state isn't shared across serverless instances (moot while decommissioned); GitHub pagination can silently truncate on a mid-list rate-limit (rare for a personal account). See `SESSION_NOTES.md`.
 - ~~`_save_json` has no disk-full / permission error handling~~ — FIXED Session 15b: all JSON/spec/credential writes are atomic (temp file + rename) with errors logged.

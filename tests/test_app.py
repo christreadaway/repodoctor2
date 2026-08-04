@@ -1,6 +1,7 @@
 """
 Tests for RepoDoctor.
-Covers security, models, github client classification, AI analyzer prompt building, and Flask routes.
+Covers security, models, github client classification, the shared AI JSON
+request path, and Flask routes.
 """
 
 import datetime
@@ -400,20 +401,6 @@ class TestGitHubClassification(unittest.TestCase):
 class TestAIAnalyzer(unittest.TestCase):
     """Test AI analyzer utilities."""
 
-    def test_estimate_tokens(self):
-        """Token estimation returns positive integer."""
-        branch_data = {"name": "feature-test", "ahead_by": 3, "behind_by": 0}
-        tokens = ai.estimate_tokens(branch_data)
-        self.assertGreater(tokens, 0)
-        self.assertIsInstance(tokens, int)
-
-    def test_estimate_tokens_with_spec(self):
-        """Token estimation increases with spec text."""
-        branch_data = {"name": "test"}
-        without_spec = ai.estimate_tokens(branch_data)
-        with_spec = ai.estimate_tokens(branch_data, "A very long spec " * 100)
-        self.assertGreater(with_spec, without_spec)
-
     def test_estimate_cost_sonnet(self):
         """Cost estimation for Sonnet model."""
         cost = ai.estimate_cost(1000, 500, "claude-sonnet-5")
@@ -442,58 +429,145 @@ class TestAIAnalyzer(unittest.TestCase):
         self.assertEqual(ai.thinking_kwargs("claude-opus-4-8"), {})
         self.assertEqual(ai.thinking_kwargs("claude-haiku-4-5-20251001"), {})
 
-    def test_build_analysis_prompt(self):
-        """Build prompt includes all required context."""
-        branch_data = {
-            "name": "feature-signup",
-            "ahead_by": 4,
-            "behind_by": 0,
-            "classification": "AHEAD ONLY",
-            "last_commit_date": "2026-02-13T10:00:00Z",
-            "last_commit_author": "testuser",
-            "has_pr": False,
-            "commit_messages": [
-                {"sha": "abc1234", "message": "Add signup form", "author": "testuser", "date": "2026-02-13"},
-            ],
-            "files_changed": [
-                {"filename": "signup.py", "additions": 50, "deletions": 0, "status": "added"},
-            ],
-        }
-        prompt = ai.build_analysis_prompt(
-            "test-repo", branch_data, "main",
-            local_path="~/projects/test-repo",
-        )
-        self.assertIn("feature-signup", prompt)
-        self.assertIn("test-repo", prompt)
-        self.assertIn("AHEAD ONLY", prompt)
-        self.assertIn("Add signup form", prompt)
-        self.assertIn("signup.py", prompt)
-        self.assertIn("~/projects/test-repo", prompt)
+class _FakeAIBlock:
+    def __init__(self, text):
+        self.type = "text"
+        self.text = text
 
-    def test_build_prompt_with_spec(self):
-        """Prompt includes spec text when provided."""
-        branch_data = {
-            "name": "test",
-            "ahead_by": 1,
-            "behind_by": 0,
-            "classification": "AHEAD ONLY",
-        }
-        prompt = ai.build_analysis_prompt(
-            "repo", branch_data, "main",
-            spec_text="Feature: User authentication",
-        )
-        self.assertIn("User authentication", prompt)
 
-    def test_build_prompt_without_spec(self):
-        """Prompt notes missing spec."""
-        branch_data = {
-            "name": "test",
-            "ahead_by": 1,
-            "behind_by": 0,
-            "classification": "AHEAD ONLY",
-        }
-        prompt = ai.build_analysis_prompt("repo", branch_data, "main")
-        self.assertIn("No product spec provided", prompt)
+class _FakeAIUsage:
+    def __init__(self, input_tokens=10, output_tokens=5):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
+class _FakeAIMessage:
+    def __init__(self, text, stop_reason="end_turn"):
+        self.content = [_FakeAIBlock(text)]
+        self.usage = _FakeAIUsage()
+        self.stop_reason = stop_reason
+
+
+class _FakeAIClient:
+    """Stub anthropic client: pops queued responses, records call kwargs."""
+
+    def __init__(self, responses):
+        outer = self
+
+        class _Messages:
+            def create(self, **kwargs):
+                outer.calls.append(kwargs)
+                return outer.responses.pop(0)
+
+        self.responses = list(responses)
+        self.calls = []
+        self.messages = _Messages()
+
+
+class TestRequestJson(unittest.TestCase):
+    """request_json is the shared JSON path for every AI feature — it must
+    enforce the schema request, survive truncation, and raise debuggable
+    errors instead of the bare 'No JSON object found in AI response'."""
+
+    SCHEMA = {"type": "object", "properties": {"a": {"type": "string"}},
+              "required": ["a"], "additionalProperties": False}
+
+    def _run(self, client, **overrides):
+        kwargs = dict(model="claude-haiku-4-5-20251001",
+                      messages=[{"role": "user", "content": "x"}],
+                      schema=self.SCHEMA, max_tokens=100)
+        kwargs.update(overrides)
+        return ai.request_json(client, **kwargs)
+
+    def test_happy_path_returns_parsed_and_usage(self):
+        client = _FakeAIClient([_FakeAIMessage('{"a": "ok"}')])
+        parsed, usage = self._run(client)
+        self.assertEqual(parsed, {"a": "ok"})
+        self.assertEqual(usage["input_tokens"], 10)
+        self.assertEqual(usage["output_tokens"], 5)
+
+    def test_schema_sent_via_structured_outputs(self):
+        client = _FakeAIClient([_FakeAIMessage('{"a": "ok"}')])
+        self._run(client)
+        sent = client.calls[0]["extra_body"]["output_config"]["format"]
+        self.assertEqual(sent["type"], "json_schema")
+        self.assertEqual(sent["schema"], self.SCHEMA)
+
+    def test_system_prompt_passed_through(self):
+        client = _FakeAIClient([_FakeAIMessage('{"a": "ok"}')])
+        self._run(client, system="be brief")
+        self.assertEqual(client.calls[0]["system"], "be brief")
+
+    def test_prose_reply_error_includes_model_snippet(self):
+        """The failure Chris hit: a prose answer must raise an error that
+        shows what the model actually said, not just 'No JSON object'."""
+        client = _FakeAIClient([_FakeAIMessage("I need more context to help.")])
+        with self.assertRaises(ValueError) as ctx:
+            self._run(client)
+        self.assertIn("No JSON object found", str(ctx.exception))
+        self.assertIn("I need more context", str(ctx.exception))
+
+    def test_refusal_raises_clear_error(self):
+        client = _FakeAIClient([_FakeAIMessage("", stop_reason="refusal")])
+        with self.assertRaises(ValueError) as ctx:
+            self._run(client)
+        self.assertIn("declined", str(ctx.exception))
+
+    def test_truncation_retries_once_with_double_budget(self):
+        client = _FakeAIClient([
+            _FakeAIMessage('{"a": "cut', stop_reason="max_tokens"),
+            _FakeAIMessage('{"a": "ok"}'),
+        ])
+        parsed, usage = self._run(client)
+        self.assertEqual(parsed, {"a": "ok"})
+        self.assertEqual(client.calls[0]["max_tokens"], 100)
+        self.assertEqual(client.calls[1]["max_tokens"], 200)
+        # Usage sums both attempts so cost tracking stays honest.
+        self.assertEqual(usage["input_tokens"], 20)
+
+    def test_double_truncation_raises_clear_error(self):
+        client = _FakeAIClient([
+            _FakeAIMessage('{"a": "cut', stop_reason="max_tokens"),
+            _FakeAIMessage('{"a": "cut again', stop_reason="max_tokens"),
+        ])
+        with self.assertRaises(ValueError) as ctx:
+            self._run(client)
+        self.assertIn("token limit", str(ctx.exception))
+
+
+class TestSummaryEventLog(unittest.TestCase):
+    """The Projects summary feature writes its own paste-back log, matching
+    the tracker/briefing/sessions logs (per CLAUDE.md)."""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self._orig = models.SUMMARIES_LOG_PATH
+        models.SUMMARIES_LOG_PATH = os.path.join(self._tmp, "summaries.log")
+
+    def tearDown(self):
+        models.SUMMARIES_LOG_PATH = self._orig
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_empty_when_no_log(self):
+        self.assertEqual(models.tail_summary_log(), [])
+
+    def test_round_trip_keeps_error_detail(self):
+        models.log_summary_event(
+            "generate_error", repo="litmus",
+            error='ValueError: No JSON object found. The model replied: "sorry"',
+        )
+        events = models.tail_summary_log()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "generate_error")
+        self.assertEqual(events[0]["repo"], "litmus")
+        self.assertIn("sorry", events[0]["error"])
+        self.assertIn("ts", events[0])
+
+    def test_tail_returns_newest_n(self):
+        for i in range(5):
+            models.log_summary_event("generate_done", repo=f"r{i}")
+        tail = models.tail_summary_log(2)
+        self.assertEqual([e["repo"] for e in tail], ["r3", "r4"])
 
 
 class TestFlaskApp(unittest.TestCase):
@@ -789,7 +863,7 @@ class TestGitHubAuthErrorHandling(unittest.TestCase):
 
 class TestHenryBranchExclusion(unittest.TestCase):
     """Branches with 'henry' in the name are excluded from the dashboard count
-    but stay in branch_names so the Henry page can still find them."""
+    but stay in branch_names so the expandable branch list can show them."""
 
     def _fake_client(self, branches):
         client = MagicMock()
@@ -811,7 +885,7 @@ class TestHenryBranchExclusion(unittest.TestCase):
         self.assertEqual(result["total_branch_count"], 3)
         self.assertEqual(result["henry_branch_count"], 2)
         self.assertEqual(result["non_henry_branch_count"], 1)
-        # branch_names keeps all of them so the Henry page can find them.
+        # branch_names keeps all of them for the expandable branch list.
         self.assertIn("henry-feature", result["branch_names"])
         self.assertIn("henry-other", result["branch_names"])
 
