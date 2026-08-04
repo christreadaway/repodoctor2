@@ -324,30 +324,6 @@ def save_session_recap(key: str, recap: dict):
         _save_json(SESSION_RECAPS_PATH, recaps)
 
 
-# --- Henry Branch Summaries ---
-#
-# Keyed by "{repo_name}/{branch_name}" so multiple henry-named branches in the
-# same repo each get their own card.
-
-HENRY_SUMMARIES_PATH = os.path.join(DATA_DIR, "henry_summaries.json")
-
-
-def get_henry_summaries() -> dict:
-    return _load_json(HENRY_SUMMARIES_PATH) or {}
-
-
-def save_henry_summary(repo_name: str, branch_name: str, summary: dict):
-    with _STORE_LOCK:
-        summaries = get_henry_summaries()
-        summary["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        summaries[f"{repo_name}/{branch_name}"] = summary
-        _save_json(HENRY_SUMMARIES_PATH, summaries)
-
-
-def clear_henry_summaries():
-    _save_json(HENRY_SUMMARIES_PATH, {})
-
-
 # --- Firestore Configuration Data ---
 #
 # Keyed by repo name. One entry per scanned repo with detection results +
@@ -669,6 +645,21 @@ def log_sessions_event(event: str, **fields):
 def tail_sessions_log(n: int = 100) -> list[dict]:
     """Return the last n events from the Yesterday/session-recap log."""
     return _tail_log(SESSIONS_LOG_PATH, n)
+
+
+# Projects-page summary generation. This was the one AI feature without its
+# own event log, so a failed batch left nothing to paste back for debugging
+# beyond a truncated flash message.
+SUMMARIES_LOG_PATH = os.path.join(DATA_DIR, "logs", "summaries.log")
+
+
+def log_summary_event(event: str, **fields):
+    _append_log_event(SUMMARIES_LOG_PATH, event, fields)
+
+
+def tail_summary_log(n: int = 100) -> list[dict]:
+    """Return the last n events from the project-summary log."""
+    return _tail_log(SUMMARIES_LOG_PATH, n)
 
 
 # --- Session Cost Tracking ---

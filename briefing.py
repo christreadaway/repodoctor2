@@ -20,7 +20,7 @@ import logging
 import anthropic
 
 import github_client as gh
-from ai_analyzer import DEFAULT_MODEL, extract_json_object, extract_response_text, thinking_kwargs
+from ai_analyzer import DEFAULT_MODEL, request_json
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,29 @@ Rules:
 - Plain English throughout; the owner is a non-developer.
 - Bullets are short (aim under 15 words) and concrete.
 - Scale length to the project: a small experiment gets a short briefing, not padded sections."""
+
+# Enforced via structured outputs (ai_analyzer.request_json) so the model
+# can't reply with prose. Mirrors normalize_brief, which stays as the final
+# guard (caps, empty-bullet drops).
+BRIEF_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "what_it_is": {"type": "string"},
+        "stack": {"type": "string"},
+        "stage": {"type": "string", "enum": list(STAGES)},
+        "stage_note": {"type": "string"},
+        "where_we_are": {"type": "string"},
+        "whats_built": {"type": "array", "items": {"type": "string"}},
+        "whats_left": {"type": "array", "items": {"type": "string"}},
+        "open_decisions": {"type": "array", "items": {"type": "string"}},
+        "constraints": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "what_it_is", "stack", "stage", "stage_note", "where_we_are",
+        "whats_built", "whats_left", "open_decisions", "constraints",
+    ],
+    "additionalProperties": False,
+}
 
 
 # ----------------------------------------------------------------------
@@ -168,28 +191,24 @@ def generate_brief(
         f"Project: {repo_name}\n\n{context_text}\n\n"
         "Write the chat briefing JSON now. Return ONLY the JSON object."
     )
-    message = client.messages.create(
-        model=model,
-        max_tokens=2500,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
-        **thinking_kwargs(model),
-    )
-    raw = extract_response_text(message)
-    # An AI refusal (empty text) or prose/truncated output makes
-    # extract_json_object raise; degrade to a normalized empty brief instead of
-    # failing the whole generation (mirrors ai_analyzer.analyze_branch).
-    # json.JSONDecodeError is a ValueError subclass, so this catches both.
+    # Structured outputs guarantee schema-valid JSON; a refusal or repeated
+    # truncation raises ValueError. Degrade to a normalized empty brief
+    # instead of failing the whole generation, but log why.
     try:
-        parsed = extract_json_object(raw)
-    except ValueError:
+        parsed, usage = request_json(
+            client,
+            model=model,
+            max_tokens=2500,
+            schema=BRIEF_SCHEMA,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+    except ValueError as e:
+        logger.warning("brief generation failed for %s: %s", repo_name, e)
         parsed = {}
+        usage = {"input_tokens": 0, "output_tokens": 0, "model": model}
     brief = normalize_brief(parsed)
-    brief["_usage"] = {
-        "input_tokens": message.usage.input_tokens,
-        "output_tokens": message.usage.output_tokens,
-        "model": model,
-    }
+    brief["_usage"] = usage
     return brief
 
 

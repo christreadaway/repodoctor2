@@ -19,7 +19,7 @@ import logging
 
 import anthropic
 
-from ai_analyzer import DEFAULT_MODEL, extract_json_object, extract_response_text, thinking_kwargs
+from ai_analyzer import DEFAULT_MODEL, request_json
 from briefing import (
     UNKNOWN_STAGE,
     _parse_ts,
@@ -59,6 +59,29 @@ Rules:
 - Plain English throughout; the owner is a non-developer.
 - Bullets are short (aim under 15 words) and concrete.
 - Pay special attention to the DEPENDENCIES BETWEEN projects and on shared infrastructure — that's what a per-project view can't show."""
+
+# Enforced via structured outputs (ai_analyzer.request_json) so the model
+# can't reply with prose. Mirrors normalize_program_brief, which stays as
+# the final guard (caps, empty-bullet drops).
+PROGRAM_BRIEF_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "what_it_is": {"type": "string"},
+        "architecture": {"type": "string"},
+        "stage": {"type": "string", "enum": list(PROGRAM_STAGES)},
+        "stage_note": {"type": "string"},
+        "where_we_are": {"type": "string"},
+        "whats_built": {"type": "array", "items": {"type": "string"}},
+        "whats_left": {"type": "array", "items": {"type": "string"}},
+        "open_decisions": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "what_it_is", "architecture", "stage", "stage_note", "where_we_are",
+        "whats_built", "whats_left", "open_decisions", "risks",
+    ],
+    "additionalProperties": False,
+}
 
 
 def assemble_members(repos: list[dict], briefs: dict, summaries: dict,
@@ -141,33 +164,30 @@ def generate_program_brief(api_key: str, program_name: str, context_text: str,
                            model: str = DEFAULT_MODEL) -> dict:
     """Generate the program brief. Returns normalized dict + _usage."""
     client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
-        model=model,
-        max_tokens=2500,
-        system=SYSTEM_PROMPT,
-        **thinking_kwargs(model),
-        messages=[{
-            "role": "user",
-            "content": (
-                f"{context_text}\n\n"
-                "Write the program briefing JSON now. Return ONLY the JSON object."
-            ),
-        }],
-    )
-    raw = extract_response_text(message)
-    # Degrade to an empty brief on an unparseable AI response instead of
-    # failing (json.JSONDecodeError is a ValueError subclass, so this covers
-    # both empty/prose refusals and malformed JSON).
+    # Structured outputs guarantee schema-valid JSON; a refusal or repeated
+    # truncation raises ValueError. Degrade to a normalized empty brief
+    # instead of failing the whole generation, but log why.
     try:
-        parsed = extract_json_object(raw)
-    except ValueError:
+        parsed, usage = request_json(
+            client,
+            model=model,
+            max_tokens=2500,
+            schema=PROGRAM_BRIEF_SCHEMA,
+            system=SYSTEM_PROMPT,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"{context_text}\n\n"
+                    "Write the program briefing JSON now."
+                ),
+            }],
+        )
+    except ValueError as e:
+        logger.warning("program brief generation failed for %s: %s", program_name, e)
         parsed = {}
+        usage = {"input_tokens": 0, "output_tokens": 0, "model": model}
     brief = normalize_program_brief(parsed)
-    brief["_usage"] = {
-        "input_tokens": message.usage.input_tokens,
-        "output_tokens": message.usage.output_tokens,
-        "model": model,
-    }
+    brief["_usage"] = usage
     return brief
 
 
