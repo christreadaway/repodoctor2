@@ -10,6 +10,28 @@ echo "  RepoDoctor — Starting up..."
 echo "========================================"
 echo ""
 
+# Make sure git is installed (ships with the Xcode command line tools).
+if ! command -v git > /dev/null 2>&1; then
+    echo "ERROR: Git is not installed."
+    echo "Install it by running this in Terminal:  xcode-select --install"
+    echo "then double-click start.command again."
+    read -p "Press Enter to close..."
+    exit 1
+fi
+
+# Pull the latest code from main so a double-click always runs the newest
+# version — same promise the Windows launcher (start.ps1) already keeps.
+echo "Pulling latest code from main..."
+git pull origin main
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "ERROR: git pull failed (network issue, or local edits blocking the merge)."
+    echo "See RUN_LOCAL.md for how to fix, then double-click start.command again."
+    read -p "Press Enter to close..."
+    exit 1
+fi
+echo ""
+
 # Create virtual environment if it doesn't exist
 if [ ! -d "venv" ]; then
     echo "Creating virtual environment..."
