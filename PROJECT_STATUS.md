@@ -20,6 +20,12 @@ One new screen plus the scan fix that makes it complete. See `SESSION_NOTES.md` 
 - **Org repos now included in the scan.** `github_client.get_repos()` was requesting `affiliation=owner,collaborator`, which silently dropped every repo living under an organization. Changed to `owner,collaborator,organization_member` so organization repos show up everywhere — dashboard, Projects, Stats, Briefing, and the new Selector.
 - **Tests:** 320 passing (was 313 → +7: Selector route/model/API paths + org-affiliation coverage in `tests/test_app.py`).
 
+**Session 19b — top-nav consolidation (12 → 9 tabs).** Trimmed the nav to nine by folding three tabs into logical parents, each still reachable and old URLs preserved:
+- **What's Next → Next Up.** What's Next (planned next-steps from Projects summaries) and Yesterday were two answers to "where do I pick back up?" — merged. The Yesterday screen is renamed **Next Up** and gains a **Planned next steps** section below the live session reconstruction. `/whats-next` 302-redirects to `/yesterday`; `whats_next.html` removed.
+- **Program → Briefing.** Program is Briefing scoped to one group; reached now via a "Program rollup →" link in Briefing's group bar. `/program` still serves its page (with a back-to-Briefing breadcrumb); data untouched.
+- **Mac Setup → Settings.** Linked from a new "Setup & Running" card in Settings (same pattern as the Firestore fleet view). `/mac-setup` still serves the guide with a back-to-Settings breadcrumb.
+- Nav now: My Repos · Projects · Selector · Stats · Next Up · Briefing · Docs · Tracker · Settings. **Tests: 318 passing** (replaced 6 What's-Next group-filter tests with 4 Next-Up merge tests).
+
 ---
 
 ## Latest — Session 18 (2026-07-29)

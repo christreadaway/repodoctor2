@@ -5504,3 +5504,30 @@ button.tracker-stat-jump:focus {
   .selector-toolbar-group { justify-content: space-between; }
   .selector-output-header { flex-direction: column; align-items: stretch; }
 }
+
+
+/* --- Next Up: Planned next steps section (merged from What's Next) --- */
+.nextup-planned {
+  margin-top: var(--space-2xl);
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--border);
+}
+
+.nextup-planned-title {
+  font-size: 1.1rem;
+  color: var(--green-100);
+  margin: 0 0 var(--space-sm);
+}
+
+
+/* Back-link breadcrumb for de-navved pages reached from a parent tab
+   (Program from Briefing, Mac Setup from Settings). */
+.nextup-back {
+  display: inline-block;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+  margin-bottom: 0.25rem;
+  transition: color var(--transition-fast);
+}
+.nextup-back:hover { color: var(--cyan-100); }

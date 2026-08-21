@@ -32,6 +32,13 @@ A new screen to pick from every reachable repo and copy a clean summary sheet el
 ### Docs
 Updated README.md (description + Selector paragraph), PROJECT_STATUS.md (snapshot + Session 19 block), and PRODUCT_SPEC.md (new §4.7f Repo Selector, scanner affiliation note, nav list, API endpoints).
 
+### Nav consolidation (19b)
+Chris asked to consolidate the top nav (it had grown to 12 tabs, wrapping to two rows). Walked him through what each tab does, then trimmed to **9** by folding three into logical parents — each still reachable, all old URLs preserved:
+- **What's Next → Next Up.** His insight: What's Next (planned next-steps from Projects summaries) and Yesterday (live session reconstruction from git) answer the same question — "where do I pick back up?" Merged them. Yesterday renamed **Next Up**; its `_next_up_items()` now renders a **Planned next steps** section below the session cards. `/whats-next` → 302 to `/yesterday`; `whats_next.html` deleted; the 6 group-filter tests replaced with 4 merge tests.
+- **Program → Briefing.** Program is Briefing scoped to a group; reached via a "Program rollup →" link in Briefing's group bar (shows when groups exist). `/program` still serves the page (back-to-Briefing breadcrumb); program.py + data untouched, so its tests stay green.
+- **Mac Setup → Settings.** A "Setup & Running" card in Settings links to the guide (same pattern as the Firestore fleet view already in Settings → Tools). `/mac-setup` still serves it (back-to-Settings breadcrumb).
+- Final nav: My Repos · Projects · Selector · Stats · Next Up · Briefing · Docs · Tracker · Settings. Verified the rendered pages in a real browser (Playwright + Chromium). **318 tests passing.**
+
 ### Where it left off
 Built, tested, documented. Landed on `main` this session at Chris's request (docs + feature together). Run a fresh scan to pull in the org repos.
 

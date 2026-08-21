@@ -1374,8 +1374,9 @@ class TestProjectsSortAndStatsFilter(unittest.TestCase):
             self.app_mod._github_client = self._orig_client
 
 
-class TestWhatsNextGroupFilter(unittest.TestCase):
-    """Covers /whats-next group selector (mirrors /projects behavior)."""
+class TestNextUpMerge(unittest.TestCase):
+    """What's Next was merged into Next Up (the Yesterday screen): /whats-next
+    redirects, and the planned next-steps (portfolio-wide) render on Next Up."""
 
     def setUp(self):
         from app import app
@@ -1385,35 +1386,22 @@ class TestWhatsNextGroupFilter(unittest.TestCase):
         self.client = app.test_client()
         with self.client.session_transaction() as sess:
             sess["authenticated"] = True
-        self._orig_groups = models.GROUPS_PATH
-        self._orig_legacy = models._LEGACY_GROUPS_PATH
-        self._orig_prefs = models.PREFS_PATH
         self._orig_summaries = models.SUMMARIES_PATH
         self.tmp = tempfile.mkdtemp()
-        models.GROUPS_PATH = os.path.join(self.tmp, "groups.json")
-        models._LEGACY_GROUPS_PATH = os.path.join(self.tmp, "legacy.json")
-        models.PREFS_PATH = os.path.join(self.tmp, "prefs.json")
         models.SUMMARIES_PATH = os.path.join(self.tmp, "summaries.json")
         self._orig_scan = app_mod._scan_results
+        self._orig_client = app_mod._github_client
         app_mod._scan_results = {
             "repos": [
                 {"owner": "o", "name": "school1", "full_name": "o/school1",
                  "default_branch": "main", "private": False, "html_url": "",
-                 "description": "", "updated_at": "2026-04-20T00:00:00Z",
-                 "files_present": 5, "files_total": 5, "code_size_bytes": 0,
-                 "total_branch_count": 0, "non_default_branch_count": 0,
-                 "branch_names": [], "required_files": {}, "languages": {}},
+                 "description": "", "pushed_at": "2026-04-20T00:00:00Z"},
                 {"owner": "o", "name": "fun1", "full_name": "o/fun1",
                  "default_branch": "main", "private": False, "html_url": "",
-                 "description": "", "updated_at": "2026-04-19T00:00:00Z",
-                 "files_present": 3, "files_total": 5, "code_size_bytes": 0,
-                 "total_branch_count": 0, "non_default_branch_count": 0,
-                 "branch_names": [], "required_files": {}, "languages": {}},
+                 "description": "", "pushed_at": "2026-04-19T00:00:00Z"},
             ],
             "total_repos": 2, "total_branches": 0,
         }
-        models.set_group("School", ["school1"])
-        models.set_group("Fun", ["fun1"])
         models.save_project_summary("school1", {
             "what_it_does": "x", "how_finished": "y",
             "next_steps": ["learn algebra", "study geography"],
@@ -1425,59 +1413,49 @@ class TestWhatsNextGroupFilter(unittest.TestCase):
 
     def tearDown(self):
         self.app_mod._scan_results = self._orig_scan
-        models.GROUPS_PATH = self._orig_groups
-        models._LEGACY_GROUPS_PATH = self._orig_legacy
-        models.PREFS_PATH = self._orig_prefs
+        self.app_mod._github_client = self._orig_client
         models.SUMMARIES_PATH = self._orig_summaries
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_renders_group_bar(self):
+    def test_whats_next_redirects_to_next_up(self):
+        """Old /whats-next URL now permanently lands on the Next Up screen."""
         resp = self.client.get("/whats-next")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn(b"group-bar", resp.data)
-        self.assertIn(b"School", resp.data)
-        self.assertIn(b"Fun", resp.data)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/yesterday", resp.headers["Location"])
 
-    def test_filters_by_group(self):
-        """?group=School shows school1's bullets but not fun1's."""
-        resp = self.client.get("/whats-next?group=School")
+    def test_next_up_items_aggregates_portfolio(self):
+        """_next_up_items pulls every repo's next-steps, sorted, no group filter."""
+        items = self.app_mod._next_up_items()
+        self.assertEqual([i["repo"] for i in items], ["fun1", "school1"])
+        school = next(i for i in items if i["repo"] == "school1")
+        self.assertIn("learn algebra", school["next_steps"])
+        self.assertIn("study geography", school["next_steps"])
+
+    def test_next_up_page_renders_planned_steps(self):
+        """The Next Up page shows the Planned next steps section with every
+        repo's bullets (connected path, sessions gathering stubbed out)."""
+        self.app_mod._github_client = MagicMock()
+        with patch("app.sessions.gather_sessions", return_value=[]), \
+             patch("app.sessions.attach_recaps"), \
+             patch("app.sessions.summarize_counts",
+                   return_value={"repos": 0, "sessions": 0, "needs_merge": 0,
+                                 "in_progress": 0, "done": 0}), \
+             patch("app.sessions.compose_markdown", return_value=""):
+            resp = self.client.get("/yesterday")
         self.assertEqual(resp.status_code, 200)
         body = resp.data.decode()
-        self.assertIn("school1", body)
+        self.assertIn("Planned next steps", body)
         self.assertIn("learn algebra", body)
-        self.assertNotIn("fun1", body)
-        self.assertNotIn("beat level 5", body)
+        self.assertIn("beat level 5", body)
 
-    def test_persists_active_group_in_prefs(self):
-        """Selecting a group on whats-next persists in shared active_group pref."""
-        self.client.get("/whats-next?group=Fun")
-        prefs = models.get_preferences()
-        self.assertEqual(prefs["active_group"], "Fun")
-
-    def test_falls_back_to_active_group_pref(self):
-        """No URL arg -> uses saved pref."""
-        prefs = models.get_preferences()
-        prefs["active_group"] = "School"
-        models.save_preferences(prefs)
-        resp = self.client.get("/whats-next")
+    def test_nav_shows_next_up_not_old_labels(self):
+        """The nav shows 'Next Up' and no longer shows What's Next as a tab."""
+        resp = self.client.get("/settings")  # any authed page renders the nav
         body = resp.data.decode()
-        self.assertIn("school1", body)
-        self.assertNotIn("fun1", body)
-
-    def test_invalid_group_falls_back_to_all(self):
-        resp = self.client.get("/whats-next?group=DoesNotExist")
-        self.assertEqual(resp.status_code, 200)
-        body = resp.data.decode()
-        # Both repos shown since active_group was reset to ""
-        self.assertIn("school1", body)
-        self.assertIn("fun1", body)
-
-    def test_empty_group_shows_scoped_message(self):
-        models.set_group("Empty", ["nonexistent-repo"])
-        resp = self.client.get("/whats-next?group=Empty")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn(b"No open next-steps in", resp.data)
-        self.assertIn(b"Empty", resp.data)
+        self.assertIn(">Next Up<", body)
+        self.assertNotIn(">What's Next<", body)
+        self.assertNotIn(">Program<", body)
+        self.assertNotIn(">Mac Setup<", body)
 
 
 class TestAtomicWrites(unittest.TestCase):

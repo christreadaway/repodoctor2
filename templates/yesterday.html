@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}RepoDoctor — Yesterday{% endblock %}
+{% block title %}RepoDoctor — Next Up{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>Yesterday</h1>
+    <h1>Next Up</h1>
     <div class="page-actions">
         {% if sessions %}
         <button type="button" class="btn btn-primary" id="copy-yesterday-btn">COPY FOR CLAUDE</button>
@@ -35,9 +35,10 @@
 {% else %}
 
 <p class="projects-hint">
-    What you were doing, broken out by session, across every repo. Each session is one Claude Code branch —
-    the app reads your commits and pull-request status from GitHub to reconstruct the work and figure out
-    where you left off. <strong>SUMMARIZE</strong> adds a plain-English AI recap per session (~$0.005 each on Haiku).
+    Where to pick back up — from two angles. Below, <strong>recent sessions</strong> reconstruct what you were
+    actually doing, broken out by Claude Code branch (commits + PR status, read live from GitHub) with a
+    where-you-left-off call. Further down, <strong>planned next steps</strong> lists the next-step bullets from
+    your Projects summaries. <strong>SUMMARIZE</strong> adds a plain-English AI recap per session (~$0.005 each on Haiku).
     <em>No Claude Code transcript is read — "how you directed Claude" is inferred from your commit messages.</em>
 </p>
 
@@ -141,6 +142,34 @@
     </div>
 </div>
 {% endif %}
+
+{# Planned next steps — merged in from the old What's Next tab. Not tied to the
+   time window; these come from the Projects-page AI summaries. #}
+<div class="nextup-planned">
+    <h2 class="nextup-planned-title">Planned next steps</h2>
+    {% if next_up_items %}
+    <p class="projects-hint">The next-step bullets from your <a href="{{ url_for('projects') }}">Projects</a> summaries, across every repo. Regenerate summaries there to refresh these.</p>
+    <div class="whatsnext-grid">
+        {% for item in next_up_items %}
+        <div class="whatsnext-card">
+            <div class="whatsnext-card-header">
+                <a href="{{ url_for('repo_detail', owner=item.owner, name=item.repo) }}" class="whatsnext-repo">{{ item.repo }}</a>
+                {% if item.generated_at %}
+                <span class="whatsnext-generated" title="Summary generated {{ item.generated_at }}">{{ item.generated_at[:10] }}</span>
+                {% endif %}
+            </div>
+            <ul class="whatsnext-list">
+                {% for step in item.next_steps %}
+                <li>{{ step }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="projects-hint">No planned next steps yet. Head to <a href="{{ url_for('projects') }}">Projects</a> and click <strong>GENERATE SUMMARIES</strong> — the next-step bullets show up here.</p>
+    {% endif %}
+</div>
 
 <script type="application/json" id="yesterday-targets">{{ {"all": targets_all or [], "needs": targets_needs or [], "body": ({"date": window.key[5:]} if window.preset == 'date' else {"range": window.preset})}|tojson }}</script>
 <script>

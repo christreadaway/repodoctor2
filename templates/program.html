@@ -2,7 +2,10 @@
 {% block title %}RepoDoctor — Program{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>Program</h1>
+    <div>
+        <a href="{{ url_for('briefing_view', group=active_program or None) }}" class="nextup-back">← Briefing</a>
+        <h1>Program Rollup</h1>
+    </div>
     <div class="page-actions">
         {% if active_program and members %}
         <button type="button" class="btn btn-primary" id="copy-program-btn">COPY FOR CLAUDE CHAT</button>

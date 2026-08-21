@@ -39,6 +39,9 @@
         </a>
         {% endfor %}
     </div>
+    {# Program rollup: a group-level synthesized brief with editorial notes.
+       Folded here from its old top-nav tab — it's Briefing scoped to one group. #}
+    <a href="{{ url_for('program_view', group=active_group or None) }}" class="btn btn-secondary btn-sm">PROGRAM ROLLUP →</a>
 </div>
 {% endif %}
 

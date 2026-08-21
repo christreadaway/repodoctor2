@@ -1171,42 +1171,10 @@ def stats():
 @app.route("/whats-next")
 @_require_auth
 def whats_next_all():
-    summaries = models.get_project_summaries()
-    groups = models.get_groups()
-    active_group = _resolve_active_group(groups)
-
-    all_repos = _scan_results.get("repos", []) if _scan_results else []
-    if active_group:
-        group_repos = set(groups.get(active_group, []))
-        repos = [r for r in all_repos if r["name"] in group_repos]
-    else:
-        repos = all_repos
-
-    items = []
-    for repo in repos:
-        s = summaries.get(repo["name"]) or {}
-        next_steps = s.get("next_steps") or []
-        if not next_steps:
-            continue
-        items.append({
-            "repo": repo["name"],
-            "owner": repo["owner"],
-            "html_url": repo.get("html_url", ""),
-            "next_steps": next_steps[:5],
-            "generated_at": s.get("_generated_at", ""),
-        })
-
-    items.sort(key=lambda x: x["repo"].lower())
-
-    return render_template(
-        "whats_next.html",
-        items=items,
-        all_repos=all_repos,
-        scan_results=_scan_results,
-        has_summaries=bool(summaries),
-        groups=groups,
-        active_group=active_group,
-    )
+    """Merged into Next Up (the Yesterday screen), which now carries the
+    planned next-steps alongside the live session reconstruction. Kept as a
+    permanent redirect so old bookmarks and links don't 404."""
+    return redirect(url_for("yesterday_view"))
 
 
 # --- Chat Briefing ---
@@ -1414,9 +1382,34 @@ def yesterday_view():
         sessions=session_list,
         counts=counts,
         markdown=markdown,
+        next_up_items=_next_up_items(),
         targets_all=[s["token"] for s in session_list],
         targets_needs=[s["token"] for s in session_list if s["needs_summary"]],
     )
+
+
+def _next_up_items() -> list[dict]:
+    """The planned next-steps across the whole portfolio, pulled from the
+    Projects-page AI summaries. This is what the old What's Next tab showed;
+    it now lives as a section on the Next Up (Yesterday) screen — the two
+    were answering the same question ("where do I pick up?") from different
+    angles (planned steps vs. live git activity)."""
+    summaries = models.get_project_summaries()
+    items = []
+    for repo in (_scan_results.get("repos", []) if _scan_results else []):
+        s = summaries.get(repo["name"]) or {}
+        steps = s.get("next_steps") or []
+        if not steps:
+            continue
+        items.append({
+            "repo": repo["name"],
+            "owner": repo["owner"],
+            "html_url": repo.get("html_url", ""),
+            "next_steps": steps[:5],
+            "generated_at": s.get("_generated_at", ""),
+        })
+    items.sort(key=lambda x: x["repo"].lower())
+    return items
 
 
 @app.route("/yesterday/export.md")

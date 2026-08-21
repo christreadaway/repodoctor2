@@ -199,11 +199,11 @@ Three CSS bar-chart views with a period selector (1d / 3d / 1w / 2w / 1m / 2m):
 
 Repos with zero activity in the selected period drop below a divider and sort alphabetically; active repos sort by count descending. Bars scale to the busiest repo in the period. Data is cached in memory keyed by scan identity; `?refresh=1` forces recompute. Per-repo fetches run in parallel via `ThreadPoolExecutor(max_workers=8)`.
 
-### 4.7c What's Next View
+### 4.7c Planned Next Steps (was "What's Next", now part of Next Up)
 
-**Files:** `app.py` (`/whats-next`), `templates/whats_next.html`
+**Files:** `app.py` (`_next_up_items`, rendered on `/yesterday`), `templates/yesterday.html`
 
-Aggregated next-step bullets across every repo whose project summary has been generated on the Projects page. Each card links to the repo detail view, shows the generation timestamp, and lists up to 5 bullet items. Cards sort alphabetically by repo name. When no summaries exist yet, the page prompts the user to click **GENERATE SUMMARIES** on the Projects page.
+Aggregated next-step bullets across every repo whose project summary has been generated on the Projects page. Each card links to the repo detail view, shows the generation timestamp, and lists up to 5 bullet items, sorted alphabetically by repo name. **Session 19b:** this stopped being its own tab. It and the Yesterday screen were two answers to the same question — "where do I pick back up?" — so the bullets now render as a **Planned next steps** section on the **Next Up** screen (the renamed Yesterday page, `/yesterday`), below the live session reconstruction. The old `/whats-next` route 302-redirects to `/yesterday`.
 
 ### 4.7d Code Size Metric
 
@@ -369,7 +369,8 @@ All data stored as local JSON files — no database dependency.
 
 - **Aesthetic:** 1980s CRT phosphor-green terminal — dark backgrounds (#080a08), bright green text (#33ff33), monospace font (IBM Plex Mono)
 - **Layout:** Sticky top navigation bar + single-column content area + footer with cost display
-- **Top nav:** bracketed brand on the left, menu items (My Repos, Projects, Selector, Stats, Yesterday, What's Next, Briefing, Docs, Program, Tracker, Mac Setup, Settings) in the center, pulsing user-pill + Logout chip on the right; active link gets a glowing underline
+- **Top nav (9 tabs):** bracketed brand on the left, menu items (My Repos, Projects, Selector, Stats, Next Up, Briefing, Docs, Tracker, Settings) in the center, pulsing user-pill + Logout chip on the right; active link gets a glowing underline. Consolidated from 12 in Session 19b — three tabs were folded into logical parents (see below), which also keeps the nav on one row.
+- **Folded destinations** (reached from a parent, not the top nav): **What's Next → Next Up** (the planned next-steps now render as a section on the Yesterday/Next Up screen; `/whats-next` 302-redirects there); **Program → Briefing** (group-scoped rollup reached via a "Program rollup →" link in Briefing's group bar; `/program` still serves the page with a back-to-Briefing breadcrumb); **Mac Setup → Settings** (linked from a "Setup & Running" card in Settings; `/mac-setup` still serves the guide with a back-to-Settings breadcrumb).
 - **Status colors:** Green (safe/present), amber (warning/pending), red (danger/missing), cyan (info)
 - **Components:** Sortable tables, group-filter tab bars, CSS bar-chart rows with scaled fills, collapsible panels, badge system, file status indicators, flash messages
 - **Interactions:** Copy-to-clipboard with feedback, expandable branch lists, tab-switching period pills, keyboard shortcuts (Ctrl+K for search)
@@ -439,7 +440,7 @@ Flask Application (app.py)
 | POST | `/projects/groups/save` | Active | Create or rename a group + set its repo membership |
 | POST | `/projects/groups/delete` | Active | Delete a group (prefers hidden `original_name` field) |
 | GET | `/stats` | Active | Commits / Size / Lines-Added bar charts with period selector |
-| GET | `/whats-next` | Active | Aggregated next-steps across all repos |
+| GET | `/whats-next` | Redirect | → `/yesterday` (merged into Next Up; kept so old links don't 404) |
 | GET | `/tracker` | Active | Tracker landing — redirects to most recent tracker or shows onboarding + dropdown |
 | GET | `/tracker/<owner>/<name>` | Active | Full 8-tab per-repo tracker view |
 | POST | `/tracker/<owner>/<name>/generate` | Active | Run AI generation, validate, save |
