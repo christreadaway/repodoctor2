@@ -1529,5 +1529,101 @@ class TestAtomicWrites(unittest.TestCase):
         self.assertEqual(models._load_json(path), {"v": 1})
 
 
+class TestCategories(unittest.TestCase):
+    """Church/School/Combined/Personal categories: single-select model, the
+    save API, badges flowing through, and group filtering scoping a screen."""
+
+    def setUp(self):
+        from app import app
+        import app as app_mod
+        app.config["TESTING"] = True
+        self.app_mod = app_mod
+        self.client = app.test_client()
+        with self.client.session_transaction() as sess:
+            sess["authenticated"] = True
+        self._orig_groups = models.GROUPS_PATH
+        self._orig_legacy = models._LEGACY_GROUPS_PATH
+        self._orig_prefs = models.PREFS_PATH
+        self._orig_client = app_mod._github_client
+        self._orig_scan = app_mod._scan_results
+        self.tmp = tempfile.mkdtemp()
+        models.GROUPS_PATH = os.path.join(self.tmp, "groups.json")
+        models._LEGACY_GROUPS_PATH = os.path.join(self.tmp, "legacy.json")
+        models.PREFS_PATH = os.path.join(self.tmp, "prefs.json")
+        app_mod._github_client = MagicMock()
+        app_mod._scan_results = {"repos": [
+            {"owner": "c", "name": "repodoctor2", "full_name": "c/repodoctor2",
+             "private": True, "html_url": "", "description": "",
+             "pushed_at": "2026-08-21T00:00:00Z", "default_branch": "main",
+             "files_present": 5, "files_total": 5, "required_files": {},
+             "total_branch_count": 0, "non_henry_branch_count": 0, "code_size_bytes": 0},
+            {"owner": "c", "name": "parentpoint", "full_name": "c/parentpoint",
+             "private": False, "html_url": "", "description": "",
+             "pushed_at": "2026-08-19T00:00:00Z", "default_branch": "main",
+             "files_present": 3, "files_total": 5, "required_files": {},
+             "total_branch_count": 0, "non_henry_branch_count": 0, "code_size_bytes": 0},
+        ]}
+        models.seed_category_groups()
+
+    def tearDown(self):
+        self.app_mod._github_client = self._orig_client
+        self.app_mod._scan_results = self._orig_scan
+        models.GROUPS_PATH = self._orig_groups
+        models._LEGACY_GROUPS_PATH = self._orig_legacy
+        models.PREFS_PATH = self._orig_prefs
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_seed_is_idempotent_and_nonclobbering(self):
+        """Seeding twice keeps the four groups and never wipes members."""
+        models.set_group("Church", ["repodoctor2"])
+        models.seed_category_groups()
+        groups = models.get_groups()
+        for cat in models.CATEGORY_GROUPS:
+            self.assertIn(cat, groups)
+        self.assertEqual(groups["Church"], ["repodoctor2"])
+
+    def test_set_category_is_single_select(self):
+        """Assigning a new category removes the repo from the previous one."""
+        models.set_repo_category("repodoctor2", "Church")
+        self.assertEqual(models.get_repo_categories().get("repodoctor2"), "Church")
+        models.set_repo_category("repodoctor2", "Personal")
+        cats = models.get_repo_categories()
+        self.assertEqual(cats.get("repodoctor2"), "Personal")
+        self.assertNotIn("repodoctor2", models.get_groups().get("Church", []))
+
+    def test_clear_category(self):
+        models.set_repo_category("repodoctor2", "School")
+        models.set_repo_category("repodoctor2", "")
+        self.assertNotIn("repodoctor2", models.get_repo_categories())
+
+    def test_api_rejects_unknown_category(self):
+        resp = self.client.post("/api/categorize",
+                                json={"repo": "repodoctor2", "category": "Sports"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertNotIn("repodoctor2", models.get_repo_categories())
+
+    def test_api_sets_category(self):
+        resp = self.client.post("/api/categorize",
+                                json={"repo": "parentpoint", "category": "School"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.get_json()["ok"])
+        self.assertEqual(models.get_repo_categories().get("parentpoint"), "School")
+
+    def test_badge_flows_through_dashboard_and_selector(self):
+        """A tagged repo shows its colored category badge on the list screens."""
+        models.set_repo_category("repodoctor2", "Church")
+        for path in ("/", "/selector"):
+            body = self.client.get(path).get_data(as_text=True)
+            self.assertIn("cat-church", body, f"badge missing on {path}")
+
+    def test_group_filter_scopes_dashboard(self):
+        """?group=Church on My Repos shows only that category's repos."""
+        models.set_repo_category("repodoctor2", "Church")
+        body = self.client.get("/?group=Church").get_data(as_text=True)
+        # repodoctor2's row link is present; parentpoint's is filtered out.
+        self.assertIn("/repo/c/repodoctor2", body)
+        self.assertNotIn("/repo/c/parentpoint", body)
+
+
 if __name__ == "__main__":
     unittest.main()

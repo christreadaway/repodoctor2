@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import category_badge with context %}
 {% block title %}RepoDoctor — Projects{% endblock %}
 {% block content %}
 <div class="page-header">
@@ -41,9 +42,32 @@
         </a>
         {% endfor %}
     </div>
-    <button type="button" class="btn btn-secondary btn-sm" id="toggle-manage-groups">
-        MANAGE GROUPS
-    </button>
+    <div class="group-bar-actions">
+        <button type="button" class="btn btn-secondary btn-sm" id="toggle-categorize">
+            CATEGORIZE
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm" id="toggle-manage-groups">
+            MANAGE GROUPS
+        </button>
+    </div>
+</div>
+
+<div class="categorize-panel" id="categorize-panel" hidden>
+    <h3 class="manage-groups-title">Tag each project</h3>
+    <p class="manage-groups-hint">Pick one category per project — it saves instantly and flows through every screen (filter tabs + a colored badge). One category per project; use Manage Groups below for anything finer.</p>
+    <div class="categorize-list">
+        {% for repo in all_repos %}
+        <label class="categorize-row" data-repo="{{ repo.name }}">
+            <span class="categorize-name">{{ repo.name }}</span>
+            <select class="categorize-select" data-repo="{{ repo.name }}" aria-label="Category for {{ repo.name }}">
+                <option value="">—</option>
+                {% for cat in category_groups %}
+                <option value="{{ cat }}" {% if repo_categories.get(repo.name) == cat %}selected{% endif %}>{{ cat }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        {% endfor %}
+    </div>
 </div>
 
 <div class="manage-groups" id="manage-groups" hidden>
@@ -148,6 +172,7 @@
         <div class="project-card-header">
             <a href="{{ url_for('repo_detail', owner=repo.owner, name=repo.name) }}" class="project-name">{{ repo.name }}</a>
             <div class="project-meta">
+                {{ category_badge(repo.name) }}
                 {% if repo.private %}
                 <span class="badge badge-dim">PRIVATE</span>
                 {% else %}
@@ -210,6 +235,44 @@
             btn.textContent = panel.hidden ? 'MANAGE GROUPS' : 'HIDE GROUP EDITOR';
         });
     }
+
+    // Categorize panel: one dropdown per repo, saved instantly via AJAX.
+    var catBtn = document.getElementById('toggle-categorize');
+    var catPanel = document.getElementById('categorize-panel');
+    if (catBtn && catPanel) {
+        catBtn.addEventListener('click', function () {
+            catPanel.hidden = !catPanel.hidden;
+            catBtn.textContent = catPanel.hidden ? 'CATEGORIZE' : 'HIDE CATEGORIES';
+        });
+    }
+    // Save each change silently so you can tag the whole portfolio without a
+    // reload; badges + filter counts refresh next time you navigate. A brief
+    // "Saved" flash on the row confirms each write.
+    document.querySelectorAll('.categorize-select').forEach(function (sel) {
+        sel.addEventListener('change', function () {
+            var row = sel.closest('.categorize-row');
+            var repo = sel.getAttribute('data-repo');
+            sel.disabled = true;
+            fetch('/api/categorize', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({repo: repo, category: sel.value}),
+            }).then(function (r) { return r.json(); }).then(function (data) {
+                sel.disabled = false;
+                if (data && data.ok) {
+                    if (row) {
+                        row.classList.add('categorize-saved');
+                        setTimeout(function () { row.classList.remove('categorize-saved'); }, 1200);
+                    }
+                } else {
+                    alert((data && data.error) || 'Could not save the category.');
+                }
+            }).catch(function () {
+                sel.disabled = false;
+                alert('Could not save the category — check your connection.');
+            });
+        });
+    });
 
     // Summaries generate one repo per request (shared queue in app.js)
     // with live progress, scoped to the group in view — replacing the old

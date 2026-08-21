@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import category_badge, group_filter_bar with context %}
 {% block title %}RepoDoctor — Repo Selector{% endblock %}
 {% block content %}
 <div class="page-header">
@@ -38,6 +39,8 @@
     Your selection is remembered on this device.
 </p>
 
+{{ group_filter_bar('repo_selector', all_repos_count) }}
+
 <div class="selector-toolbar">
     <div class="selector-toolbar-group">
         <button type="button" class="btn btn-secondary btn-sm" id="sel-all-btn">SELECT ALL</button>
@@ -73,6 +76,7 @@
                 {% else %}
                 <span class="badge badge-public">PUBLIC</span>
                 {% endif %}
+                {{ category_badge(repo.name) }}
                 <a href="{{ repo.html_url }}" target="_blank" rel="noopener" class="selector-link" title="Open on GitHub" onclick="event.stopPropagation();">↗</a>
             </span>
             {% if repo.blurb %}
@@ -112,6 +116,7 @@
     "owner": repo.owner,
     "private": (repo.private if repo.private else false),
     "html_url": repo.html_url|default(""),
+    "category": (repo_categories.get(repo.name) or ""),
     "summary": (repo.blurb.summary if repo.blurb else "")
 } | tojson }}{{ "," if not loop.last else "" }}
 {%- endfor -%}
@@ -179,7 +184,8 @@
         names.forEach(function (fn) {
             var r = byName[fn];
             if (!r || !r.summary) return;
-            var tag = r.private ? 'Private' : 'Public';
+            // Tag line: "Church · Private" (category first when set).
+            var tag = (r.category ? r.category + ' · ' : '') + (r.private ? 'Private' : 'Public');
             if (fmt === 'markdown') {
                 lines.push('## ' + r.name + ' — ' + tag);
                 if (r.html_url) lines.push(r.html_url);

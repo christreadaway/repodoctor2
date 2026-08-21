@@ -178,12 +178,23 @@ Content scoring weights:
 
 **Files:** `models.py` (groups helpers), `app.py` (groups routes), `templates/projects.html`
 
-Named groups of repos for filtering the Projects page. A tab bar at the top (`All | Group1 | Group2 …`) scopes the summary cards to the selected group; a collapsible "Manage Groups" panel handles create / rename / delete and per-group repo assignment via checkboxes.
+Named groups of repos, free-form and many-to-many. A tab bar (`All | Group1 | Group2 …`) scopes a screen to the selected group; a collapsible "Manage Groups" panel handles create / rename / delete and per-group repo assignment via checkboxes.
 
-- Storage: `config/groups.json` (gitignored — per-machine state), shape `{group_name: [repo_name, ...]}`
+- Storage: `~/.repodoctor/groups.json` (per-machine, survives re-clone), shape `{group_name: [repo_name, ...]}`
 - Preference: `active_group` in `preferences.json` persists the current filter across navigation
 - Guards: rename refuses to overwrite an existing target group; empty-name submissions are rejected with a flash; delete prefers the hidden `original_name` field so an in-flight edit can't redirect the target
 - Active group lives in prefs and is updated atomically on rename/delete
+- **Flows through the whole app (Session 19c):** the group filter tab bar now appears on My Repos, Selector, Next Up, and Docs as well as Projects / Stats / Briefing, all reading the same `active_group` — so picking a group on any screen scopes them all. Shared by `_filter_by_group()`.
+
+### 4.7a′ Project Categories (Church / School / Combined / Personal)
+
+**Files:** `models.py` (`CATEGORY_GROUPS`, `seed_category_groups`, `get_repo_categories`, `set_repo_category`), `app.py` (`/api/categorize`, `inject_preferences`), `templates/projects.html` (Categorize panel), `templates/_macros.html` (`category_badge`)
+
+A single-select category on top of groups: the four categories **are** groups (so they flow through every group filter for free), but assigned one-per-project — "tag a project once." "Combined" is its own value (serves both church and school), so the four are mutually exclusive by design.
+
+- **Seeded** at startup (`seed_category_groups`, idempotent, never clobbers members) so the four show as filters from first launch.
+- **Tagged** on the Projects "Categorize" panel: one `<select>` per repo, saved instantly via `POST /api/categorize` (no reload; a brief "saved" flash per row). Assigning a category drops the repo from the other three category groups; non-category groups are untouched.
+- **Badged everywhere:** `repo_categories` (name→category) is injected into every template by the context processor; the `category_badge` macro renders a colored badge (four distinct hues) on My Repos, Projects, Selector, and Next Up cards, and the category is written into the Selector's copy/paste output (`Church · Private`).
 
 ### 4.7b Stats View
 
@@ -439,6 +450,7 @@ Flask Application (app.py)
 | POST | `/api/selector/blurb/<owner>/<name>` | Active | Generate one repo's three-sentence blurb (`{force:true}` to regenerate) |
 | POST | `/projects/groups/save` | Active | Create or rename a group + set its repo membership |
 | POST | `/projects/groups/delete` | Active | Delete a group (prefers hidden `original_name` field) |
+| POST | `/api/categorize` | Active | Set one project's category (Church/School/Combined/Personal, or empty to clear) |
 | GET | `/stats` | Active | Commits / Size / Lines-Added bar charts with period selector |
 | GET | `/whats-next` | Redirect | → `/yesterday` (merged into Next Up; kept so old links don't 404) |
 | GET | `/tracker` | Active | Tracker landing — redirects to most recent tracker or shows onboarding + dropdown |

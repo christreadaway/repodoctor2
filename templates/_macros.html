@@ -1,0 +1,33 @@
+{# Shared template macros. Import with context so they can read the globals
+   injected by the inject_preferences context processor (repo_categories). #}
+
+{# A repo's category tag (Church/School/Combined/Personal) as a colored badge.
+   Renders nothing when the repo is untagged. Import as:
+   {% from "_macros.html" import category_badge with context %} #}
+{% macro category_badge(repo_name) -%}
+{%- set cat = repo_categories.get(repo_name) if repo_categories else None -%}
+{%- if cat %}<span class="cat-badge cat-{{ cat|lower }}" title="Category: {{ cat }}">{{ cat }}</span>{% endif -%}
+{%- endmacro %}
+
+{# Shared group filter tab bar. `endpoint` is the current view's endpoint so
+   each tab links back to it; `all_count` labels the "All" tab. Reads `groups`
+   and `active_group` from context. Import with context and call e.g.
+   {{ group_filter_bar('dashboard', all_repos|length) }} #}
+{% macro group_filter_bar(endpoint, all_count) -%}
+{% if groups %}
+<div class="group-bar">
+    <div class="group-tabs">
+        <a href="{{ url_for(endpoint, group='') }}"
+           class="group-tab {% if not active_group %}active{% endif %}">
+           All <span class="group-count">{{ all_count }}</span>
+        </a>
+        {% for gname, gRepos in groups.items() %}
+        <a href="{{ url_for(endpoint, group=gname) }}"
+           class="group-tab {% if active_group == gname %}active{% endif %}">
+           {{ gname }} <span class="group-count">{{ gRepos|length }}</span>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+{%- endmacro %}

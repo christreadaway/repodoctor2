@@ -451,6 +451,65 @@ def delete_group(name: str) -> bool:
         return True
 
 
+# --- Project Categories (church / school / combined / personal) ---
+#
+# A single-select category per project, on top of the existing (free-form,
+# many-to-many) groups: the four categories ARE groups, so they flow through
+# every group filter in the app for free — but the Categorize panel assigns
+# them single-select (one per repo), which is what "tag a project once" means.
+# "Combined" is its own value (a project that serves both church and school),
+# so the four are mutually exclusive by design. Any other groups the user
+# makes are left untouched.
+
+CATEGORY_GROUPS = ["Church", "School", "Combined", "Personal"]
+
+
+def seed_category_groups():
+    """Create the four category groups (empty) if absent. Idempotent, and it
+    never clobbers an existing group of the same name (keeps its members)."""
+    with _STORE_LOCK:
+        groups = get_groups()
+        changed = False
+        for name in CATEGORY_GROUPS:
+            if name not in groups:
+                groups[name] = []
+                changed = True
+        if changed:
+            save_groups(groups)
+
+
+def get_repo_categories() -> dict:
+    """{repo_name: category} for every repo assigned to a category group. If a
+    repo somehow lands in more than one (e.g. via Manage Groups checkboxes),
+    the first in CATEGORY_GROUPS order wins so the badge stays deterministic."""
+    groups = get_groups()
+    out: dict[str, str] = {}
+    for cat in CATEGORY_GROUPS:
+        for repo_name in groups.get(cat, []):
+            out.setdefault(repo_name, cat)
+    return out
+
+
+def set_repo_category(repo_name: str, category: str | None) -> bool:
+    """Assign one category to a repo (single-select): drop it from all four
+    category groups, then add it to `category`. An empty/None category just
+    clears it. Non-category groups are never touched. Returns False for an
+    unknown category value."""
+    if category and category not in CATEGORY_GROUPS:
+        return False
+    with _STORE_LOCK:
+        groups = get_groups()
+        for cat in CATEGORY_GROUPS:
+            members = groups.get(cat)
+            if members and repo_name in members:
+                groups[cat] = [r for r in members if r != repo_name]
+        if category:
+            members = groups.get(category, [])
+            groups[category] = sorted(set(members) | {repo_name})
+        save_groups(groups)
+        return True
+
+
 # --- Programs (Program screen) ---
 #
 # A "program" is a group of repos viewed as one initiative (e.g. the

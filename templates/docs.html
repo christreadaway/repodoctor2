@@ -23,6 +23,25 @@
     </div>
 </div>
 
+{# Repo-group filter: scopes the repo picker above. `repo_groups` is distinct
+   from `groups` (which the sidebar uses for file directories). #}
+{% if repo_groups and (repos or active_group) %}
+<div class="group-bar">
+    <div class="group-tabs">
+        <a href="{{ url_for('docs_index', group='') }}"
+           class="group-tab {% if not active_group %}active{% endif %}">
+           All <span class="group-count">{{ all_repos_count }}</span>
+        </a>
+        {% for gname, gRepos in repo_groups.items() %}
+        <a href="{{ url_for('docs_index', group=gname) }}"
+           class="group-tab {% if active_group == gname %}active{% endif %}">
+           {{ gname }} <span class="group-count">{{ gRepos|length }}</span>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
 {% if not scan_results %}
 <div class="onboarding">
     <div class="onboarding-welcome">

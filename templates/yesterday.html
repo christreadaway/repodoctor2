@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import category_badge with context %}
 {% block title %}RepoDoctor — Next Up{% endblock %}
 {% block content %}
 <div class="page-header">
@@ -45,7 +46,7 @@
 <div class="group-bar yesterday-rangebar">
     <div class="group-tabs">
         {% for preset, label in range_presets %}
-        <a href="{{ url_for('yesterday_view', range=preset) }}"
+        <a href="{{ url_for('yesterday_view', range=preset, group=active_group or None) }}"
            class="group-tab {% if window.preset == preset %}active{% endif %}">{{ label }}</a>
         {% endfor %}
         {% if window.preset == 'date' %}
@@ -53,11 +54,32 @@
         {% endif %}
     </div>
     <form class="yesterday-datepick" method="get" action="{{ url_for('yesterday_view') }}">
+        {% if active_group %}<input type="hidden" name="group" value="{{ active_group }}">{% endif %}
         <label for="date">Pick a day</label>
         <input type="date" id="date" name="date" value="{{ window.key[5:] if window.preset == 'date' else '' }}"
                onchange="this.form.submit()">
     </form>
 </div>
+
+{# Group filter — preserves the current range so switching group keeps your
+   time window. Only shown when groups exist. #}
+{% if groups %}
+{% set cur_date = window.key[5:] if window.preset == 'date' else None %}
+<div class="group-bar">
+    <div class="group-tabs">
+        <a href="{{ url_for('yesterday_view', range=window.preset, date=cur_date, group='') }}"
+           class="group-tab {% if not active_group %}active{% endif %}">
+           All <span class="group-count">{{ all_repos_count }}</span>
+        </a>
+        {% for gname, gRepos in groups.items() %}
+        <a href="{{ url_for('yesterday_view', range=window.preset, date=cur_date, group=gname) }}"
+           class="group-tab {% if active_group == gname %}active{% endif %}">
+           {{ gname }} <span class="group-count">{{ gRepos|length }}</span>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
 
 {% if sessions %}
 <div class="briefing-stats yesterday-stats">
@@ -76,6 +98,7 @@
         <div class="session-card-header">
             <div class="session-title">
                 <a href="{{ url_for('repo_detail', owner=s.owner, name=s.repo) }}" class="session-repo">{{ s.repo }}</a>
+                {{ category_badge(s.repo) }}
                 <span class="session-topic">{{ s.topic }}</span>
             </div>
             <span class="chip next-{{ s.next_kind }}" title="{{ s.next_text }}">{{ s.next_label }}</span>
@@ -154,6 +177,7 @@
         <div class="whatsnext-card">
             <div class="whatsnext-card-header">
                 <a href="{{ url_for('repo_detail', owner=item.owner, name=item.repo) }}" class="whatsnext-repo">{{ item.repo }}</a>
+                {{ category_badge(item.repo) }}
                 {% if item.generated_at %}
                 <span class="whatsnext-generated" title="Summary generated {{ item.generated_at }}">{{ item.generated_at[:10] }}</span>
                 {% endif %}

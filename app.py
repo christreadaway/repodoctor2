@@ -143,6 +143,11 @@ _credentials: dict | None = None
 _session_cost = models.SessionCost()
 _scan_results: dict | None = models.get_latest_scan()  # Latest scan, restored on restart
 
+# Ensure the four category groups (Church/School/Combined/Personal) exist so
+# they show up as filters everywhere from first launch. Idempotent — only
+# writes when one is missing, and never clobbers existing members.
+models.seed_category_groups()
+
 
 GITHUB_AUTH_REMEDY = (
     "GitHub authentication failed — your Personal Access Token is no longer "
@@ -194,6 +199,10 @@ def inject_preferences():
         "preferences": models.get_preferences(),
         "model_choices": ai.MODEL_CHOICES,
         "github_connected": _get_github_client() is not None,
+        # Category tags flow through every template: a name→category map for
+        # badges, plus the fixed list for the Categorize dropdowns.
+        "repo_categories": models.get_repo_categories(),
+        "category_groups": models.CATEGORY_GROUPS,
     }
 
 
@@ -386,14 +395,31 @@ def login_reset():
 
 # --- Dashboard ---
 
+def _filter_by_group(repos: list, active_group: str, groups: dict) -> list:
+    """Scope a repo list to the active group (by repo name). Empty group = all.
+    Shared by every list screen so one group selection filters the whole app."""
+    if not active_group:
+        return list(repos)
+    members = set(groups.get(active_group, []))
+    return [r for r in repos if r.get("name") in members]
+
+
 @app.route("/")
 @_require_auth
 def dashboard():
     global _scan_results
     prefs = models.get_preferences()
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups)
+    all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
+    repos = _filter_by_group(all_repos, active_group, groups)
     return render_template(
         "dashboard.html",
         scan_results=_scan_results,
+        repos=repos,
+        all_repos_count=len(all_repos),
+        groups=groups,
+        active_group=active_group,
         preferences=prefs,
         session_cost=_session_cost.to_dict(),
     )
@@ -734,6 +760,23 @@ def delete_group_route():
     return redirect(url_for("projects"))
 
 
+@app.route("/api/categorize", methods=["POST"])
+@_require_auth_api
+def set_category():
+    """Assign one category (Church/School/Combined/Personal, or empty to clear)
+    to a repo. Driven by the per-repo dropdown on the Projects Categorize panel,
+    saved instantly so tagging a whole portfolio never needs a page reload."""
+    data = request.json or {}
+    repo = (data.get("repo") or "").strip()
+    category = (data.get("category") or "").strip()
+    if not repo:
+        return jsonify({"error": "Missing repo."}), 400
+    if not models.set_repo_category(repo, category or None):
+        return jsonify({"error": f"Unknown category '{category}'."}), 400
+    models.log_action("set_category", repo, "all", category or "(cleared)")
+    return jsonify({"ok": True, "repo": repo, "category": category})
+
+
 # Enforced via structured outputs so the model cannot answer with prose —
 # the cause of the old "No JSON object found in AI response" failures.
 PROJECT_SUMMARY_SCHEMA = {
@@ -968,14 +1011,17 @@ def _generate_blurb_for_repo(client, creds: dict, repo: dict) -> dict:
 @_require_auth
 def repo_selector():
     blurbs = models.get_selector_blurbs()
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups)
 
     all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
     # Most recently pushed first; missing/blank dates sink to the bottom.
     all_repos.sort(key=briefing.last_push_ts, reverse=True)
+    scoped = _filter_by_group(all_repos, active_group, groups)
 
     # Attach each repo's blurb (by full_name) so the template stays dumb.
     repos = []
-    for r in all_repos:
+    for r in scoped:
         full_name = r.get("full_name", f"{r.get('owner')}/{r.get('name')}")
         blurb = blurbs.get(full_name)
         repos.append({**r, "full_name": full_name, "blurb": blurb})
@@ -985,6 +1031,9 @@ def repo_selector():
         "selector.html",
         repos=repos,
         scan_results=_scan_results,
+        groups=groups,
+        active_group=active_group,
+        all_repos_count=len(all_repos),
         blurbed_count=sum(1 for r in repos if r["blurb"]),
         private_count=private_count,
         public_count=len(repos) - private_count,
@@ -1358,19 +1407,28 @@ def _yesterday_repos() -> list[dict]:
 @_require_auth
 def yesterday_view():
     window = sessions.resolve_window(request.args)
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups)
 
     if not _scan_results:
         return render_template("yesterday.html", scan_results=None, window=window,
-                               range_presets=_RANGE_PRESETS)
+                               range_presets=_RANGE_PRESETS,
+                               groups=groups, active_group=active_group,
+                               all_repos_count=0)
+
+    all_repos = _yesterday_repos()
+    scoped_repos = _filter_by_group(all_repos, active_group, groups)
 
     client = _get_github_client()
     if not client:
         return render_template("yesterday.html", scan_results=_scan_results,
                                not_connected=True, window=window,
-                               range_presets=_RANGE_PRESETS, sessions=[])
+                               range_presets=_RANGE_PRESETS, sessions=[],
+                               groups=groups, active_group=active_group,
+                               all_repos_count=len(all_repos))
 
     t0 = time.monotonic()
-    session_list = sessions.gather_sessions(client, _yesterday_repos(), window)
+    session_list = sessions.gather_sessions(client, scoped_repos, window)
     sessions.attach_recaps(session_list, models.get_session_recaps())
     counts = sessions.summarize_counts(session_list)
     markdown = sessions.compose_markdown(
@@ -1386,24 +1444,30 @@ def yesterday_view():
         not_connected=False,
         window=window,
         range_presets=_RANGE_PRESETS,
+        groups=groups,
+        active_group=active_group,
+        all_repos_count=len(all_repos),
         sessions=session_list,
         counts=counts,
         markdown=markdown,
-        next_up_items=_next_up_items(),
+        next_up_items=_next_up_items(active_group, groups),
         targets_all=[s["token"] for s in session_list],
         targets_needs=[s["token"] for s in session_list if s["needs_summary"]],
     )
 
 
-def _next_up_items() -> list[dict]:
-    """The planned next-steps across the whole portfolio, pulled from the
-    Projects-page AI summaries. This is what the old What's Next tab showed;
+def _next_up_items(active_group: str = "", groups: dict | None = None) -> list[dict]:
+    """The planned next-steps, pulled from the Projects-page AI summaries and
+    scoped to the active group. This is what the old What's Next tab showed;
     it now lives as a section on the Next Up (Yesterday) screen — the two
     were answering the same question ("where do I pick up?") from different
     angles (planned steps vs. live git activity)."""
     summaries = models.get_project_summaries()
+    repos = _scan_results.get("repos", []) if _scan_results else []
+    if active_group:
+        repos = _filter_by_group(repos, active_group, groups or {})
     items = []
-    for repo in (_scan_results.get("repos", []) if _scan_results else []):
+    for repo in repos:
         s = summaries.get(repo["name"]) or {}
         steps = s.get("next_steps") or []
         if not steps:
@@ -1524,12 +1588,22 @@ def docs_index():
         return render_template("docs.html", scan_results=_scan_results,
                                not_connected=True, repos=[])
 
-    repos = sorted(_scan_results.get("repos", []),
-                   key=lambda r: briefing.last_push_ts(r) or "", reverse=True)
+    all_repos = sorted(_scan_results.get("repos", []),
+                       key=lambda r: briefing.last_push_ts(r) or "", reverse=True)
+    # Repo-groups (distinct from the file-directory `groups` the template uses
+    # for the sidebar) scope the repo picker so one group selection filters the
+    # whole app, Docs included.
+    repo_groups = models.get_groups()
+    active_group = _resolve_active_group(repo_groups)
+    repos = _filter_by_group(all_repos, active_group, repo_groups)
     if not repos:
-        return render_template("docs.html", scan_results=_scan_results, repos=[])
+        return render_template("docs.html", scan_results=_scan_results, repos=[],
+                               repo_groups=repo_groups, active_group=active_group,
+                               all_repos_count=len(all_repos))
 
-    repo = _find_repo_by_name(request.args.get("repo") or "") or repos[0]
+    requested = _find_repo_by_name(request.args.get("repo") or "")
+    scoped_names = {r["name"] for r in repos}
+    repo = requested if (requested and requested["name"] in scoped_names) else repos[0]
     ref = request.args.get("ref") or repo.get("default_branch", "main")
 
     files = docs_explorer.list_md_files(client, repo["owner"], repo["name"], ref)
@@ -1560,6 +1634,9 @@ def docs_index():
         active_repo=repo,
         ref=ref,
         groups=groups,
+        repo_groups=repo_groups,
+        active_group=active_group,
+        all_repos_count=len(all_repos),
         file_count=len(files),
         selected=selected,
         content=content,

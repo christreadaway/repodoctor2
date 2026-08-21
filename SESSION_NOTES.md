@@ -39,6 +39,11 @@ Chris asked to consolidate the top nav (it had grown to 12 tabs, wrapping to two
 - **Mac Setup → Settings.** A "Setup & Running" card in Settings links to the guide (same pattern as the Firestore fleet view already in Settings → Tools). `/mac-setup` still serves it (back-to-Settings breadcrumb).
 - Final nav: My Repos · Projects · Selector · Stats · Next Up · Briefing · Docs · Tracker · Settings. Verified the rendered pages in a real browser (Playwright + Chromium). **318 tests passing.**
 
+### Categories + flow-through (19c)
+- **Reconnect fix.** Chris hit "Not connected to GitHub" generating a Selector blurb after pulling. Root cause: on restart the signed session cookie + the disk-restored scan survive, but the in-memory GitHub client (keys decrypted with his password, never stored) doesn't — so pages render while actions 401. Fixed app-wide: a `github_connected` context flag drives an amber reconnect banner on every page (consistent with the existing not_connected onboarding on Next Up/Docs). Kept the soft-state design rather than force-redirect (which would have fought that design and broken ~26 legit onboarding tests).
+- **Project categories.** Church/School/Combined/Personal as a single-select tag per project. Built ON the groups system (the 4 are seeded groups) so they flow through every group filter, but assigned one-per-repo via a Projects "Categorize" panel (one dropdown each, `POST /api/categorize`, instant save, single-select enforced — picking one drops the repo from the other three). A `category_badge` macro + context-injected `repo_categories` map put a colored badge on My Repos, Projects, Selector, and Next Up, and the category rides into the Selector's copy/paste output.
+- **Groups flow through.** Added the group filter tab bar to My Repos, Selector, Next Up, and Docs (Docs needed care — its template already uses `groups` for file directories, so repo-groups pass as `repo_groups`). All share `active_group` via the existing `_resolve_active_group` + a new `_filter_by_group`, so one selection scopes the whole app. **327 tests.**
+
 ### Where it left off
 Built, tested, documented. Landed on `main` this session at Chris's request (docs + feature together). Run a fresh scan to pull in the org repos.
 

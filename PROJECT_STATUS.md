@@ -26,6 +26,12 @@ One new screen plus the scan fix that makes it complete. See `SESSION_NOTES.md` 
 - **Mac Setup → Settings.** Linked from a new "Setup & Running" card in Settings (same pattern as the Firestore fleet view). `/mac-setup` still serves the guide with a back-to-Settings breadcrumb.
 - Nav now: My Repos · Projects · Selector · Stats · Next Up · Briefing · Docs · Tracker · Settings. **Tests: 318 passing** (replaced 6 What's-Next group-filter tests with 4 Next-Up merge tests).
 
+**Session 19c — categories + groups flow through the whole app.**
+- **Reconnect banner.** After an app restart the session cookie survives but the in-memory GitHub client doesn't, so pages rendered but actions 401'd with a confusing "not connected" error. Now a global amber banner (from a `github_connected` context flag) warns on every page to log out and back in. (+2 tests.)
+- **Project categories (Church / School / Combined / Personal).** A single-select tag per project, implemented as four seeded groups so they reuse the group machinery. Tagged one-dropdown-per-repo on the Projects "Categorize" panel (`POST /api/categorize`, instant save), single-select enforced. A colored `category_badge` (four hues) flows onto My Repos, Projects, Selector, and Next Up via a context-injected `repo_categories` map, and into the Selector copy output.
+- **Groups flow through everywhere.** The group filter tab bar now also appears on My Repos, Selector, Next Up, and Docs (was Projects / Stats / Briefing only), all sharing `active_group` via `_filter_by_group()` — pick a group on any screen and every screen scopes to it.
+- **Tests: 327 passing** (+7 category model/API/badge/filter, +2 reconnect banner).
+
 ---
 
 ## Latest — Session 18 (2026-07-29)
