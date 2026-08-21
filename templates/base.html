@@ -41,6 +41,12 @@
     {% endif %}
 
     <main class="container">
+        {% if session.get('authenticated') and not github_connected %}
+        <div class="reconnect-banner">
+            <span class="reconnect-banner-icon">⚠</span>
+            <span>The app restarted, so it lost your GitHub connection. Scanning and AI generation (summaries, briefs, blurbs) won't work until you <a href="{{ url_for('logout') }}">log out and back in</a>.</span>
+        </div>
+        {% endif %}
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
         <div class="flash-messages">

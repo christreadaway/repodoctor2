@@ -5531,3 +5531,20 @@ button.tracker-stat-jump:focus {
   transition: color var(--transition-fast);
 }
 .nextup-back:hover { color: var(--cyan-100); }
+
+
+/* App-wide "session outlived a restart" warning banner (base.html). */
+.reconnect-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: rgba(255, 170, 0, 0.08);
+  border: 1px solid rgba(255, 170, 0, 0.35);
+  border-radius: var(--radius-md);
+  color: var(--amber-100);
+  font-size: 0.85rem;
+}
+.reconnect-banner-icon { font-size: 1rem; flex: 0 0 auto; }
+.reconnect-banner a { color: var(--amber-100); font-weight: 600; }

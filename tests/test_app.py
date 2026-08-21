@@ -839,6 +839,34 @@ class TestFlaskApp(unittest.TestCase):
             models.SELECTOR_BLURBS_PATH = orig_blurbs
             models.SELECTOR_LOG_PATH = orig_log
 
+    def test_reconnect_banner_shows_when_client_missing(self):
+        """After a restart the cookie says authenticated but the in-memory
+        client is gone — every page warns the user to log in again."""
+        import app as app_module
+        orig = app_module._github_client
+        app_module._github_client = None
+        try:
+            with self.client.session_transaction() as sess:
+                sess["authenticated"] = True
+            resp = self.client.get("/settings")
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn(b"lost your GitHub connection", resp.data)
+        finally:
+            app_module._github_client = orig
+
+    def test_reconnect_banner_hidden_when_connected(self):
+        """A live GitHub client means no reconnect banner."""
+        import app as app_module
+        orig = app_module._github_client
+        app_module._github_client = MagicMock()
+        try:
+            with self.client.session_transaction() as sess:
+                sess["authenticated"] = True
+            resp = self.client.get("/settings")
+            self.assertNotIn(b"lost your GitHub connection", resp.data)
+        finally:
+            app_module._github_client = orig
+
     def test_logout(self):
         """Logout clears session and redirects."""
         with self.client.session_transaction() as sess:

@@ -183,10 +183,17 @@ def _handle_github_network_error(e):
 @app.context_processor
 def inject_preferences():
     """Make preferences + the model list available in all templates
-    (Settings dropdown, tracker per-generation override)."""
+    (Settings dropdown, tracker per-generation override).
+
+    github_connected lets base.html warn, on every page, when the session
+    outlived an app restart: the signed cookie still says authenticated and the
+    last scan is restored from disk (so pages render), but the in-memory GitHub
+    client is gone — so scans and AI generation would 401 with a confusing
+    "not connected" error until the user logs in again."""
     return {
         "preferences": models.get_preferences(),
         "model_choices": ai.MODEL_CHOICES,
+        "github_connected": _get_github_client() is not None,
     }
 
 
