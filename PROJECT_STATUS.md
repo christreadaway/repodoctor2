@@ -1,14 +1,24 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-07-29 (Session 18 — Yesterday session-recap screen + Markdown Docs Explorer)
-**Current Branch:** `claude/yesterday-work-summary-zqlr51` (not yet merged to `main`)
+**Last Updated:** 2026-08-21 (Session 19 — Repo Selector: pick repos, 3-sentence blurbs, copy/paste; org repos now scanned)
+**Current Branch:** `claude/repo-selector-summaries-gck5md` (not yet merged to `main`)
 **Overall Progress:** ~97%
 
 ---
 
 ## Snapshot
 
-RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch counts, required-spec-file presence, code size, AI-generated project summaries, named groups for filtering, a Stats view with Commits / Code Size bar charts across time periods (aggregatable by group), an aggregated What's Next view, a per-repo Codebase Tracker, a Chat Briefing screen that composes a single portfolio document for pasting into a Claude chat session, a **Yesterday** screen that reconstructs what you were doing across every repo (broken out by session, with a where-you-left-off call), and a **Docs Explorer** for reading each repo's Markdown files in the browser. **Runs locally as a Flask app — this is the supported way to use it.** A Node.js/Netlify serverless port still lives in `netlify/` for reference, but the hosted deployment was decommissioned on 2026-07-23.
+RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch counts, required-spec-file presence, code size, AI-generated project summaries, named groups for filtering, a Stats view with Commits / Code Size bar charts across time periods (aggregatable by group), an aggregated What's Next view, a per-repo Codebase Tracker, a Chat Briefing screen that composes a single portfolio document for pasting into a Claude chat session, a **Yesterday** screen that reconstructs what you were doing across every repo (broken out by session, with a where-you-left-off call), a **Docs Explorer** for reading each repo's Markdown files in the browser, and a **Repo Selector** for ticking any repos (personal, private, public, and organization repos) and copying a clean three-sentence summary sheet into another document. **Runs locally as a Flask app — this is the supported way to use it.** A Node.js/Netlify serverless port still lives in `netlify/` for reference, but the hosted deployment was decommissioned on 2026-07-23.
+
+---
+
+## Latest — Session 19 (2026-08-21)
+
+One new screen plus the scan fix that makes it complete. See `SESSION_NOTES.md` for the full log.
+
+- **Repo Selector (`/selector`, nav: Selector).** One place to pick from **every** repo you can reach and copy a clean summary sheet into another document. Each repo is tagged `PUBLIC`/`PRIVATE`, sorted newest-push-first, with a visibility filter (All / Public / Private) and a name/owner search. Tick the projects you want; **GENERATE SUMMARIES** writes a **three-sentence** plain-English blurb (what it is, who it's for, how finished) for any selected repo that doesn't have one — one repo per request via `POST /api/selector/blurb/<owner>/<name>`, driven by the shared client-side queue (live progress, CANCEL, per-repo errors that never overwrite a good blurb). The output preview rebuilds live from the current selection with a **Markdown / Plain text** toggle; **COPY** and **DOWNLOAD .MD** hand you the sheet. Selection is remembered per-device in `localStorage`, so it survives the reload after generation. Blurbs cached in `data/selector_blurbs.json` (keyed by `owner/name`, not bare name, so an org repo can't collide with a personal one); every generation logs to `data/logs/selector.log`.
+- **Org repos now included in the scan.** `github_client.get_repos()` was requesting `affiliation=owner,collaborator`, which silently dropped every repo living under an organization. Changed to `owner,collaborator,organization_member` so organization repos show up everywhere — dashboard, Projects, Stats, Briefing, and the new Selector.
+- **Tests:** 320 passing (was 313 → +7: Selector route/model/API paths + org-affiliation coverage in `tests/test_app.py`).
 
 ---
 

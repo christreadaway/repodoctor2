@@ -847,6 +847,178 @@ def generate_project_summary_one(name):
     return jsonify({"ok": True, "repo": name})
 
 
+# --- Repo Selector ---
+#
+# One screen to pick from EVERY repo (personal, private, public, and org repos
+# now that the scan's affiliation includes organization_member), each tagged
+# PUBLIC/PRIVATE, each with a three-sentence plain-English blurb. You tick the
+# repos you want and copy a clean summary sheet to paste into another document.
+
+# Structured output so the model returns a single clean paragraph, never prose
+# framing or a JSON-in-prose reply (the failure the Projects schema also fixes).
+SELECTOR_BLURB_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {
+            "type": "string",
+            "description": (
+                "Exactly three sentences, plain English, describing what this "
+                "project is, who it's for, and roughly how far along it is. No "
+                "bullet points, no headings, no markdown — just three sentences."
+            ),
+        },
+    },
+    "required": ["summary"],
+    "additionalProperties": False,
+}
+
+
+def _find_repo_by_full_name(full_name: str) -> dict | None:
+    """Find a repo in the latest scan by 'owner/name'. Full-name lookup (not
+    bare name) so an org repo never collides with a personal repo of the same
+    name — the collision the scan's new organization_member affiliation makes
+    real."""
+    if not _scan_results:
+        return None
+    for r in _scan_results.get("repos", []):
+        if r.get("full_name") == full_name:
+            return r
+    return None
+
+
+def _generate_blurb_for_repo(client, creds: dict, repo: dict) -> dict:
+    """Generate + save the Selector's three-sentence blurb for one repo.
+    Falls back to the README when the repo has none of Chris's spec files, so
+    org and public repos still get a real summary. Raises on AI failure — an
+    existing good blurb is never overwritten with an error."""
+    owner = repo["owner"]
+    name = repo["name"]
+    full_name = repo.get("full_name", f"{owner}/{name}")
+    ref = repo.get("default_branch", "main")
+
+    # Spec docs first; README as a fallback so a repo without PRODUCT_SPEC etc.
+    # (most org/public repos) still has something to summarize from.
+    fetched = gh.fetch_repo_docs(
+        client, owner, name, ref=ref, max_chars=5000, include_readme="if_no_docs",
+    )
+
+    context_parts = []
+    if repo.get("description"):
+        context_parts.append(f"GitHub description: {repo['description']}")
+    for key, content in fetched["docs"].items():
+        context_parts.append(f"--- {key.upper()} ---\n{content}")
+    if fetched.get("readme"):
+        context_parts.append(f"--- README ---\n{fetched['readme']}")
+
+    if not context_parts:
+        # Nothing to read — save a minimal, honest blurb rather than inventing.
+        blurb = {
+            "summary": (
+                f"{name} is a GitHub repository with no README, spec files, or "
+                "description to summarize from. What it does can't be determined "
+                "from its contents yet. Add a README or description to get a real "
+                "summary here."
+            ),
+        }
+        models.save_selector_blurb(full_name, blurb)
+        models.log_selector_event("generate_skipped", repo=full_name, reason="no docs, readme, or description")
+        return blurb
+
+    context_text = "\n\n".join(context_parts)
+    model = models.get_ai_model()
+
+    ai_client = anthropic.Anthropic(api_key=creds["anthropic_key"])
+    blurb, usage = ai.request_json(
+        ai_client,
+        model=model,
+        max_tokens=400,
+        schema=SELECTOR_BLURB_SCHEMA,
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Project: {name}\n\n{context_text}\n\n"
+                "Write a summary of this project in EXACTLY three sentences: "
+                "what it is, who it's for, and roughly how finished it is. "
+                "Plain English, no jargon, no markdown."
+            ),
+        }],
+    )
+    models.save_selector_blurb(full_name, blurb)
+
+    in_tok = usage["input_tokens"]
+    out_tok = usage["output_tokens"]
+    _session_cost.add(in_tok, out_tok, ai.estimate_cost(in_tok, out_tok, model=model))
+    models.log_selector_event(
+        "generate_done", repo=full_name, model=model,
+        input_tokens=in_tok, output_tokens=out_tok,
+        docs=sorted(fetched["docs"].keys()),
+        used_readme=bool(fetched.get("readme")),
+    )
+    return blurb
+
+
+@app.route("/selector")
+@_require_auth
+def repo_selector():
+    blurbs = models.get_selector_blurbs()
+
+    all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
+    # Most recently pushed first; missing/blank dates sink to the bottom.
+    all_repos.sort(key=briefing.last_push_ts, reverse=True)
+
+    # Attach each repo's blurb (by full_name) so the template stays dumb.
+    repos = []
+    for r in all_repos:
+        full_name = r.get("full_name", f"{r.get('owner')}/{r.get('name')}")
+        blurb = blurbs.get(full_name)
+        repos.append({**r, "full_name": full_name, "blurb": blurb})
+
+    private_count = sum(1 for r in repos if r.get("private"))
+    return render_template(
+        "selector.html",
+        repos=repos,
+        scan_results=_scan_results,
+        blurbed_count=sum(1 for r in repos if r["blurb"]),
+        private_count=private_count,
+        public_count=len(repos) - private_count,
+    )
+
+
+@app.route("/api/selector/blurb/<owner>/<name>", methods=["POST"])
+@_require_auth_api
+def generate_selector_blurb_one(owner, name):
+    """Generate the three-sentence blurb for ONE repo. The Selector page drives
+    this per selected repo with live progress, so a 60-repo portfolio never
+    blocks one request and one failure never kills the batch."""
+    client = _get_github_client()
+    creds = _get_credentials()
+    if not client or not creds:
+        return jsonify({"error": NOT_CONNECTED_REMEDY}), 401
+
+    full_name = f"{owner}/{name}"
+    repo = _find_repo_by_full_name(full_name)
+    if not repo:
+        return jsonify({"error": f"Repo '{full_name}' not in the latest scan. Run a scan first."}), 404
+
+    force = bool((request.json or {}).get("force")) if request.is_json else False
+    existing = models.get_selector_blurbs().get(full_name)
+    if existing and not force:
+        return jsonify({"ok": True, "repo": full_name, "skipped": "exists"})
+
+    try:
+        _generate_blurb_for_repo(client, creds, repo)
+    except gh.GitHubAuthError:
+        return jsonify({"error": GITHUB_AUTH_REMEDY}), 401
+    except Exception as e:
+        detail = f"{type(e).__name__}: {str(e)[:300]}"
+        models.log_selector_event("generate_error", repo=full_name, error=detail)
+        models.log_action("generate_selector_blurb_error", name, "all", str(e)[:300])
+        return jsonify({"error": detail}), 502
+
+    models.log_action("generate_selector_blurb", name, "all", "ok")
+    return jsonify({"ok": True, "repo": full_name})
+
+
 # --- Stats ---
 
 # Cached stats data so the page doesn't re-hit the API on every visit.

@@ -18,6 +18,7 @@ TEST_DATA_DIR = os.path.join(TEST_DIR, "data")
 TEST_CONFIG_DIR = os.path.join(TEST_DIR, "config")
 os.makedirs(TEST_DATA_DIR, exist_ok=True)
 os.makedirs(os.path.join(TEST_DATA_DIR, "specs"), exist_ok=True)
+os.makedirs(os.path.join(TEST_DATA_DIR, "logs"), exist_ok=True)
 os.makedirs(TEST_CONFIG_DIR, exist_ok=True)
 
 import security
@@ -664,6 +665,180 @@ class TestFlaskApp(unittest.TestCase):
             if os.path.exists(os.path.join(TEST_DATA_DIR, "test_summaries.json")):
                 os.remove(os.path.join(TEST_DATA_DIR, "test_summaries.json"))
 
+    def test_unauthenticated_selector(self):
+        """Unauthenticated access to the Selector redirects to login."""
+        resp = self.client.get("/selector")
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/login", resp.headers["Location"])
+
+    def test_selector_when_authenticated_no_scan(self):
+        """Selector loads with an onboarding prompt when there's no scan yet."""
+        import app as app_module
+        orig = app_module._scan_results
+        app_module._scan_results = None
+        try:
+            with self.client.session_transaction() as sess:
+                sess["authenticated"] = True
+                sess["github_user"] = "testuser"
+            resp = self.client.get("/selector")
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn(b"Repo Selector", resp.data)
+            self.assertIn(b"No scan data yet", resp.data)
+        finally:
+            app_module._scan_results = orig
+
+    def test_selector_lists_org_repos_with_visibility_tags(self):
+        """Selector shows every scanned repo — org repos included — each tagged
+        public/private, and emits a parseable JSON blob for the client."""
+        import app as app_module
+        import models
+        orig_scan = app_module._scan_results
+        orig_blurbs = models.SELECTOR_BLURBS_PATH
+        models.SELECTOR_BLURBS_PATH = os.path.join(TEST_DATA_DIR, "test_selector_blurbs.json")
+        app_module._scan_results = {"repos": [
+            {"owner": "christreadaway", "name": "personalcrm",
+             "full_name": "christreadaway/personalcrm", "private": True,
+             "html_url": "https://github.com/christreadaway/personalcrm",
+             "description": "crm", "pushed_at": "2026-08-20T00:00:00Z",
+             "default_branch": "main"},
+            {"owner": "some-org", "name": "website",
+             "full_name": "some-org/website", "private": False,
+             "html_url": "https://github.com/some-org/website",
+             "description": "site", "pushed_at": "2026-08-19T00:00:00Z",
+             "default_branch": "main"},
+        ]}
+        models.save_selector_blurb("christreadaway/personalcrm", {"summary": "One. Two. Three."})
+        try:
+            with self.client.session_transaction() as sess:
+                sess["authenticated"] = True
+                sess["github_user"] = "testuser"
+            resp = self.client.get("/selector")
+            body = resp.get_data(as_text=True)
+            self.assertEqual(resp.status_code, 200)
+            # Both the personal and the org repo appear.
+            self.assertIn("personalcrm", body)
+            self.assertIn("some-org/website", body)
+            # Visibility tags render for both kinds.
+            self.assertIn("badge-dim", body)      # PRIVATE
+            self.assertIn("badge-public", body)   # PUBLIC
+            # Saved blurb is rendered inline.
+            self.assertIn("One. Two. Three.", body)
+            # The client-side JSON blob parses and carries the private flags.
+            import re
+            m = re.search(r'id="selector-repos">(\[.*?\])</script>', body, re.S)
+            self.assertIsNotNone(m)
+            data = json.loads(m.group(1))
+            self.assertEqual(len(data), 2)
+            by_name = {d["full_name"]: d for d in data}
+            self.assertTrue(by_name["christreadaway/personalcrm"]["private"])
+            self.assertFalse(by_name["some-org/website"]["private"])
+            self.assertEqual(by_name["christreadaway/personalcrm"]["summary"], "One. Two. Three.")
+        finally:
+            app_module._scan_results = orig_scan
+            if os.path.exists(models.SELECTOR_BLURBS_PATH):
+                os.remove(models.SELECTOR_BLURBS_PATH)
+            models.SELECTOR_BLURBS_PATH = orig_blurbs
+
+    def test_selector_blurb_model_keyed_by_full_name(self):
+        """Selector blurbs are stored by full_name so an org repo can't collide
+        with a personal repo of the same name."""
+        import models
+        orig = models.SELECTOR_BLURBS_PATH
+        models.SELECTOR_BLURBS_PATH = os.path.join(TEST_DATA_DIR, "test_blurbs_fn.json")
+        try:
+            models.save_selector_blurb("me/website", {"summary": "Mine."})
+            models.save_selector_blurb("org/website", {"summary": "Theirs."})
+            blurbs = models.get_selector_blurbs()
+            self.assertEqual(blurbs["me/website"]["summary"], "Mine.")
+            self.assertEqual(blurbs["org/website"]["summary"], "Theirs.")
+            self.assertIn("_generated_at", blurbs["me/website"])
+        finally:
+            if os.path.exists(models.SELECTOR_BLURBS_PATH):
+                os.remove(models.SELECTOR_BLURBS_PATH)
+            models.SELECTOR_BLURBS_PATH = orig
+
+    def test_selector_blurb_api_skips_existing_without_force(self):
+        """A repo that already has a blurb is not re-billed to the AI API
+        unless force=true is sent."""
+        import app as app_module
+        import models
+        orig_scan = app_module._scan_results
+        orig_gh = app_module._github_client
+        orig_creds = app_module._credentials
+        orig_blurbs = models.SELECTOR_BLURBS_PATH
+        models.SELECTOR_BLURBS_PATH = os.path.join(TEST_DATA_DIR, "test_blurbs_skip.json")
+        app_module._scan_results = {"repos": [
+            {"owner": "some-org", "name": "website", "full_name": "some-org/website",
+             "private": False, "html_url": "https://github.com/some-org/website",
+             "description": "site", "pushed_at": "2026-08-19T00:00:00Z",
+             "default_branch": "main"},
+        ]}
+        app_module._github_client = MagicMock()
+        app_module._credentials = {"anthropic_key": "sk", "github_pat": "ghp"}
+        models.save_selector_blurb("some-org/website", {"summary": "Already here."})
+        try:
+            with self.client.session_transaction() as sess:
+                sess["authenticated"] = True
+                sess["github_user"] = "testuser"
+            # No AI mock needed — the skip path must not call the model at all.
+            with patch("app.ai.request_json") as mock_ai:
+                resp = self.client.post("/api/selector/blurb/some-org/website", json={})
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.get_json().get("skipped"), "exists")
+                mock_ai.assert_not_called()
+        finally:
+            app_module._scan_results = orig_scan
+            app_module._github_client = orig_gh
+            app_module._credentials = orig_creds
+            if os.path.exists(models.SELECTOR_BLURBS_PATH):
+                os.remove(models.SELECTOR_BLURBS_PATH)
+            models.SELECTOR_BLURBS_PATH = orig_blurbs
+
+    def test_selector_blurb_api_generates(self):
+        """The generate path fetches docs, calls the model, and saves a blurb."""
+        import app as app_module
+        import models
+        orig_scan = app_module._scan_results
+        orig_gh = app_module._github_client
+        orig_creds = app_module._credentials
+        orig_blurbs = models.SELECTOR_BLURBS_PATH
+        orig_log = models.SELECTOR_LOG_PATH
+        models.SELECTOR_BLURBS_PATH = os.path.join(TEST_DATA_DIR, "test_blurbs_gen.json")
+        models.SELECTOR_LOG_PATH = os.path.join(TEST_DATA_DIR, "logs", "test_selector.log")
+        app_module._scan_results = {"repos": [
+            {"owner": "some-org", "name": "website", "full_name": "some-org/website",
+             "private": False, "html_url": "https://github.com/some-org/website",
+             "description": "site", "pushed_at": "2026-08-19T00:00:00Z",
+             "default_branch": "main"},
+        ]}
+        app_module._github_client = MagicMock()
+        app_module._credentials = {"anthropic_key": "sk", "github_pat": "ghp"}
+        try:
+            with self.client.session_transaction() as sess:
+                sess["authenticated"] = True
+                sess["github_user"] = "testuser"
+            with patch("app.gh.fetch_repo_docs",
+                       return_value={"docs": {"readme": "A site."}, "readme": ""}), \
+                 patch("app.ai.request_json",
+                       return_value=({"summary": "A. B. C."},
+                                     {"input_tokens": 10, "output_tokens": 5, "model": "m"})), \
+                 patch("app.anthropic.Anthropic", return_value=MagicMock()):
+                resp = self.client.post("/api/selector/blurb/some-org/website", json={})
+                self.assertEqual(resp.status_code, 200)
+                self.assertTrue(resp.get_json().get("ok"))
+                self.assertEqual(
+                    models.get_selector_blurbs()["some-org/website"]["summary"],
+                    "A. B. C.")
+        finally:
+            app_module._scan_results = orig_scan
+            app_module._github_client = orig_gh
+            app_module._credentials = orig_creds
+            for p in (models.SELECTOR_BLURBS_PATH, models.SELECTOR_LOG_PATH):
+                if os.path.exists(p):
+                    os.remove(p)
+            models.SELECTOR_BLURBS_PATH = orig_blurbs
+            models.SELECTOR_LOG_PATH = orig_log
+
     def test_logout(self):
         """Logout clears session and redirects."""
         with self.client.session_transaction() as sess:
@@ -735,6 +910,21 @@ class TestGitHubAuthErrorHandling(unittest.TestCase):
         with patch.object(client.session, "get", return_value=mock_resp):
             with self.assertRaises(gh.GitHubAuthError):
                 client.get_repos()
+
+    def test_get_repos_affiliation_includes_org_repos(self):
+        """get_repos must request organization_member repos — without it every
+        repo living under an org is silently dropped from the scan."""
+        client = gh.GitHubClient("ok")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = []  # empty page ends pagination immediately
+        mock_resp.headers = {}
+        with patch.object(client.session, "get", return_value=mock_resp) as mock_get:
+            client.get_repos()
+        self.assertTrue(mock_get.called)
+        params = mock_get.call_args.kwargs.get("params", {})
+        self.assertIn("organization_member", params.get("affiliation", ""))
+        self.assertIn("owner", params.get("affiliation", ""))
 
     def test_get_branches_raises_on_401(self):
         """All client GETs surface 401 via the centralized _get handler."""

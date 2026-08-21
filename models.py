@@ -282,6 +282,29 @@ def save_project_summaries(summaries: dict):
     _save_json(SUMMARIES_PATH, summaries)
 
 
+# --- Selector Blurbs (Repo Selector screen) ---
+#
+# A one-shot, three-sentence plain-English blurb per repo, for the Selector
+# screen where you tick the repos you care about and copy a clean summary
+# sheet into another document. Keyed by full_name ("owner/name") — NOT bare
+# name — because the scan now includes organization repos, and an org repo can
+# share a name with a personal one. Keying by full_name keeps the two apart.
+
+SELECTOR_BLURBS_PATH = os.path.join(DATA_DIR, "selector_blurbs.json")
+
+
+def get_selector_blurbs() -> dict:
+    return _load_json(SELECTOR_BLURBS_PATH) or {}
+
+
+def save_selector_blurb(full_name: str, blurb: dict):
+    with _STORE_LOCK:
+        blurbs = get_selector_blurbs()
+        blurb["_generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        blurbs[full_name] = blurb
+        _save_json(SELECTOR_BLURBS_PATH, blurbs)
+
+
 # --- Chat Briefs (Briefing screen) ---
 #
 # Keyed by repo name. One rich AI-generated brief per repo (what it is,
@@ -660,6 +683,20 @@ def log_summary_event(event: str, **fields):
 def tail_summary_log(n: int = 100) -> list[dict]:
     """Return the last n events from the project-summary log."""
     return _tail_log(SUMMARIES_LOG_PATH, n)
+
+
+# Repo Selector three-sentence blurb generation gets its own event log so a
+# failed blurb leaves a paste-back trail (which repo, which model, the error).
+SELECTOR_LOG_PATH = os.path.join(DATA_DIR, "logs", "selector.log")
+
+
+def log_selector_event(event: str, **fields):
+    _append_log_event(SELECTOR_LOG_PATH, event, fields)
+
+
+def tail_selector_log(n: int = 100) -> list[dict]:
+    """Return the last n events from the Selector blurb log."""
+    return _tail_log(SELECTOR_LOG_PATH, n)
 
 
 # --- Session Cost Tracking ---

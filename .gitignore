@@ -21,6 +21,7 @@ data/scan_history.json
 data/analysis_cache.json
 data/action_log.json
 data/project_summaries.json
+data/selector_blurbs.json
 data/henry_summaries.json
 data/briefs.json
 data/session_recaps.json

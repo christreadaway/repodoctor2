@@ -5269,3 +5269,238 @@ button.tracker-stat-jump:focus {
   .docs-layout { grid-template-columns: 1fr; }
   .docs-sidebar { position: static; max-height: 320px; }
 }
+
+
+/* ================================================================
+   Repo Selector — pick repos, generate 3-sentence blurbs, copy out
+   ================================================================ */
+.selector-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+  margin: var(--space-lg) 0 var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.selector-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.selector-toolbar-grow {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+
+.selector-search {
+  width: 100%;
+  font-size: 0.85rem;
+}
+
+/* Visibility filter pills — mirror the group-tab look. */
+.selector-filters {
+  gap: var(--space-xs);
+}
+
+.selector-filter {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.selector-filter:hover { color: var(--text-primary); border-color: var(--green-80); }
+
+.selector-filter.active {
+  color: var(--green-100);
+  border-color: var(--green-80);
+  background: rgba(51, 255, 51, 0.07);
+}
+
+.selector-filter-count {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  margin-left: 0.2rem;
+}
+
+.selector-filter.active .selector-filter-count { color: var(--green-80); }
+
+.selector-status {
+  min-height: 1.2rem;
+  margin-bottom: var(--space-sm);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+/* --- The list of selectable repos --- */
+.selector-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.selector-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.selector-row:hover { border-color: var(--green-80); }
+
+.selector-row.has-blurb { border-left: 3px solid var(--green-80); }
+
+/* A row whose checkbox is checked — highlight it clearly. */
+.selector-row:has(.selector-check:checked) {
+  border-color: var(--green-80);
+  background: rgba(51, 255, 51, 0.04);
+}
+
+.selector-check {
+  width: 1.05rem;
+  height: 1.05rem;
+  margin-top: 0.2rem;
+  flex: 0 0 auto;
+  accent-color: var(--green-80);
+  cursor: pointer;
+}
+
+.selector-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.selector-row-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.selector-name {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.selector-owner {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.selector-link {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 0.85rem;
+  transition: color var(--transition-fast);
+}
+
+.selector-link:hover { color: var(--cyan-100); }
+
+.selector-blurb {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.selector-blurb-empty {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* --- Output preview panel --- */
+.selector-output {
+  margin-top: var(--space-xl);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+}
+
+.selector-output-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-sm);
+}
+
+.selector-output-title {
+  font-size: 1rem;
+  color: var(--green-100);
+  margin: 0;
+}
+
+.selector-output-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.selector-format {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.selector-format-btn {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.selector-format-btn:hover { color: var(--text-primary); }
+
+.selector-format-btn.active {
+  color: var(--green-100);
+  background: rgba(51, 255, 51, 0.09);
+}
+
+.selector-output-text {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+  /* pre-wrap keeps the real newlines (so the copied sheet is exact) while
+     wrapping long sentences into the box instead of a horizontal scrollbar. */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+@media (max-width: 640px) {
+  .selector-toolbar { flex-direction: column; align-items: stretch; }
+  .selector-toolbar-group { justify-content: space-between; }
+  .selector-output-header { flex-direction: column; align-items: stretch; }
+}

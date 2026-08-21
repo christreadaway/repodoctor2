@@ -122,6 +122,11 @@ class GitHubClient:
     def get_repos(self) -> list[dict]:
         """Fetch all repositories accessible to the authenticated user.
 
+        affiliation covers the three ways a repo can be "mine": repos I own,
+        repos I'm a direct collaborator on, and repos in organizations I
+        belong to. organization_member is the one that surfaces org repos —
+        without it the scan silently drops every repo that lives under an org.
+
         Raises GitHubAuthError (via _get) if GitHub returns 401 so the caller
         can show a clear remediation message instead of silently returning
         an empty list.
@@ -129,7 +134,7 @@ class GitHubClient:
         return self._get_paginated(
             f"{GITHUB_API}/user/repos", "get_repos",
             params={"sort": "updated", "direction": "desc",
-                    "affiliation": "owner,collaborator"},
+                    "affiliation": "owner,collaborator,organization_member"},
         )
 
     def get_branches(self, owner: str, repo: str) -> list[dict]:

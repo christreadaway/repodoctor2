@@ -21,6 +21,7 @@
             <div class="nav-links">
                 <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">My Repos</a>
                 <a href="{{ url_for('projects') }}" class="nav-link {% if request.endpoint == 'projects' %}active{% endif %}">Projects</a>
+                <a href="{{ url_for('repo_selector') }}" class="nav-link {% if request.endpoint == 'repo_selector' %}active{% endif %}">Selector</a>
                 <a href="{{ url_for('stats') }}" class="nav-link {% if request.endpoint == 'stats' %}active{% endif %}">Stats</a>
                 <a href="{{ url_for('yesterday_view') }}" class="nav-link {% if request.endpoint == 'yesterday_view' %}active{% endif %}">Yesterday</a>
                 <a href="{{ url_for('whats_next_all') }}" class="nav-link {% if request.endpoint == 'whats_next_all' %}active{% endif %}">What's Next</a>

@@ -1,0 +1,314 @@
+{% extends "base.html" %}
+{% block title %}RepoDoctor — Repo Selector{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Repo Selector</h1>
+    <div class="page-actions">
+        {% if scan_results and repos %}
+        <button type="button" class="btn btn-secondary" id="sel-generate-btn" disabled>
+            GENERATE SUMMARIES (<span id="sel-generate-count">0</span>)
+        </button>
+        <button type="button" class="btn btn-primary" id="sel-copy-btn" disabled>
+            COPY SELECTED (<span id="sel-copy-count">0</span>)
+        </button>
+        {% endif %}
+    </div>
+</div>
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first. The scan now pulls every repo you can reach — personal, private, public, and the ones inside your organizations — then come back here to pick and summarize them.</p>
+    </div>
+</div>
+{% elif not repos %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No repositories found.</h2>
+        <p>Your last scan didn't find any repositories. Check your <a href="{{ url_for('settings') }}">Settings</a> and run a scan again.</p>
+    </div>
+</div>
+{% else %}
+
+<p class="projects-hint">
+    Every repo you can reach, each tagged <span class="badge badge-public">PUBLIC</span> or <span class="badge badge-dim">PRIVATE</span>.
+    Tick the projects you want, click <strong>GENERATE SUMMARIES</strong> to write a three-sentence blurb for any that don't have one yet
+    (uses your configured AI model, ~$0.001 per project), then <strong>COPY SELECTED</strong> to drop a clean summary sheet into any document.
+    Your selection is remembered on this device.
+</p>
+
+<div class="selector-toolbar">
+    <div class="selector-toolbar-group">
+        <button type="button" class="btn btn-secondary btn-sm" id="sel-all-btn">SELECT ALL</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="sel-none-btn">CLEAR</button>
+    </div>
+    <div class="selector-toolbar-group selector-filters" role="tablist" aria-label="Visibility filter">
+        <button type="button" class="selector-filter active" data-vis="all">All <span class="selector-filter-count">{{ repos|length }}</span></button>
+        <button type="button" class="selector-filter" data-vis="public">Public <span class="selector-filter-count">{{ public_count }}</span></button>
+        <button type="button" class="selector-filter" data-vis="private">Private <span class="selector-filter-count">{{ private_count }}</span></button>
+    </div>
+    <div class="selector-toolbar-group selector-toolbar-grow">
+        <input type="search" id="sel-search" class="selector-search" placeholder="Filter by name or owner…" autocomplete="off">
+    </div>
+</div>
+
+<div class="selector-status" id="sel-status" aria-live="polite"></div>
+
+<div class="selector-list" id="sel-list">
+    {% for repo in repos %}
+    <label class="selector-row{% if repo.blurb %} has-blurb{% endif %}"
+           data-full-name="{{ repo.full_name }}"
+           data-name="{{ repo.name|lower }}"
+           data-owner="{{ repo.owner|lower }}"
+           data-vis="{{ 'private' if repo.private else 'public' }}"
+           data-has-blurb="{{ '1' if repo.blurb else '0' }}">
+        <input type="checkbox" class="selector-check" value="{{ repo.full_name }}">
+        <span class="selector-row-body">
+            <span class="selector-row-head">
+                <span class="selector-name">{{ repo.name }}</span>
+                <span class="selector-owner">{{ repo.owner }}</span>
+                {% if repo.private %}
+                <span class="badge badge-dim">PRIVATE</span>
+                {% else %}
+                <span class="badge badge-public">PUBLIC</span>
+                {% endif %}
+                <a href="{{ repo.html_url }}" target="_blank" rel="noopener" class="selector-link" title="Open on GitHub" onclick="event.stopPropagation();">↗</a>
+            </span>
+            {% if repo.blurb %}
+            <span class="selector-blurb">{{ repo.blurb.summary }}</span>
+            {% else %}
+            <span class="selector-blurb selector-blurb-empty">
+                {% if repo.description %}{{ repo.description }} — {% endif %}No three-sentence summary yet. Select it and click Generate Summaries.
+            </span>
+            {% endif %}
+        </span>
+    </label>
+    {% endfor %}
+</div>
+
+<div class="selector-output" id="sel-output" hidden>
+    <div class="selector-output-header">
+        <h2 class="selector-output-title">Output preview</h2>
+        <div class="selector-output-controls">
+            <div class="selector-format" role="tablist" aria-label="Output format">
+                <button type="button" class="selector-format-btn active" data-fmt="markdown">Markdown</button>
+                <button type="button" class="selector-format-btn" data-fmt="plain">Plain text</button>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" id="sel-copy-btn-2">COPY</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="sel-download-btn">DOWNLOAD .MD</button>
+        </div>
+    </div>
+    <textarea id="sel-output-text" class="selector-output-text" readonly spellcheck="false"></textarea>
+</div>
+
+{% endif %}
+
+<script type="application/json" id="selector-repos">[
+{%- for repo in repos -%}
+{{ {
+    "full_name": repo.full_name,
+    "name": repo.name,
+    "owner": repo.owner,
+    "private": (repo.private if repo.private else false),
+    "html_url": repo.html_url|default(""),
+    "summary": (repo.blurb.summary if repo.blurb else "")
+} | tojson }}{{ "," if not loop.last else "" }}
+{%- endfor -%}
+]</script>
+
+<script>
+(function () {
+    var dataEl = document.getElementById('selector-repos');
+    if (!dataEl) return;
+    var repos = [];
+    try { repos = JSON.parse(dataEl.textContent) || []; } catch (e) { repos = []; }
+    var byName = {};
+    repos.forEach(function (r) { byName[r.full_name] = r; });
+
+    var STORAGE_KEY = 'repodoctor.selector.selected';
+    var list = document.getElementById('sel-list');
+    var checks = Array.prototype.slice.call(document.querySelectorAll('.selector-check'));
+    var rows = Array.prototype.slice.call(document.querySelectorAll('.selector-row'));
+    var searchEl = document.getElementById('sel-search');
+    var statusEl = document.getElementById('sel-status');
+    var outputWrap = document.getElementById('sel-output');
+    var outputText = document.getElementById('sel-output-text');
+    var copyBtn = document.getElementById('sel-copy-btn');
+    var copyBtn2 = document.getElementById('sel-copy-btn-2');
+    var copyCountEl = document.getElementById('sel-copy-count');
+    var genBtn = document.getElementById('sel-generate-btn');
+    var genCountEl = document.getElementById('sel-generate-count');
+    var downloadBtn = document.getElementById('sel-download-btn');
+
+    var currentVis = 'all';
+    var currentFmt = 'markdown';
+
+    // --- selection persistence (per device) -------------------------------
+    function loadSaved() {
+        try {
+            var raw = window.localStorage.getItem(STORAGE_KEY);
+            return raw ? JSON.parse(raw) : [];
+        } catch (e) { return []; }
+    }
+    function saveSelected() {
+        try {
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(selectedNames()));
+        } catch (e) { /* private mode / quota — selection just won't persist */ }
+    }
+    function selectedNames() {
+        return checks.filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
+    }
+
+    // --- visibility filter + search --------------------------------------
+    function rowVisible(row) {
+        if (currentVis !== 'all' && row.getAttribute('data-vis') !== currentVis) return false;
+        var q = (searchEl && searchEl.value || '').trim().toLowerCase();
+        if (!q) return true;
+        return row.getAttribute('data-name').indexOf(q) !== -1 ||
+               row.getAttribute('data-owner').indexOf(q) !== -1;
+    }
+    function applyFilter() {
+        rows.forEach(function (row) { row.hidden = !rowVisible(row); });
+    }
+
+    // --- output building --------------------------------------------------
+    function buildOutput(names, fmt) {
+        var lines = [];
+        if (fmt === 'markdown') lines.push('# Project Summaries', '');
+        names.forEach(function (fn) {
+            var r = byName[fn];
+            if (!r || !r.summary) return;
+            var tag = r.private ? 'Private' : 'Public';
+            if (fmt === 'markdown') {
+                lines.push('## ' + r.name + ' — ' + tag);
+                if (r.html_url) lines.push(r.html_url);
+                lines.push('');
+                lines.push(r.summary);
+                lines.push('');
+            } else {
+                lines.push(r.name + ' (' + tag + ')');
+                if (r.html_url) lines.push(r.html_url);
+                lines.push(r.summary);
+                lines.push('');
+            }
+        });
+        return lines.join('\n').replace(/\n+$/, '\n');
+    }
+
+    function refresh() {
+        var names = selectedNames();
+        var withBlurb = names.filter(function (fn) { return byName[fn] && byName[fn].summary; });
+        var needBlurb = names.filter(function (fn) { return byName[fn] && !byName[fn].summary; });
+
+        // Counts on the buttons.
+        if (copyCountEl) copyCountEl.textContent = withBlurb.length;
+        if (genCountEl) genCountEl.textContent = needBlurb.length;
+        if (copyBtn) copyBtn.disabled = withBlurb.length === 0;
+        if (genBtn) genBtn.disabled = needBlurb.length === 0;
+
+        // Status line.
+        var msg = names.length
+            ? (names.length + ' selected — ' + withBlurb.length + ' with a summary'
+               + (needBlurb.length ? ', ' + needBlurb.length + ' still need one (Generate Summaries)' : ''))
+            : 'Nothing selected yet. Tick the projects you want.';
+        if (statusEl) statusEl.textContent = msg;
+
+        // Output preview.
+        var text = buildOutput(withBlurb, currentFmt);
+        if (outputText) outputText.value = text;
+        if (outputWrap) outputWrap.hidden = withBlurb.length === 0;
+
+        saveSelected();
+    }
+
+    // --- wire up ----------------------------------------------------------
+    checks.forEach(function (c) { c.addEventListener('change', refresh); });
+
+    document.getElementById('sel-all-btn').addEventListener('click', function () {
+        rows.forEach(function (row) {
+            if (row.hidden) return;
+            var cb = row.querySelector('.selector-check');
+            if (cb) cb.checked = true;
+        });
+        refresh();
+    });
+    document.getElementById('sel-none-btn').addEventListener('click', function () {
+        checks.forEach(function (c) { c.checked = false; });
+        refresh();
+    });
+
+    document.querySelectorAll('.selector-filter').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            document.querySelectorAll('.selector-filter').forEach(function (b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            currentVis = btn.getAttribute('data-vis');
+            applyFilter();
+        });
+    });
+    if (searchEl) searchEl.addEventListener('input', applyFilter);
+
+    document.querySelectorAll('.selector-format-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            document.querySelectorAll('.selector-format-btn').forEach(function (b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            currentFmt = btn.getAttribute('data-fmt');
+            refresh();
+        });
+    });
+
+    function doCopy(btn) {
+        if (outputText && outputText.value) window.copyToClipboard(outputText.value, btn);
+    }
+    if (copyBtn) copyBtn.addEventListener('click', function () { doCopy(copyBtn); });
+    if (copyBtn2) copyBtn2.addEventListener('click', function () { doCopy(copyBtn2); });
+
+    if (downloadBtn) {
+        downloadBtn.addEventListener('click', function () {
+            var text = outputText ? outputText.value : '';
+            if (!text) return;
+            var blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = 'project-summaries.md';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+        });
+    }
+
+    // Generate blurbs for selected repos that don't have one. The shared queue
+    // (app.js) reloads the page on success; the saved selection restores below,
+    // so the freshly-written summaries are ready to copy.
+    if (genBtn) {
+        genBtn.addEventListener('click', function () {
+            var needBlurb = selectedNames().filter(function (fn) { return byName[fn] && !byName[fn].summary; });
+            if (!needBlurb.length) return;
+            window.runGenerationQueue({
+                targets: needBlurb,
+                urlFor: function (fullName) {
+                    // fullName is "owner/name"; both are path segments.
+                    var parts = fullName.split('/');
+                    return '/api/selector/blurb/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts.slice(1).join('/'));
+                },
+                body: {},
+                title: 'SUMMARIZING',
+                detail: 'Reading each repo’s docs or README, then writing a three-sentence summary. A few seconds per project.',
+            });
+        });
+    }
+
+    // Restore saved selection on load.
+    var saved = loadSaved();
+    if (saved.length) {
+        var savedSet = {};
+        saved.forEach(function (n) { savedSet[n] = true; });
+        checks.forEach(function (c) { if (savedSet[c.value]) c.checked = true; });
+    }
+    applyFilter();
+    refresh();
+})();
+</script>
+{% endblock %}
