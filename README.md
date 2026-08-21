@@ -1,6 +1,8 @@
 # RepoDoctor2
 
-A Flask web app that gives you a single-screen view of every GitHub repo you own — branch counts, required-file status, AI-generated project summaries, and a Claude conversation-to-repo mapping. Built for people running multiple projects through Claude Code.
+A Flask web app that gives you a single-screen view of every GitHub repo you can reach — personal, private, public, and the ones inside your organizations — with branch counts, required-file status, AI-generated project summaries, and a Claude conversation-to-repo mapping. Built for people running multiple projects through Claude Code.
+
+It also includes a **Repo Selector**: tick any repos (each tagged public or private), generate a three-sentence summary for each, and copy a clean sheet to paste into a deck, a status update, or any other document.
 
 ## Run It Locally
 

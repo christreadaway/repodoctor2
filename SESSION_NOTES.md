@@ -1,11 +1,39 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 18
-**Date Range:** 2025-02-14 to 2026-07-29
-**Last Updated:** 2026-07-29 (Session 18)
+**Total Sessions Logged:** 19
+**Date Range:** 2025-02-14 to 2026-08-21
+**Last Updated:** 2026-08-21 (Session 19)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 19 — 2026-08-21 (Repo Selector: pick repos, 3-sentence blurbs, copy/paste; org repos now scanned)
+
+Branch: `claude/repo-selector-summaries-gck5md`. One request: "a place in the interface that lets me choose from all my repos (personal, private, public, in my organizations), tags each private or public, summarizes the project in three sentences, and lets me select projects easily then generate output I can copy/paste into other documents." Building it surfaced a real gap in the scan, which was the other half of the work.
+
+### What We Did
+
+**1. Repo Selector (`/selector`, nav: Selector).**
+A new screen to pick from every reachable repo and copy a clean summary sheet elsewhere.
+- Lists all scanned repos, each with a `PUBLIC`/`PRIVATE` badge and its owner, newest-push-first. Visibility filter (All / Public / Private) + a name/owner search; SELECT ALL / CLEAR act on the visible rows.
+- **Three-sentence blurbs.** Tick repos, click GENERATE SUMMARIES, and the configured AI model writes a three-sentence plain-English blurb (what it is / who it's for / how finished) for each selected repo that lacks one. `_generate_blurb_for_repo` reads spec docs and **falls back to the README** (`include_readme="if_no_docs"`), so org/public repos without RepoDoctor's spec files still summarize. One repo per request via `POST /api/selector/blurb/<owner>/<name>`, on the shared client-side queue (live progress, CANCEL, per-repo errors that never overwrite a good blurb). Existing blurbs skip unless `{force:true}` — no double-billing.
+- **Copy/paste out.** Output preview rebuilds live from the selection with a Markdown / Plain text toggle; COPY to clipboard, DOWNLOAD .MD via a client-side Blob (newlines preserved). Selection persists per-device in `localStorage`, so it survives the reload after generation.
+- **Storage:** `data/selector_blurbs.json`, keyed by `owner/name` (NOT bare name) so an org repo can't collide with a personal one — the documented name-collision limitation that org repos make real. Every generation logs to `data/logs/selector.log`.
+
+**2. Org repos now included in the scan.** Root cause of "my org repos aren't here": `github_client.get_repos()` requested `affiliation=owner,collaborator`, which silently drops every repo living under an organization. Changed to `owner,collaborator,organization_member`, so org repos now appear everywhere — dashboard, Projects, Stats, Briefing, and the Selector. (Requires a fresh scan to populate.)
+
+**3. Henry tab — confirmed already gone.** Chris asked to remove the Henry tab "if you haven't already." It was fully removed in Session 18b (commit `53ddc36`): no route, no nav link, no template, and its AI engine deleted from `ai_analyzer.py`. Left in place (not a tab): the dashboard branch-count logic that hides branches named `henry` from the count — that's working functionality, and removing it would change the displayed branch numbers, so it's flagged for Chris rather than changed unasked.
+
+### Tests
+**320 passing** (was 313). Added 7 in `tests/test_app.py`: Selector route (unauth redirect, no-scan onboarding, org-repos-with-badges render + JSON blob), the full-name-keyed blurb model, the API skip-existing and generate paths, and coverage that `get_repos()` requests `organization_member`. Verified the page in a real browser (Playwright + the pre-installed Chromium), including the Markdown/Plain toggle output.
+
+### Docs
+Updated README.md (description + Selector paragraph), PROJECT_STATUS.md (snapshot + Session 19 block), and PRODUCT_SPEC.md (new §4.7f Repo Selector, scanner affiliation note, nav list, API endpoints).
+
+### Where it left off
+Built, tested, documented. Landed on `main` this session at Chris's request (docs + feature together). Run a fresh scan to pull in the org repos.
 
 ---
 

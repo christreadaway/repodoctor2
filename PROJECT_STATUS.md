@@ -1,7 +1,7 @@
 # RepoDoctor2 — Project Status
 
 **Last Updated:** 2026-08-21 (Session 19 — Repo Selector: pick repos, 3-sentence blurbs, copy/paste; org repos now scanned)
-**Current Branch:** `claude/repo-selector-summaries-gck5md` (not yet merged to `main`)
+**Current Branch:** `main` (Session 19 work landed directly on `main`; also on `claude/repo-selector-summaries-gck5md`)
 **Overall Progress:** ~97%
 
 ---

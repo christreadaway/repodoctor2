@@ -97,7 +97,7 @@ The matcher returns the **actual full path** found, so downstream features (fres
 
 **Files:** `github_client.py` (367 lines)
 
-- Paginated fetch of all user-owned and collaborator repos via GitHub REST API v3, sorted by last update
+- Paginated fetch of every repo the user can reach via GitHub REST API v3, sorted by last update — `affiliation=owner,collaborator,organization_member` so personal, collaborator, AND organization repos are all included (the `organization_member` value is required; without it org repos are silently dropped)
 - Branch comparison engine: compares every branch against default branch using GitHub's compare API
 - Branch classification system:
 
@@ -281,6 +281,17 @@ Per-repo deep view that turns each project's docs + code into a structured, navi
 
 **Firestore auto-detection:** when generation runs against a Firebase-using repo, `firestore_detector` is invoked and its output (status / project ID / indicators / missing config) is fed to the prompt with explicit instructions to emit a Firestore row in `external_systems`, an `infra_gaps` row for each missing config item, and a `next_actions` entry with a copy/paste fix prompt. The standalone Firestore fleet view moved from main nav to **Settings → Tools** (still works at `/firestore`).
 
+### 4.7f Repo Selector
+
+**Files:** `app.py` (`/selector`, `/api/selector/blurb/<owner>/<name>`, `_generate_blurb_for_repo`), `templates/selector.html`, `models.py` (selector-blurb storage + event log), `static/css/style.css`
+
+One screen to pick from **every** repo the scan reaches — personal, private, public, and organization repos — and copy a clean summary sheet into another document (a deck, a status update, a board doc).
+
+- **Every repo, tagged.** Each repo is listed with a `PUBLIC` / `PRIVATE` badge and its owner (so an org repo is distinguishable from a personal repo of the same name), sorted newest-push-first. A visibility filter (All / Public / Private) and a name/owner search narrow the list; SELECT ALL / CLEAR act on the visible rows.
+- **Three-sentence blurbs.** Tick the repos you want, click **GENERATE SUMMARIES**, and the configured AI model writes a three-sentence plain-English blurb (what it is, who it's for, how finished) for each selected repo that doesn't already have one. Generation reads the repo's spec docs and falls back to the README, so org/public repos without RepoDoctor's spec files still get a real summary. One repo per request via `POST /api/selector/blurb/<owner>/<name>`, driven by the shared client-side queue (live progress, CANCEL, per-repo errors that never overwrite a good blurb). A repo that already has a blurb is skipped unless `force` is sent — no double-billing.
+- **Copy / paste out.** An output preview rebuilds live from the current selection with a **Markdown / Plain text** toggle; COPY puts it on the clipboard, DOWNLOAD .MD saves it (client-side Blob, newlines preserved exactly). Selection persists per-device in `localStorage`, so it survives the page reload after generation.
+- **Storage:** blurbs cached in `data/selector_blurbs.json`, keyed by `owner/name` (NOT bare name) so an org repo can't collide with a personal one. Every generation start / done / skip / error logs to `data/logs/selector.log` (one JSON object per line, per the CLAUDE.md logging mandate).
+
 ### 4.8 Settings & Preferences
 
 **Files:** `app.py` (settings route), `models.py`, `templates/settings.html`
@@ -358,7 +369,7 @@ All data stored as local JSON files — no database dependency.
 
 - **Aesthetic:** 1980s CRT phosphor-green terminal — dark backgrounds (#080a08), bright green text (#33ff33), monospace font (IBM Plex Mono)
 - **Layout:** Sticky top navigation bar + single-column content area + footer with cost display
-- **Top nav:** bracketed brand on the left, menu items (My Repos, Projects, Stats, What's Next, Mac Setup, Settings) in the center, pulsing user-pill + Logout chip on the right; active link gets a glowing underline
+- **Top nav:** bracketed brand on the left, menu items (My Repos, Projects, Selector, Stats, Yesterday, What's Next, Briefing, Docs, Program, Tracker, Mac Setup, Settings) in the center, pulsing user-pill + Logout chip on the right; active link gets a glowing underline
 - **Status colors:** Green (safe/present), amber (warning/pending), red (danger/missing), cyan (info)
 - **Components:** Sortable tables, group-filter tab bars, CSS bar-chart rows with scaled fills, collapsible panels, badge system, file status indicators, flash messages
 - **Interactions:** Copy-to-clipboard with feedback, expandable branch lists, tab-switching period pills, keyboard shortcuts (Ctrl+K for search)
@@ -422,7 +433,9 @@ Flask Application (app.py)
 | POST | `/scan` | Active | Scan all GitHub repos (lightweight mode + language bytes) |
 | GET | `/repo/<owner>/<name>` | Active | Repo detail with spec contents and branch list |
 | GET | `/projects` | Active | Project summaries with group filter (`?group=Name`) |
-| POST | `/projects/generate` | Active | Generate AI summaries via Claude Haiku |
+| POST | `/api/projects/summary/<name>` | Active | Generate the AI summary for one repo (client-side queue) |
+| GET | `/selector` | Active | Repo Selector — pick any repos (org repos included), tagged public/private |
+| POST | `/api/selector/blurb/<owner>/<name>` | Active | Generate one repo's three-sentence blurb (`{force:true}` to regenerate) |
 | POST | `/projects/groups/save` | Active | Create or rename a group + set its repo membership |
 | POST | `/projects/groups/delete` | Active | Delete a group (prefers hidden `original_name` field) |
 | GET | `/stats` | Active | Commits / Size / Lines-Added bar charts with period selector |
