@@ -312,6 +312,7 @@ The window-independent half of "where do I pick back up?": **every unmerged non-
 - **Deterministic status per branch** (pure function of git facts, no AI): READY TO MERGE (open PR; notes if behind base), FINISH IT (draft PR or WIP-looking last commit), NEEDS PR (fresh commits, no PR), STALE (no PR, no activity for 14+ days), MERGED (0 ahead of base — delete the branch). Sorted by what needs a decision first, then newest activity.
 - **Cheap to gather.** Repos whose cached scan shows only the default branch cost zero API calls; others cost one branches call + one open-PRs call + one compare per branch (capped at 40). One repo's failure is logged and reported in a banner, never blanks the page.
 - **Cached, not live.** Results persist in `data/inflight.json` so the page opens instantly; REFRESH regathers the whole portfolio and the view scopes by group and status filter. COPY FOR CLAUDE / DOWNLOAD .MD produce a grouped "Work in flight" document. Each card links to that repo's Resume packet.
+- **Delete merged branches.** MERGED cards (no open PR) get a DELETE BRANCH button, and a DELETE ALL N MERGED bar appears when more than one is in view. Both confirm first. This is the app's only destructive GitHub write, so the server trusts nothing from the cache: each target is re-checked live right before deletion (0 commits ahead of the default branch, not the default branch itself, no open PR for it, repo is in the scan), capped at 50 per click, guarded by the per-boot form token. Refusals are listed with the reason (has commits, open PR, protected, token lacks Contents: write). Deleted branches drop out of the cache; every attempt logs a `delete_merged` event to `data/logs/inflight.log`.
 
 ### 4.7h Resume (Next Up → "Resume a project")
 
@@ -482,6 +483,7 @@ Flask Application (app.py)
 | GET | `/inflight` | Active | In Flight — every unmerged branch / open PR across repos (`?kind=`, `?group=`) |
 | POST | `/inflight/refresh` | Active | Regather In Flight from GitHub and cache it |
 | GET | `/inflight/export.md` | Active | In Flight as a Markdown download |
+| POST | `/inflight/delete-merged` | Active | Delete fully merged branches (`target=owner/repo:branch`, repeatable; each re-verified live) |
 | GET | `/resume` | Active | Resume picker — every repo with open-branch counts and last-resumed stamps |
 | GET | `/resume/<owner>/<name>` | Active | One project's context-switch packet (live, zero AI) |
 | GET | `/resume/<owner>/<name>/export.md` | Active | The packet as a Markdown download |

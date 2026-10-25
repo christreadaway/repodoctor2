@@ -79,6 +79,19 @@
     <span>Couldn't read {{ cached.failed_repos|length }} repo(s) on the last refresh: {{ cached.failed_repos|join(', ') }}. Their branches aren't listed. Check <code>data/logs/inflight.log</code>.</span></div>
 {% endif %}
 
+{% set deletable = items|selectattr('kind', 'equalto', 'complete')|rejectattr('pr')|list %}
+{% if deletable|length > 1 %}
+<form method="POST" action="{{ url_for('inflight_delete_merged') }}" class="inflight-bulk-delete"
+      data-confirm="Delete {{ deletable|length }} merged branches on GitHub? Each is re-checked first: only branches with nothing left to merge and no open PR are deleted.">
+    <input type="hidden" name="reset_token" value="{{ reset_token }}">
+    {% for i in deletable %}<input type="hidden" name="target" value="{{ i.owner }}/{{ i.repo }}:{{ i.branch }}">{% endfor %}
+    <input type="hidden" name="kind" value="{{ kind }}">
+    <input type="hidden" name="group" value="{{ active_group or '' }}">
+    <span>{{ deletable|length }} branch{{ 'es' if deletable|length != 1 }} below {{ 'are' if deletable|length != 1 else 'is' }} fully merged.</span>
+    <button type="submit" class="btn btn-sm btn-secondary" {% if not github_connected %}disabled title="Reconnect to GitHub first."{% endif %}>DELETE ALL {{ deletable|length }} MERGED</button>
+</form>
+{% endif %}
+
 <textarea id="inflight-markdown" hidden readonly>{{ markdown }}</textarea>
 
 {% if items %}
@@ -121,6 +134,16 @@
         {% endif %}
         <div class="inflight-actions">
             <a href="{{ url_for('resume_view', owner=i.owner, name=i.repo) }}" class="btn btn-sm btn-outline">RESUME {{ i.repo|upper }}</a>
+            {% if i.kind == 'complete' and not i.pr %}
+            <form method="POST" action="{{ url_for('inflight_delete_merged') }}" class="inline-form"
+                  data-confirm="Delete branch {{ i.branch }} from {{ i.repo }} on GitHub? Everything on it is already in {{ i.base }}.">
+                <input type="hidden" name="reset_token" value="{{ reset_token }}">
+                <input type="hidden" name="target" value="{{ i.owner }}/{{ i.repo }}:{{ i.branch }}">
+                <input type="hidden" name="kind" value="{{ kind }}">
+                <input type="hidden" name="group" value="{{ active_group or '' }}">
+                <button type="submit" class="btn btn-sm btn-secondary" {% if not github_connected %}disabled title="Reconnect to GitHub first."{% endif %}>DELETE BRANCH</button>
+            </form>
+            {% endif %}
         </div>
     </div>
     {% endfor %}

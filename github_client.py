@@ -6,6 +6,7 @@ Handles all GitHub REST API v3 interactions.
 import datetime
 import logging
 import time
+import urllib.parse
 import requests
 
 GITHUB_API = "https://api.github.com"
@@ -152,6 +153,29 @@ class GitHubClient:
         if resp.status_code == 200:
             return resp.json()
         return None
+
+    def delete_branch(self, owner: str, repo: str, branch: str) -> tuple[bool, str]:
+        """Delete one branch ref. Returns (ok, reason). The only destructive
+        GitHub write the app makes; callers must verify the branch is fully
+        merged first. 422 = already gone or protected; 403/404 = the PAT
+        lacks Contents: write on this repo."""
+        ref = urllib.parse.quote(branch, safe="/")
+        resp = self.session.delete(
+            f"{GITHUB_API}/repos/{owner}/{repo}/git/refs/heads/{ref}",
+            timeout=self.REQUEST_TIMEOUT,
+        )
+        if resp.status_code == 401:
+            raise GitHubAuthError(
+                f"GitHub returned 401 Unauthorized deleting {owner}/{repo}:{branch}. "
+                "Personal Access Token is invalid, expired, or missing required scopes."
+            )
+        if resp.status_code == 204:
+            return True, ""
+        if resp.status_code == 422:
+            return False, "already deleted or protected"
+        if resp.status_code in (403, 404):
+            return False, "token can't write to this repo (needs Contents: write)"
+        return False, f"HTTP {resp.status_code}"
 
     def get_pulls(self, owner: str, repo: str, state: str = "open",
                   sort: str | None = None, direction: str | None = None,

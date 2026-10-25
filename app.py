@@ -10,6 +10,7 @@ import logging
 import os
 import secrets
 import time
+import threading
 
 import requests
 
@@ -1641,6 +1642,9 @@ _INFLIGHT_KINDS = [("", "All"), ("merge", "Ready to merge"), ("finish", "Finish 
                    ("continue", "Needs PR"), ("stale", "Stale"), ("complete", "Merged")]
 
 
+_INFLIGHT_LOCK = threading.Lock()
+
+
 def _inflight_scope():
     groups = models.get_groups()
     active_group = _resolve_active_group(groups)
@@ -1700,7 +1704,8 @@ def inflight_refresh():
     # Always gather the whole portfolio so the cache is complete; the view
     # scopes to the active group afterwards.
     data = inflight.gather_inflight(client, _yesterday_repos())
-    models.save_inflight(data)
+    with _INFLIGHT_LOCK:
+        models.save_inflight(data)
     counts = inflight.summarize_counts(data["items"])
     models.log_inflight_event(
         "refresh", items=counts["total"], repos=counts["repos"],
@@ -1729,6 +1734,91 @@ def inflight_export():
                                          cached.get("gathered_at", ""))
     return Response(markdown, mimetype="text/markdown; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="work-in-flight.md"'})
+
+
+# Cap per click so a stray bulk request can't fan out into hundreds of writes.
+_MAX_BRANCH_DELETES = 50
+
+
+@app.route("/inflight/delete-merged", methods=["POST"])
+@_require_auth
+def inflight_delete_merged():
+    """Delete branches whose work is already on the default branch. The only
+    destructive GitHub write in the app, so every target is re-verified live
+    (0 commits ahead, no open PR) right before it is deleted; nothing is
+    trusted from the cache or the form beyond the branch name."""
+    bad = _reject_bad_reset_token("In Flight", "inflight_view")
+    if bad:
+        return bad
+    back = redirect(url_for("inflight_view", kind=request.form.get("kind") or None,
+                            group=request.form.get("group") or None))
+    client = _get_github_client()
+    if not client:
+        flash(NOT_CONNECTED_REMEDY, "error")
+        return back
+    cached = models.get_inflight()
+    if not cached:
+        flash("Nothing cached yet — click REFRESH first.", "error")
+        return back
+
+    repos = {(r.get("owner"), r["name"]): r for r in _yesterday_repos()}
+    targets = []
+    for raw in request.form.getlist("target")[:_MAX_BRANCH_DELETES]:
+        full, sep, branch = raw.partition(":")
+        owner, _, name = full.partition("/")
+        if sep and owner and name and branch:
+            targets.append((owner, name, branch))
+    if not targets:
+        flash("No branches selected.", "error")
+        return back
+
+    deleted, refused = [], []
+    for owner, name, branch in targets:
+        label = f"{name}:{branch}"
+        repo = repos.get((owner, name))
+        if not repo:
+            refused.append(f"{label} (repo not in the scan)")
+            continue
+        default = repo.get("default_branch") or "main"
+        if branch == default:
+            refused.append(f"{label} (default branch)")
+            continue
+        try:
+            comp = client.compare_branches(owner, name, default, branch)
+            if not comp or comp.get("ahead_by") != 0:
+                refused.append(f"{label} (has commits not on {default})")
+                continue
+            open_prs = client.get_pulls(owner, name, state="open")
+            if any((p.get("head") or {}).get("ref") == branch for p in open_prs):
+                refused.append(f"{label} (has an open PR)")
+                continue
+            ok, reason = client.delete_branch(owner, name, branch)
+        except gh.GitHubAuthError:
+            flash(NOT_CONNECTED_REMEDY, "error")
+            return back
+        except Exception as e:  # noqa: BLE001 - one branch must not abort the rest
+            logger.warning("delete branch %s/%s:%s failed: %s", owner, name, branch, e)
+            ok, reason = False, "GitHub error"
+        if ok:
+            deleted.append((owner, name, branch))
+        else:
+            refused.append(f"{label} ({reason})")
+
+    gone = set(deleted)
+    with _INFLIGHT_LOCK:
+        latest = models.get_inflight() or cached
+        latest["items"] = [i for i in latest.get("items") or []
+                           if (i.get("owner"), i.get("repo"), i.get("branch")) not in gone]
+        models.save_inflight(latest)
+    models.log_inflight_event(
+        "delete_merged", deleted=[f"{o}/{n}:{b}" for o, n, b in deleted], refused=refused,
+    )
+    if deleted:
+        flash(f"Deleted {len(deleted)} merged branch{'es' if len(deleted) != 1 else ''}.", "success")
+    if refused:
+        flash(f"Left {len(refused)} branch{'es' if len(refused) != 1 else ''} alone: "
+              f"{'; '.join(refused[:5])}{'…' if len(refused) > 5 else ''}", "error")
+    return back
 
 
 # --- Resume: a context-switch packet for one project ---------------------------

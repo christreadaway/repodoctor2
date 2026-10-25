@@ -425,6 +425,60 @@ class TestRoutes(unittest.TestCase):
         resp = self.client.post("/inflight/refresh", follow_redirects=True)
         self.assertIn(b"Not connected to GitHub", resp.data)
 
+    def _merged_setup(self, compares, pulls=()):
+        self._login()
+        self._scan(branch_names=["main", "claude/done-1", "claude/live-2"], non_default_branch_count=2)
+        fake = FakeClient(["main", "claude/done-1", "claude/live-2"], list(pulls), compares)
+        fake.deleted = []
+
+        def delete_branch(owner, name, branch):
+            fake.deleted.append((owner, name, branch))
+            return True, ""
+        fake.delete_branch = delete_branch
+        self.m._github_client = fake
+        self.client.post("/inflight/refresh")
+        return fake
+
+    def test_delete_merged_requires_token_and_auth(self):
+        self.assertEqual(self.client.post("/inflight/delete-merged").status_code, 302)
+        fake = self._merged_setup({"claude/done-1": {"ahead_by": 0, "behind_by": 3, "commits": []}})
+        resp = self.client.post("/inflight/delete-merged",
+                                data={"target": "chris/demo:claude/done-1"}, follow_redirects=True)
+        self.assertIn(b"Invalid reset request", resp.data)
+        self.assertEqual(fake.deleted, [])
+
+    def test_delete_merged_deletes_only_verified_branches(self):
+        fake = self._merged_setup({
+            "claude/done-1": {"ahead_by": 0, "behind_by": 3, "commits": []},
+            "claude/live-2": {"ahead_by": 2, "behind_by": 0,
+                              "commits": [_commit("b", "Add bar", "2026-10-24T01:00:00Z")]},
+        })
+        page = self.client.get("/inflight").data
+        self.assertIn(b"DELETE BRANCH", page)
+        resp = self.client.post("/inflight/delete-merged", data={
+            "reset_token": self.m._RESET_TOKEN,
+            "target": ["chris/demo:claude/done-1", "chris/demo:claude/live-2",
+                       "chris/demo:main", "chris/ghost:x", "garbage"],
+        }, follow_redirects=True)
+        self.assertEqual(fake.deleted, [("chris", "demo", "claude/done-1")])
+        self.assertIn(b"Deleted 1 merged branch.", resp.data)
+        self.assertIn(b"has commits not on main", resp.data)
+        self.assertIn(b"default branch", resp.data)
+        self.assertIn(b"repo not in the scan", resp.data)
+        # Cache drops the deleted branch, keeps the live one; the write is logged.
+        branches = [i["branch"] for i in models.get_inflight()["items"]]
+        self.assertEqual(branches, ["claude/live-2"])
+        self.assertEqual(models.tail_inflight_log()[-1]["event"], "delete_merged")
+
+    def test_delete_merged_refuses_branch_with_open_pr(self):
+        fake = self._merged_setup({"claude/done-1": {"ahead_by": 0, "behind_by": 0, "commits": []}},
+                                  pulls=[_pr(9, "claude/done-1")])
+        resp = self.client.post("/inflight/delete-merged", data={
+            "reset_token": self.m._RESET_TOKEN, "target": "chris/demo:claude/done-1"},
+            follow_redirects=True)
+        self.assertEqual(fake.deleted, [])
+        self.assertIn(b"has an open PR", resp.data)
+
     # --- Resume --------------------------------------------------------------
 
     def test_resume_index_lists_repos_with_open_counts(self):
@@ -535,3 +589,20 @@ class TestRoutes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDeleteBranchClient(unittest.TestCase):
+
+    def test_status_mapping_and_ref_quoting(self):
+        import github_client
+        c = github_client.GitHubClient("t")
+        for code, ok, reason in [(204, True, ""), (422, False, "already deleted or protected"),
+                                 (403, False, "token can't write to this repo (needs Contents: write)"),
+                                 (500, False, "HTTP 500")]:
+            c.session.delete = MagicMock(return_value=MagicMock(status_code=code))
+            self.assertEqual(c.delete_branch("o", "r", "claude/a#b"), (ok, reason))
+        url = c.session.delete.call_args[0][0]
+        self.assertTrue(url.endswith("/repos/o/r/git/refs/heads/claude/a%23b"))
+        c.session.delete = MagicMock(return_value=MagicMock(status_code=401))
+        with self.assertRaises(github_client.GitHubAuthError):
+            c.delete_branch("o", "r", "x")

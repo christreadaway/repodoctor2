@@ -1033,10 +1033,27 @@
   // visibly acknowledged.
   // ---------------------------------------------------------------------------
 
+  // Any form can ask for a confirm() first with data-confirm="question".
+  // Bound in the capture phase so a cancel stops the loading relabel below.
+  document.addEventListener("submit", function (e) {
+    var form = e.target;
+    var question = form && form.getAttribute && form.getAttribute("data-confirm");
+    if (question && !window.confirm(question)) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  }, true);
+
   document.addEventListener("DOMContentLoaded", function () {
-    var scanForms = document.querySelectorAll("form.scan-form");
+    // Every POST form whose submit button carries data-loading-text (scan,
+    // In Flight refresh, re-scan banner, tracker analyze, program generate),
+    // not just .scan-form: those buttons previously never relabelled.
+    var scanForms = document.querySelectorAll("form");
     for (var i = 0; i < scanForms.length; i++) {
+      if (!scanForms[i].querySelector('button[type="submit"][data-loading-text]') &&
+          !scanForms[i].classList.contains("scan-form")) continue;
       scanForms[i].addEventListener("submit", function (e) {
+        if (e.defaultPrevented) return;
         var btn = e.currentTarget.querySelector('button[type="submit"]');
         if (!btn) return;
         var loadingText = btn.dataset.loadingText || "WORKING…";
