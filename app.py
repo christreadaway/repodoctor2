@@ -8,8 +8,10 @@ Simplified mode: repo overview with branch counts + required file checks.
 import datetime
 import logging
 import os
+import re
 import secrets
 import time
+import urllib.parse
 import threading
 
 import requests
@@ -19,7 +21,10 @@ logger = logging.getLogger(__name__)
 try:
     from zoneinfo import ZoneInfo
     _CENTRAL_TZ = ZoneInfo("America/Chicago")
-except Exception:
+except Exception as _tz_err:
+    logging.getLogger(__name__).warning(
+        "America/Chicago timezone unavailable (%s: %s) - times will show in UTC. "
+        "Install tzdata: pip install tzdata", type(_tz_err).__name__, _tz_err)
     _CENTRAL_TZ = None
 
 from flask import (
@@ -79,7 +84,7 @@ def _load_or_create_secret_key() -> str:
 def _configure_file_logging() -> None:
     """Send everything Python logs (every module's logger, Werkzeug's request
     lines, unhandled exceptions Flask reports) to a rotating file at
-    data/logs/app.log, in addition to the console. One place to look — and to
+    data/logs/app.log (the console handler is added in __main__). One place to look — and to
     copy from Settings → Debug log — when something goes wrong. Idempotent."""
     root = logging.getLogger()
     if any(getattr(h, "_repodoctor_app_log", False) for h in root.handlers):
@@ -198,6 +203,10 @@ def _handle_github_auth_error(e):
     handler is registered globally so each new route gets the right
     behavior for free.
     """
+    if request.path.startswith("/api/"):
+        # Client-side queues expect JSON; a redirect would be followed and
+        # show "Server error (200)" with the flash swallowed.
+        return jsonify({"error": GITHUB_AUTH_REMEDY}), 401
     flash(GITHUB_AUTH_REMEDY, "error")
     target = url_for("dashboard") if session.get("authenticated") else url_for("login")
     return redirect(target)
@@ -210,9 +219,34 @@ def _handle_github_network_error(e):
     500. Flash a retry message and bounce — covers the unguarded get_repos()
     in scan() and the GitHub calls in repo_detail / debug_files."""
     logger.warning("GitHub network error on %s: %s", request.path, e)
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Couldn't reach GitHub — check your connection and retry."}), 503
     flash("Couldn't reach GitHub — check your internet connection and try again.", "error")
     target = url_for("dashboard") if session.get("authenticated") else url_for("login")
     return redirect(target)
+
+
+# The app only ever runs at 127.0.0.1 / localhost. Rejecting any other Host
+# header blocks DNS-rebinding (a hostile site re-pointing its own name at
+# 127.0.0.1 to read pages and the per-boot form token); rejecting a POST whose
+# Origin is a different site blocks cross-site form posts, including ones from
+# other localhost ports that SameSite=Lax treats as same-site.
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
+
+
+@app.before_request
+def _local_only_guard():
+    host = urllib.parse.urlsplit(f"//{request.host or ''}").hostname or ""
+    if host.lower() not in {h.strip("[]") for h in _LOCAL_HOSTS}:
+        logger.warning("Rejected request with Host %r to %s", request.host, request.path)
+        return Response("RepoDoctor only answers on 127.0.0.1.", status=403)
+    if request.method == "POST":
+        origin = request.headers.get("Origin")
+        if origin and origin != "null":
+            if urllib.parse.urlsplit(origin).netloc != request.host:
+                logger.warning("Rejected cross-origin POST from %s to %s", origin, request.path)
+                return Response("Cross-site request blocked.", status=403)
+    return None
 
 
 @app.context_processor
@@ -237,6 +271,12 @@ def inject_preferences():
         # so base.html can nudge a re-scan once it's a couple of days old.
         "scan_age_days": _scan_age_days(),
     }
+
+
+def _central_today() -> str:
+    """Today's date in Central time (every screen shows Central; a UTC date
+    stamped exports made after 7pm CDT with tomorrow's date)."""
+    return datetime.datetime.now(_CENTRAL_TZ or datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
 def _scan_age_days() -> int | None:
@@ -305,13 +345,25 @@ def _get_credentials() -> dict | None:
 
 # --- Auth Routes ---
 
+def _has_repo_scope(scopes: str) -> bool:
+    """Exact 'repo' scope. A substring test let 'public_repo' pass, and then
+    every private repo silently vanished from scans."""
+    return "repo" in {s.strip() for s in (scopes or "").split(",")}
+
+
 def _safe_next() -> str | None:
     """A same-site relative path from ?next= (or the form), else None. Rejects
     anything that could redirect off-site ('//evil', 'http://...')."""
     target = (request.form.get("next") or request.args.get("next") or "").strip()
-    if target.startswith("/") and not target.startswith("//") and "://" not in target:
-        return target.rstrip("?")
-    return None
+    # Browsers read '\' as '/' and drop tabs/newlines, so '/\evil.com' and
+    # '/\t/evil.com' become '//evil.com'. Reject backslashes and control or
+    # whitespace characters outright, then require no scheme and no host.
+    if not target.startswith("/") or "\\" in target or any(c.isspace() or ord(c) < 32 for c in target):
+        return None
+    parts = urllib.parse.urlsplit(target)
+    if parts.scheme or parts.netloc or target.startswith("//"):
+        return None
+    return target.rstrip("?")
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -347,7 +399,7 @@ def login():
                 return render_template("login.html", has_credentials=True, pat_invalid=True)
 
             scopes = user_info.get("_scopes", "")
-            if "repo" not in scopes:
+            if not _has_repo_scope(scopes):
                 flash(
                     f"Your saved GitHub token is missing the 'repo' scope "
                     f"(current scopes: {scopes or '(none)'}). "
@@ -385,7 +437,7 @@ def login():
                 return render_template("login.html", has_credentials=False)
 
             scopes = user_info.get("_scopes", "")
-            if "repo" not in scopes:
+            if not _has_repo_scope(scopes):
                 flash(f"GitHub PAT needs 'repo' scope. Current scopes: {scopes}", "error")
                 return render_template("login.html", has_credentials=False)
 
@@ -601,7 +653,8 @@ def repo_detail(owner, name):
                 spec_files[key] = spec_cleaner.clean_markdown(content)
 
     # Pull conversations mapped to this repo
-    conversations = project_mapper.get_conversations_for_repo(name)
+    conversations = project_mapper.get_conversations_for_repo(
+        name, [r["name"] for r in (_scan_results or {}).get("repos", [])])
 
     # Extract What's Next from raw specs + conversations
     whats_next = spec_cleaner.extract_whats_next(raw_specs, conversations)
@@ -789,15 +842,28 @@ def save_group():
         flash("Group name is required.", "error")
         return redirect(url_for("projects"))
 
+    existing = models.get_groups()
+    if not original and name in existing:
+        # The CREATE form has no original_name: without this check it silently
+        # replaced an existing group's members.
+        flash(f'A group named "{name}" already exists. Edit it instead, or pick a different name.', "error")
+        return redirect(url_for("projects"))
     if original and original != name:
-        existing = models.get_groups()
         if name in existing:
             flash(f'A group named "{name}" already exists. Pick a different name.', "error")
+            return redirect(url_for("projects"))
+        if original in models.CATEGORY_GROUPS:
+            flash(f'"{original}" is a category and can\'t be renamed.', "error")
             return redirect(url_for("projects"))
         if not models.rename_group(original, name):
             flash("Could not rename group.", "error")
             return redirect(url_for("projects"))
 
+    # The editor only shows checkboxes for scanned repos. Keep members that
+    # aren't in the scan (not created yet, excluded) instead of dropping them.
+    scanned = {r["name"] for r in (_scan_results or {}).get("repos", [])}
+    kept = [m for m in existing.get(original or name, []) if m not in scanned]
+    repos = list(dict.fromkeys(repos + kept))
     models.set_group(name, repos)
     flash(f'Group "{name}" saved with {len(repos)} project(s).', "success")
     return redirect(url_for("projects", group=name))
@@ -809,6 +875,9 @@ def delete_group_route():
     # Prefer original_name (hidden field) so an in-flight edit to the
     # editable name field can't redirect the delete at the wrong group.
     name = (request.form.get("original_name") or request.form.get("group_name") or "").strip()
+    if name in models.CATEGORY_GROUPS:
+        flash(f'"{name}" is a category and can\'t be deleted. Clear its projects instead.', "error")
+        return redirect(url_for("projects"))
     if models.delete_group(name):
         flash(f'Group "{name}" deleted.', "success")
     else:
@@ -1143,7 +1212,9 @@ def _stats_cache_key() -> str:
         return ""
     repos = _scan_results.get("repos", [])
     first = repos[0]["full_name"] if repos else ""
-    return f"{len(repos)}|{first}|{_scan_results.get('total_branches', 0)}"
+    # The hour bucket expires the cache: commits_by_period is computed against
+    # "now", so a cache kept for days would show stale 1d/3d bars.
+    return f"{len(repos)}|{first}|{_scan_results.get('total_branches', 0)}|{int(time.time() // 3600)}"
 
 
 PERIOD_DAYS = {
@@ -1319,7 +1390,7 @@ def _briefing_projects(active_group: str) -> list[dict]:
 
 
 def _briefing_markdown(projects: list[dict], active_group: str) -> str:
-    generated_label = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    generated_label = _central_today()
     return briefing.compose_markdown(
         projects,
         owner_login=session.get("github_user", ""),
@@ -1371,8 +1442,11 @@ def briefing_export():
     active_group = _resolve_active_group(groups, persist=False)
     projects = _briefing_projects(active_group)
     markdown = _briefing_markdown(projects, active_group)
-    date_part = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-    group_part = f"-{active_group.lower().replace(' ', '-')}" if active_group else ""
+    date_part = _central_today()
+    # Slug only: a raw group name ("Ministry ✝", 'Big "A"') can't be encoded
+    # into the header (the request hung) or breaks the quoted filename.
+    slug = re.sub(r"[^a-z0-9]+", "-", active_group.lower()).strip("-") if active_group else ""
+    group_part = f"-{slug}" if slug else ""
     filename = f"portfolio-chat-briefing{group_part}-{date_part}.md"
     return Response(
         markdown,
@@ -1484,7 +1558,8 @@ def yesterday_view():
                                all_repos_count=len(all_repos))
 
     t0 = time.monotonic()
-    session_list = sessions.gather_sessions(client, scoped_repos, window)
+    session_list = sessions.gather_sessions(client, scoped_repos, window,
+                                            scanned_at=_scan_results.get("scanned_at"))
     sessions.attach_recaps(session_list, models.get_session_recaps())
     counts = sessions.summarize_counts(session_list)
     markdown = sessions.compose_markdown(
@@ -1550,7 +1625,12 @@ def yesterday_export():
               "No scan data yet — run a scan first.", "error")
         return redirect(url_for("yesterday_view", range=window.preset))
 
-    session_list = sessions.gather_sessions(client, _yesterday_repos(), window)
+    # Same group scope as the page, so the download matches COPY.
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups, persist=False)
+    scoped = _filter_by_group(_yesterday_repos(), active_group, groups)
+    session_list = sessions.gather_sessions(client, scoped, window,
+                                            scanned_at=_scan_results.get("scanned_at"))
     sessions.attach_recaps(session_list, models.get_session_recaps())
     markdown = sessions.compose_markdown(
         session_list, session.get("github_user", ""), window.label)
@@ -1639,7 +1719,8 @@ def yesterday_summarize_one(token):
 # opens instantly; REFRESH regathers. Logged to data/logs/inflight.log.
 
 _INFLIGHT_KINDS = [("", "All"), ("merge", "Ready to merge"), ("finish", "Finish it"),
-                   ("continue", "Needs PR"), ("stale", "Stale"), ("complete", "Merged")]
+                   ("continue", "Needs PR"), ("stale", "Stale"), ("unknown", "Check on GitHub"),
+                   ("complete", "Merged")]
 
 
 _INFLIGHT_LOCK = threading.Lock()
@@ -1667,7 +1748,7 @@ def inflight_view():
 
     cached = models.get_inflight()
     items_all = (cached or {}).get("items") or []
-    scoped_names = {r["name"] for r in scoped}
+    scoped_names = {f"{r.get('owner')}/{r['name']}" for r in scoped}
     items_scoped = inflight.filter_items(items_all, repos=scoped_names)
     items = inflight.filter_items(items_scoped, kind=kind or None)
     counts = inflight.summarize_counts(items_scoped)
@@ -1687,6 +1768,7 @@ def inflight_view():
         active_group=active_group,
         all_repos_count=len(all_repos),
         gathered_age_days=inflight.age_days((cached or {}).get("gathered_at", "")) if cached else None,
+        max_compares=sessions.MAX_BRANCH_COMPARES,
     )
 
 
@@ -1703,7 +1785,9 @@ def inflight_refresh():
     t0 = time.monotonic()
     # Always gather the whole portfolio so the cache is complete; the view
     # scopes to the active group afterwards.
-    data = inflight.gather_inflight(client, _yesterday_repos())
+    # A scan older than a day can't vouch that a repo still has no branches.
+    data = inflight.gather_inflight(client, _yesterday_repos(),
+                                    scan_fresh=(_scan_age_days() or 0) < 1)
     with _INFLIGHT_LOCK:
         models.save_inflight(data)
     counts = inflight.summarize_counts(data["items"])
@@ -1729,7 +1813,12 @@ def inflight_export():
         flash("Nothing cached yet — click REFRESH first.", "error")
         return redirect(url_for("inflight_view"))
     groups, active_group, _, scoped = _inflight_scope()
-    items = inflight.filter_items(cached["items"], repos={r["name"] for r in scoped})
+    kind = request.args.get("kind", "")
+    if kind not in {k for k, _ in _INFLIGHT_KINDS}:
+        kind = ""
+    # Same kind filter as the page, so DOWNLOAD matches COPY FOR CLAUDE.
+    items = inflight.filter_items(cached["items"], kind=kind or None,
+                                  repos={f"{r.get('owner')}/{r['name']}" for r in scoped})
     markdown = inflight.compose_markdown(items, session.get("github_user", ""),
                                          cached.get("gathered_at", ""))
     return Response(markdown, mimetype="text/markdown; charset=utf-8",
@@ -1841,12 +1930,13 @@ def resume_index():
     open_by_repo: dict[str, int] = {}
     for i in inflight_cache.get("items") or []:
         if i.get("kind") != "complete":
-            open_by_repo[i["repo"]] = open_by_repo.get(i["repo"], 0) + 1
+            key = f"{i.get('owner')}/{i.get('repo')}"
+            open_by_repo[key] = open_by_repo.get(key, 0) + 1
     repos = []
     for r in scoped:
         full = r.get("full_name", f"{r['owner']}/{r['name']}")
         h = history.get(full) or {}
-        repos.append({**r, "full_name": full, "open_count": open_by_repo.get(r["name"], 0),
+        repos.append({**r, "full_name": full, "open_count": open_by_repo.get(f"{r.get('owner')}/{r['name']}", 0),
                       "last_resumed_at": h.get("last_resumed_at", ""),
                       "resume_count": h.get("count", 0)})
     recent = sorted([r for r in repos if r["last_resumed_at"]],
@@ -1913,7 +2003,7 @@ def resume_export(owner, name):
         return bounce
     markdown = resume.compose_markdown(packet, session.get("github_user", ""))
     return Response(markdown, mimetype="text/markdown; charset=utf-8",
-                    headers={"Content-Disposition": f'attachment; filename="resume-{name}.md"'})
+                    headers={"Content-Disposition": f'attachment; filename="resume-{re.sub(r"[^A-Za-z0-9._-]+", "-", name)}.md"'})
 
 
 
@@ -1958,20 +2048,33 @@ def components_scan():
         flash(NOT_CONNECTED_REMEDY, "error")
         return redirect(url_for("components_view"))
     t0 = time.monotonic()
-    detections = {}
+    previous = (models.get_components() or {}).get("detections") or {}
+    detections, failed = {}, []
     for r in _yesterday_repos():  # whole portfolio so the cache is complete
         full = r.get("full_name", f"{r['owner']}/{r['name']}")
-        detections[full] = components.scan_repo_components(client, r)
+        det = components.scan_repo_components(client, r)
+        if det is None:
+            # GitHub didn't answer: keep the last good detection, never "nothing".
+            failed.append(full)
+            if full in previous:
+                detections[full] = previous[full]
+            continue
+        detections[full] = det
     data = {"scanned_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "detections": detections}
     models.save_components(data)
     inv = components.inventory(_yesterday_repos(), detections)
     models.log_components_event(
         "scan", repos=len(detections), capabilities_found=inv.get("capabilities_found"),
-        gaps=len(inv.get("gaps") or []), elapsed_ms=int((time.monotonic() - t0) * 1000),
+        gaps=len(inv.get("gaps") or []), failed=failed,
+        elapsed_ms=int((time.monotonic() - t0) * 1000),
     )
-    flash(f"Components scanned: {len(detections)} repos, "
-          f"{inv.get('capabilities_found', 0)} capabilities found.", "success")
+    msg = (f"Components scanned: {len(detections)} repos, "
+           f"{inv.get('capabilities_found', 0)} capabilities found.")
+    if failed:
+        msg += (f" Couldn't read {len(failed)} repo(s) (kept their last result): "
+                f"{', '.join(failed[:5])}{'…' if len(failed) > 5 else ''}.")
+    flash(msg, "error" if failed else "success")
     return redirect(url_for("components_view"))
 
 
@@ -2014,9 +2117,19 @@ def docs_index():
                                repo_groups=repo_groups, active_group=active_group,
                                all_repos_count=len(all_repos))
 
-    requested = _find_repo_by_name(request.args.get("repo") or "")
-    scoped_names = {r["name"] for r in repos}
-    repo = requested if (requested and requested["name"] in scoped_names) else repos[0]
+    req_name = request.args.get("repo") or ""
+    req_owner = request.args.get("owner") or ""
+    requested = None
+    if req_name:
+        # Match on owner too: a same-named org and personal repo can coexist.
+        matches = [r for r in all_repos if r["name"] == req_name
+                   and (not req_owner or r.get("owner") == req_owner)]
+        requested = matches[0] if matches else None
+    # An explicit ?repo= wins over the saved group filter (a link from Resume
+    # must open that repo, not silently fall back to the group's first one).
+    repo = requested or repos[0]
+    if requested and requested not in repos:
+        repos = [requested] + repos  # keep the picker showing what's open
     ref = request.args.get("ref") or repo.get("default_branch", "main")
 
     files = docs_explorer.list_md_files(client, repo["owner"], repo["name"], ref)
@@ -2151,7 +2264,7 @@ def program_view():
     notes = meta.get("notes", "")
     pbrief = models.get_program_briefs().get(active) if active else None
     stale = program.is_program_brief_stale(pbrief, member_repos, member_names)
-    generated_label = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    generated_label = _central_today()
     markdown = program.compose_markdown(active, notes, members, pbrief, generated_label) if active else ""
 
     # Members in the group but missing from the latest scan (e.g. repo not
@@ -2323,6 +2436,7 @@ def firestore_scan():
 
     repos = _scan_results.get("repos", [])
     results: list[dict] = []
+    prior_data = models.get_firestore_data().get("repos") or {}
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = {
             pool.submit(
@@ -2344,6 +2458,12 @@ def firestore_scan():
                 # the remediation message instead.
                 raise
             except Exception as e:
+                # A repo GitHub didn't answer for keeps its last good row
+                # rather than being recorded as a confident "not_using".
+                prior = prior_data.get(r["name"])
+                if isinstance(prior, dict) and not prior.get("error"):
+                    results.append(prior)
+                    continue
                 results.append({
                     "owner": r["owner"],
                     "name": r["name"],
@@ -2572,7 +2692,7 @@ def tracker_generate(owner, name):
         cost = ai.estimate_cost(in_tok, out_tok, model=model)
         _session_cost.add(in_tok, out_tok, cost)
 
-    models.save_tracker(owner, name, tracker)
+    _save_generated_tracker(owner, name, tracker, prior)
     models.log_tracker_event(
         "generate_done", owner=owner, repo=name,
         n_modules=len(tracker.get("modules", [])),
@@ -2585,6 +2705,27 @@ def tracker_generate(owner, name):
                       f"{len(tracker.get('next_actions', []))} next actions")
     flash("Tracker generated.", "success")
     return redirect(url_for("tracker_view", owner=owner, name=name))
+
+
+def _save_generated_tracker(owner: str, name: str, tracker: dict, prior: dict | None):
+    """Save a fresh tracker without losing status clicks made while the AI
+    call ran (30-60s). Under the store lock, any next_action whose status or
+    note changed on disk since `prior` was read is carried onto the new one."""
+    def _by_id(t):
+        return {a.get("id"): a for a in (t or {}).get("next_actions", []) or []
+                if isinstance(a, dict) and isinstance(a.get("id"), str)}
+    with models._STORE_LOCK:
+        current = _by_id(models.get_tracker(owner, name))
+        before = _by_id(prior)
+        for aid, action in _by_id(tracker).items():
+            now = current.get(aid)
+            if not now:
+                continue
+            was = before.get(aid) or {}
+            if (now.get("status"), now.get("status_note")) != (was.get("status"), was.get("status_note")):
+                action["status"] = now.get("status")
+                action["status_note"] = now.get("status_note", "")
+        models.save_tracker(owner, name, tracker)
 
 
 @app.route("/tracker/<owner>/<name>/debug")
@@ -3028,6 +3169,14 @@ if __name__ == "__main__":
     # error pages — handy for a quick local hack, dangerous for an app holding
     # a GitHub PAT. Default it OFF; opt in with REPODOCTOR_DEBUG=1 when needed.
     debug_mode = os.environ.get("REPODOCTOR_DEBUG", "").lower() in ("1", "true", "yes")
-    logging.basicConfig(level=logging.DEBUG if debug_mode else logging.INFO)
+    # basicConfig() is a no-op once the app-log file handler is on the root
+    # logger, which left the terminal silent (no "Running on…", no
+    # tracebacks) and ignored REPODOCTOR_DEBUG. Attach the console handler
+    # and set the level explicitly instead.
+    _root = logging.getLogger()
+    _console = logging.StreamHandler()
+    _console.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    _root.addHandler(_console)
+    _root.setLevel(logging.DEBUG if debug_mode else logging.INFO)
     models._ensure_dirs()
     app.run(host="127.0.0.1", port=5001, debug=debug_mode)

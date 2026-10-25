@@ -1,7 +1,7 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-10-25 (Session 20 — In Flight, Resume packets, Components inventory, app-wide log, usability fixes)
-**Current Branch:** `claude/confident-wright-gfnscy` (not yet merged — open a PR and merge on GitHub)
+**Last Updated:** 2026-10-25 (Session 21 — delete merged branches, full bug sweep: 70+ verified fixes, critical → low)
+**Current Branch:** `main` (Sessions 20 + 21 pushed to `main`; also on `claude/confident-wright-gfnscy`)
 **Overall Progress:** ~97%
 
 ---
@@ -12,7 +12,23 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 
 ---
 
-## Latest — Session 20 (2026-10-25)
+## Latest — Session 21 (2026-10-25)
+
+Built the one item Session 20 held for a yes (delete merged branches), then ran a four-way bug sweep across the whole app and fixed every finding that reproduced. See `SESSION_NOTES.md` for the full list.
+
+- **Delete merged branches from In Flight.** DELETE BRANCH on MERGED cards and a DELETE ALL N MERGED bar. Each target is re-checked live right before deletion (nothing left to merge, no open PR, not the default branch), capped at 50 per click, token-guarded, logged.
+- **Critical:** stored XSS in the Docs Markdown renderer (a crafted `.md` in any readable repo could run script on page load). Fixed with a scheme allow-list and placeholder hardening; 20 regression tests.
+- **High:** open redirect after login (`/\evil.com`, tab tricks); unencoded branch names (`fix#12` compared as `fix` — dangerous with branch delete); Mac launcher killing the browser on relaunch (`lsof` matched client sockets); launcher never reinstalling new requirements; tracked `config/preferences.json` rewritten by the app, which made `git pull` in the launchers fail; tests writing fake errors into the real `data/logs/app.log`; console logging silent; Yesterday dropping repos when the scan was older than the window; a refused/truncated AI response overwriting a good brief and counting as fresh; DNS-rebinding / cross-site POST exposure (now a Host + Origin guard).
+- **Medium/low:** In Flight cap hiding PR branches, squash merges never MERGED, failed compares reported as "0 commits", tidy-repo skip never firing; Components/Firestore/Docs treating a dead token or rate limit as "no files" and overwriting good caches; `public_repo` passing the `repo` scope check; CREATE GROUP overwriting a group; group saves dropping unscanned members; transient read errors renaming good JSON to `.corrupt`; tracker regeneration undoing status clicks; Selector/Resume search hiding nothing (CSS `[hidden]`); copy buttons stuck on COPIED!; tracker pages overflowing on phones; plus ~25 more (see notes).
+- **Tests: 470 passing** (was 395). Every screen re-crawled in Chromium at 390px and 1200px with XSS fixture data: no console errors, no horizontal scroll.
+
+### Known limitations (not fixed this session)
+- Briefs, summaries, groups and categories are keyed by bare repo name, so a personal repo and an org repo with the same name share one entry. In Flight, Resume and Docs now key by owner/name; the rest is a storage migration for a later session.
+- Logout is still a GET and other POSTs rely on the new Origin check rather than a per-form token.
+
+---
+
+## Session 20 (2026-10-25)
 
 Came back after two months. Verified the state (327 tests green, branch equal to `main`), then built the three things the coming weeks need. Nav stays at ten tabs: the three "pick back up" screens share the **Next Up** tab via a sub-nav. See `SESSION_NOTES.md` for the full log.
 

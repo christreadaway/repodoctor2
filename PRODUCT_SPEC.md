@@ -181,7 +181,8 @@ Content scoring weights:
 Named groups of repos, free-form and many-to-many. A tab bar (`All | Group1 | Group2 …`) scopes a screen to the selected group; a collapsible "Manage Groups" panel handles create / rename / delete and per-group repo assignment via checkboxes.
 
 - Storage: `~/.repodoctor/groups.json` (per-machine, survives re-clone), shape `{group_name: [repo_name, ...]}`
-- Preference: `active_group` in `preferences.json` persists the current filter across navigation
+- Preference: `active_group` in `config/preferences.local.json` persists the current filter across navigation
+- The four category groups (Church / School / Combined / Personal) can't be renamed or deleted. CREATE refuses a name that already exists (it used to overwrite that group's members). Saving a group keeps members that aren't in the current scan. Renaming a group carries its Program notes and cached program brief over.
 - Guards: rename refuses to overwrite an existing target group; empty-name submissions are rejected with a flash; delete prefers the hidden `original_name` field so an in-flight edit can't redirect the target
 - Active group lives in prefs and is updated atomically on rename/delete
 - **Flows through the whole app (Session 19c):** the group filter tab bar now appears on My Repos, Selector, Next Up, and Docs as well as Projects / Stats / Briefing, all reading the same `active_group` — so picking a group on any screen scopes them all. Shared by `_filter_by_group()`.
@@ -309,8 +310,8 @@ One screen to pick from **every** repo the scan reaches — personal, private, p
 
 The window-independent half of "where do I pick back up?": **every unmerged non-default branch and open PR across every repo, no matter how old.** Each Claude Code web session lands in GitHub as a `claude/<slug>` branch, so this list IS the set of coding work that is started but not finished. A session that hasn't pushed yet cannot appear, and the page says so.
 
-- **Deterministic status per branch** (pure function of git facts, no AI): READY TO MERGE (open PR; notes if behind base), FINISH IT (draft PR or WIP-looking last commit), NEEDS PR (fresh commits, no PR), STALE (no PR, no activity for 14+ days), MERGED (0 ahead of base — delete the branch). Sorted by what needs a decision first, then newest activity.
-- **Cheap to gather.** Repos whose cached scan shows only the default branch cost zero API calls; others cost one branches call + one open-PRs call + one compare per branch (capped at 40). One repo's failure is logged and reported in a banner, never blanks the page.
+- **Deterministic status per branch** (pure function of git facts, no AI): READY TO MERGE (open PR; notes if behind base), FINISH IT (draft PR or WIP-looking last commit), NEEDS PR (fresh commits, no PR), STALE (no PR, no activity for 14+ days), CHECK ON GITHUB (GitHub couldn't compare the branch, so nothing is claimed about it), MERGED (0 ahead of base, OR its PR was squash/rebase-merged and the branch tip is still that PR's head — delete the branch). Sorted by what needs a decision first, then newest activity.
+- **Cheap to gather.** When the scan is under a day old, repos whose cached scan shows only the default branch cost zero API calls (an older scan can't vouch for that, so every repo is read). Others cost one branches call + one open-PRs call + one closed-PRs page (squash-merge detection) + one compare per branch. Branches with an open PR are always listed; the compare cap (40) applies only to branches without one, and a banner names any repo where branches were left off. One repo's failure is logged and reported in a banner, never blanks the page. Branch names are URL-encoded in every GitHub call (`fix#12` used to be compared as `fix`).
 - **Cached, not live.** Results persist in `data/inflight.json` so the page opens instantly; REFRESH regathers the whole portfolio and the view scopes by group and status filter. COPY FOR CLAUDE / DOWNLOAD .MD produce a grouped "Work in flight" document. Each card links to that repo's Resume packet.
 - **Delete merged branches.** MERGED cards (no open PR) get a DELETE BRANCH button, and a DELETE ALL N MERGED bar appears when more than one is in view. Both confirm first. This is the app's only destructive GitHub write, so the server trusts nothing from the cache: each target is re-checked live right before deletion (0 commits ahead of the default branch, not the default branch itself, no open PR for it, repo is in the scan), capped at 50 per click, guarded by the per-boot form token. Refusals are listed with the reason (has commits, open PR, protected, token lacks Contents: write). Deleted branches drop out of the cache; every attempt logs a `delete_merged` event to `data/logs/inflight.log`.
 
@@ -354,7 +355,7 @@ All data stored as local JSON files — no database dependency.
 
 | Data | File | Retention |
 |---|---|---|
-| User preferences (incl. `active_group`) | `config/preferences.json` | Permanent |
+| User preferences (incl. `active_group`) | `config/preferences.local.json` (gitignored; seeded once from the tracked `config/preferences.json`, which the app no longer writes, so `git pull` in the launchers can't be blocked by it) | Permanent |
 | Encrypted credentials | `config/credentials.enc` | Until reset |
 | Project groups | `config/groups.json` (gitignored) | Permanent (per-machine) |
 | Scan history | `data/scan_history.json` | Last 50 scans |
@@ -543,6 +544,9 @@ Flask Application (app.py)
 - Claude conversation data parsed and stored locally — never sent to any external API
 - All storage is local JSON files — no cloud database, no telemetry
 - Conversation content stays on disk in `projects/conversations.json`
+- **Local-only guard (Session 21):** every request whose Host isn't `127.0.0.1` / `localhost` / `[::1]` gets a 403 (blocks DNS rebinding), and every POST whose `Origin` is a different site gets a 403 (blocks cross-site form posts, including from other localhost ports). Credential reset and branch delete also require the per-boot form token. `?next=` after login accepts same-site paths only (backslash, tab and protocol-relative tricks rejected).
+- **Rendered Markdown is safe HTML:** `md_render` escapes every line before markup, allow-lists link schemes (http, https, mailto, relative), rejects control characters in URLs, and never restores a code span inside an attribute.
+- **Tests never touch real data:** `conftest.py` sets `REPODOCTOR_HOME` to a temp dir, which re-roots `data/`, `config/` and `~/.repodoctor` for the run.
 
 ---
 

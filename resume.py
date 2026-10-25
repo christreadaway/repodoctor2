@@ -136,12 +136,14 @@ def build_packet(client, repo: dict, *, summary: dict | None, brief: dict | None
         packet["errors"].append(f"Recent sessions unavailable: {e}")
 
     try:
+        # README whenever there's no status AND no notes to show — a repo
+        # with only CLAUDE.md + README (common) still gets an excerpt.
         fetched = gh.fetch_repo_docs(client, owner, name, ref=ref,
-                                     max_chars=DOC_FETCH_CHARS, include_readme="if_no_docs")
+                                     max_chars=DOC_FETCH_CHARS, include_readme="always")
         docs = fetched["docs"]
         packet["status_excerpt"] = status_head(docs.get("project_status", ""))
         packet["notes_excerpt"] = latest_notes_entry(docs.get("session_notes", ""))
-        if not docs and fetched.get("readme"):
+        if not packet["status_excerpt"] and not packet["notes_excerpt"] and fetched.get("readme"):
             packet["status_excerpt"] = status_head(fetched["readme"])
             packet["status_source"] = "README"
         else:
@@ -162,9 +164,12 @@ def suggest_first_prompt(packet: dict) -> str:
     name = packet["repo"]["name"]
     for i in packet.get("inflight", []):
         if i["kind"] in ("finish", "continue"):
+            # A draft PR already exists: finishing means marking it ready.
+            close = (f"then mark PR #{i['pr']['number']} ready for review"
+                     if i.get("pr") else "and open a PR")
             return (f"Pick up the `{i['branch']}` branch in {name} ({i['topic']}). "
                     f"Read PROJECT_STATUS.md and the latest SESSION_NOTES.md entry, "
-                    f"check the diff against {i['base']}, finish the work, and open a PR.")
+                    f"check the diff against {i['base']}, finish the work, {close}.")
     merges = [i for i in packet.get("inflight", []) if i["kind"] == "merge"]
     if merges:
         prs = ", ".join(f"PR #{i['pr']['number']}" for i in merges if i.get("pr"))

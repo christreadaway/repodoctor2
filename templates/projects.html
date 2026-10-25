@@ -249,6 +249,9 @@
     // reload; badges + filter counts refresh next time you navigate. A brief
     // "Saved" flash on the row confirms each write.
     document.querySelectorAll('.categorize-select').forEach(function (sel) {
+        // Remember the saved value so a failed save puts the dropdown back
+        // instead of showing a category that was never stored.
+        sel.dataset.saved = sel.value;
         sel.addEventListener('change', function () {
             var row = sel.closest('.categorize-row');
             var repo = sel.getAttribute('data-repo');
@@ -260,15 +263,18 @@
             }).then(function (r) { return r.json(); }).then(function (data) {
                 sel.disabled = false;
                 if (data && data.ok) {
+                    sel.dataset.saved = sel.value;
                     if (row) {
                         row.classList.add('categorize-saved');
                         setTimeout(function () { row.classList.remove('categorize-saved'); }, 1200);
                     }
                 } else {
+                    sel.value = sel.dataset.saved;
                     alert((data && data.error) || 'Could not save the category.');
                 }
             }).catch(function () {
                 sel.disabled = false;
+                sel.value = sel.dataset.saved;
                 alert('Could not save the category — check your connection.');
             });
         });

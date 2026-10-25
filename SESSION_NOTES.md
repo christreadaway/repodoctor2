@@ -1,11 +1,73 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 20
+**Total Sessions Logged:** 21
 **Date Range:** 2025-02-14 to 2026-10-25
-**Last Updated:** 2026-10-25 (Session 20)
+**Last Updated:** 2026-10-25 (Session 21)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 21 — 2026-10-25 (Delete merged branches + full bug sweep, critical → low)
+
+Branch: `claude/confident-wright-gfnscy`, pushed to `main` at Chris's request ("build against the plan, fix low→critical bugs, update .md files, push to main"). The plan was Session 20's Next Steps: the one held-back write (delete merged branches) plus a bug sweep before first real use.
+
+### What We Built
+- **In Flight → delete merged branches** (`/inflight/delete-merged`, `GitHubClient.delete_branch`). Per-card DELETE BRANCH and a bulk DELETE ALL N MERGED bar, both `data-confirm`. Server re-verifies every target live (compare shows 0 ahead, no open PR on that head, not the default branch, repo in scan), caps at 50, requires the per-boot token, drops deleted items from the cache under a lock, logs `delete_merged` with deleted + refused lists. 422 / 403 / 404 map to plain reasons.
+- **Generic form helpers in app.js:** `data-confirm` on any form; the loading relabel now applies to every submit button with `data-loading-text` (In Flight REFRESH, RE-SCAN NOW, Program GENERATE, Components SCAN were silent before).
+
+### Bug sweep
+Four review agents (new modules / app core / data + GitHub modules / frontend in Chromium) each had to reproduce every finding; two fix agents took md_render and the session/brief modules while app.py, In Flight, Resume, Components and the GitHub client were fixed here. Everything below reproduced and has a regression test unless noted.
+
+**Critical**
+- md_render stored XSS: a code span inside a link URL was restored into `href="…"` unescaped (`[x](\`" autofocus onfocus=…\`)` fired on page load). Now: placeholders can't be forged, code spans escaped with quotes, generated anchors stashed, link schemes allow-listed (http/https/mailto/relative; entity- and control-char tricks rejected).
+
+**High**
+- `_safe_next` open redirect (`/\evil.com`, `/\t/evil.com`) → reject backslash, whitespace/control chars, any scheme or netloc.
+- Branch names not URL-encoded in compare / tree calls (`fix#12` → `fix`). Would have let delete verify one branch and delete another.
+- `start.command`: `lsof -ti:5001` also matched the browser's client sockets and killed it → `-sTCP:LISTEN`. Deps stamp never refreshed → reinstall when `requirements.txt` is newer. `start.ps1` uses `-State Listen`.
+- `config/preferences.json` is tracked but the app rewrote it on every group switch → `git pull` in the launchers failed once upstream touched it. App now writes gitignored `config/preferences.local.json`, seeded once from the tracked file.
+- Tests wrote into the real `data/logs/app.log`, `data/`, and `~/.repodoctor` → `conftest.py` + `REPODOCTOR_HOME` re-root every path during a run (verified: a full run leaves real files untouched).
+- Console logging silent (basicConfig no-op after the file handler; `REPODOCTOR_DEBUG` ignored) → explicit console handler + level in `__main__`.
+- Yesterday pruned repos on the cached scan's `pushed_at` even when the scan predates the window → prune only when `scanned_at` ≥ window end.
+- Refusal/truncation from the AI saved an empty brief/recap/program brief as fresh → generators raise; routes already return 502 without saving.
+- DNS rebinding could read the reset token and wipe credentials; cross-site POSTs from other localhost ports weren't blocked → `before_request` Host allow-list + Origin check.
+
+**Medium**
+- In Flight: compare cap hid PR branches (PR branches now first and uncapped; banner names truncated repos); failed compares claimed "0 commits" (new CHECK ON GITHUB status); squash/rebase merges never MERGED (closed-PR page + tip == PR head); tidy-repo skip never fired (scan stores `["main"]`), and is skipped entirely when the scan is a day+ old.
+- Components scan: dead PAT / rate limit recorded as "no files" and overwrote the cache → `strict` tree fetch, auth re-raised, failed repos keep their last detection and are named in the flash. Same for Firestore scan and Docs (auth re-raised; failed repo keeps its prior row).
+- Resume: README fallback skipped when any spec doc existed; draft-PR first prompt said "open a PR"; Docs link could open a same-named repo or the group's first repo (owner now passed and matched on Docs).
+- `"repo" in scopes` substring let `public_repo` through → exact scope match.
+- CREATE GROUP overwrote an existing group; saving a group dropped members not in the scan; category groups could be renamed/deleted (emptying categories); rename orphaned Program notes/briefs.
+- `_load_json` renamed a good file to `.corrupt` on a transient OSError → retry once then raise; only parse errors rename.
+- Tracker regenerate lost status clicks made during the 30-60s AI call → statuses changed on disk since the read are carried onto the new tracker under the lock.
+- Sessions: closed-unmerged PRs never surfaced (`closed_at` missing); squash-merged PRs double-counted as direct-to-main work; main-branch recaps always looked stale.
+- `tzdata` added to requirements (Windows has no tz database; day windows silently used UTC), with a warning on fallback.
+- Tracker validator raised TypeError on list/dict ids (skipping the retry) → validation errors instead.
+- Rate limit exhausted → each call slept 60s then failed; now fails fast with a "resets in N min" log line.
+- API routes got an HTML redirect on GitHub/network errors → JSON 401/503 for `/api/` paths.
+
+**Low**
+- md_render: dropped list items on kind change/dedent, RecursionError on deep `>`, quadratic link/table/heading regexes (35s render), emphasis breaking generated links.
+- Selector/Resume search and filters hid nothing (`display:flex` beat `[hidden]`) → global `[hidden]{display:none!important}`; Selector JS TypeError with no scan; empty group trapped the user with no group bar.
+- Copy buttons stuck on COPIED! after a double click; tracker debug copy always claimed success; tracker "Open" filter not applied on load; tracker toolbar and debug page overflowed at 390px; long repo names stretched cards; failed category save left the dropdown on the unsaved value; Briefing COPY SECTION ids collided for same-named repos.
+- Exports: Yesterday download ignored the group; In Flight download ignored the status filter; briefing filename with non-Latin-1 group names hung the request; export dates were UTC; resume filename not slugged.
+- Stats cache never expired (now hourly); `?date=9999-12-31` 500'd; `1 commit aren't`; vendor-dir skip was case-sensitive; files over 1 MB rendered empty; spec_cleaner image/roadmap regexes; project_mapper matched "ParentPoint EDU" to `parentpoint`; briefing action sort TypeError.
+
+### Tests
+**470 passing** (was 395). New: `tests/test_session21_app.py`, `tests/test_session21_fixes.py`, +20 in `test_md_render.py`, new In Flight / guard / delete tests in `test_inflight.py`. Every page re-crawled in Chromium at 390px and 1200px with XSS fixture data: no console errors, no horizontal scroll; hidden-filter, double-click-copy and tracker-filter probes all pass.
+
+### Not fixed (deliberately)
+- Bare-name keying of briefs / summaries / groups / categories across owners (storage migration).
+- Logout via GET; per-form CSRF tokens on every POST (the Origin check covers browsers).
+- Reviewer's Sonnet pricing claim in `ai_analyzer.py` — not verified, left as is.
+
+### Next Steps
+1. On the Mac: double-click `start.command` (pulls main, installs the new `tzdata` dependency automatically), log in, RE-SCAN.
+2. Next Up → In flight → READ FROM GITHUB. Try DELETE BRANCH on one MERGED card, then DELETE ALL.
+3. Components → SCAN COMPONENTS, then start extraction #1 from `COMPONENTIZATION_PLAN.md`.
+4. If you ran the test suite on the Mac before today, `data/logs/app.log` may hold fake test errors: Settings → Debug log will show them; they stop from here on.
 
 ---
 

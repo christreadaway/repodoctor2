@@ -321,23 +321,34 @@ class TestScanRepoComponents(unittest.TestCase):
         client = MagicMock()
         client.get_all_file_paths.return_value = ["CLAUDE.md", "tests/test_x.py"]
         det = components.scan_repo_components(client, _repo("demo", default_branch="develop"))
-        client.get_all_file_paths.assert_called_once_with("chris", "demo", ref="develop")
+        client.get_all_file_paths.assert_called_once_with("chris", "demo", ref="develop", strict=True)
         self.assertEqual(det["claude_docs"]["hits"], 1)
         self.assertEqual(det["testing"]["hits"], 1)
 
-    def test_failure_returns_empty_detection_not_exception(self):
+    def test_failure_returns_none_not_empty_detection(self):
+        # "GitHub didn't answer" must never be recorded as "repo has nothing".
         client = MagicMock()
         client.get_all_file_paths.side_effect = RuntimeError("boom")
         with self.assertLogs("components", level="WARNING") as cm:
             det = components.scan_repo_components(client, _repo("broken"))
-        self.assertEqual(set(det), {c["key"] for c in components.CAPABILITIES})
-        self.assertEqual(sum(v["hits"] for v in det.values()), 0)
+        self.assertIsNone(det)
         self.assertTrue(any("broken" in line for line in cm.output))
+
+    def test_auth_error_propagates(self):
+        import github_client
+        client = MagicMock()
+        client.get_all_file_paths.side_effect = github_client.GitHubAuthError("dead PAT")
+        with self.assertRaises(github_client.GitHubAuthError):
+            components.scan_repo_components(client, _repo("x"))
+
+    def test_vendor_skip_is_case_insensitive(self):
+        self.assertTrue(components.is_skipped("Vendor/stripe_checkout.py"))
+        self.assertTrue(components.is_skipped("Build/x.js"))
 
     def test_one_failure_does_not_blank_the_run(self):
         client = MagicMock()
 
-        def _paths(owner, name, ref=None):
+        def _paths(owner, name, ref=None, strict=False):
             if name == "bad":
                 raise RuntimeError("rate limited")
             return ["CLAUDE.md"]
@@ -345,8 +356,9 @@ class TestScanRepoComponents(unittest.TestCase):
         client.get_all_file_paths.side_effect = _paths
         repos = [_repo("good"), _repo("bad"), _repo("fine")]
         dets = {r["full_name"]: components.scan_repo_components(client, r) for r in repos}
+        self.assertIsNone(dets.pop("chris/bad"))
         inv = components.inventory(repos, dets)
-        self.assertEqual(inv["repos_scanned"], 3)
+        self.assertEqual(inv["repos_scanned"], 2)
         self.assertEqual(inv["coverage"]["claude_docs"], 2)
 
     def test_none_tree_treated_as_empty(self):

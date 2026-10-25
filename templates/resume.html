@@ -127,7 +127,7 @@
             <h2>{{ packet.status_source or 'PROJECT_STATUS.md' }} <span class="resume-sub">top of file</span></h2>
             {% if packet.status_excerpt %}
             <pre class="resume-doc">{{ packet.status_excerpt }}</pre>
-            <p class="resume-link"><a href="{{ url_for('docs_index', repo=packet.repo.name) }}">Read it rendered in Docs &rarr;</a></p>
+            <p class="resume-link"><a href="{{ url_for('docs_index', owner=packet.repo.owner, repo=packet.repo.name) }}">Read it rendered in Docs &rarr;</a></p>
             {% else %}
             <p class="text-secondary">This repo has no PROJECT_STATUS.md (or README). Adding one is the single biggest help for future context switches.</p>
             {% endif %}

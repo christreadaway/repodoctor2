@@ -230,6 +230,47 @@ def get_conversations() -> list[dict]:
         return []
 
 
+def _norm_name(value) -> str:
+    """Canonical form for name matching: lowercase with spaces, hyphens and
+    underscores removed, so "ParentPoint EDU", "parentpoint-edu" and
+    "parentpointedu" all compare equal."""
+    return re.sub(r"[\s\-_]+", "", str(value or "").lower())
+
+
+# A Claude project name shorter than this never matches a repo by "contained
+# in" — "ai" or "app" would otherwise match half the portfolio.
+_MIN_CONTAINED_LEN = 4
+
+
+def match_project_to_repo(project_name, repos: list[str]) -> tuple[str, str] | None:
+    """The ONE project-name -> repo matcher (used by the mapping screen and the
+    repo timeline so they can never disagree). Returns (repo, kind) where kind
+    is "exact" or "contains", or None.
+
+    1. Normalized exact match wins.
+    2. Otherwise a repo whose normalized name is contained in the project
+       name, preferring the LONGEST such repo ("ParentPoint EDU" ->
+       parentpointedu, not parentpoint).
+    3. Otherwise a repo whose name contains the project name, preferring the
+       SHORTEST (closest) such repo.
+    """
+    np = _norm_name(project_name)
+    if not np:
+        return None
+    normed = [(_norm_name(r), r) for r in repos if _norm_name(r)]
+    for nr, actual in normed:
+        if nr == np:
+            return actual, "exact"
+    inside = [(nr, a) for nr, a in normed if nr in np and len(nr) >= _MIN_CONTAINED_LEN]
+    if inside:
+        return max(inside, key=lambda t: (len(t[0]), t[1]))[1], "contains"
+    if len(np) >= _MIN_CONTAINED_LEN:
+        around = [(nr, a) for nr, a in normed if np in nr]
+        if around:
+            return min(around, key=lambda t: (len(t[0]), t[1]))[1], "contains"
+    return None
+
+
 def map_conversations_to_repos(conversations: list[dict], repos: list[str]) -> dict:
     """Map conversations to repos using name matching + content analysis.
 
@@ -270,29 +311,24 @@ def map_conversations_to_repos(conversations: list[dict], repos: list[str]) -> d
 
         matched = False
 
-        # 1. Exact project name match (case-insensitive)
-        if project_name and project_name in repo_names_lower:
-            conv["matched_repo"] = repo_names_lower[project_name]
+        # 1-2. Project name -> repo via the shared normalized matcher
+        # (exact first, then longest contained repo name).
+        hit = match_project_to_repo(conv.get("project"), repos) if project_name else None
+        if hit:
+            repo_actual, kind = hit
+            conv["matched_repo"] = repo_actual
             conv["match_type"] = "auto"
-            conv["match_reason"] = (
-                f'Name match: Claude project "{conv.get("project")}" '
-                f'= repo "{repo_names_lower[project_name]}"'
-            )
+            if kind == "exact":
+                conv["match_reason"] = (
+                    f'Name match: Claude project "{conv.get("project")}" '
+                    f'= repo "{repo_actual}"'
+                )
+            else:
+                conv["match_reason"] = (
+                    f'Name match: "{conv.get("project")}" ~ "{repo_actual}"'
+                )
             auto_matched.append(conv)
             matched = True
-
-        # 2. Project name contains repo name or vice versa
-        if not matched and project_name:
-            for repo_lower, repo_actual in repo_names_lower.items():
-                if repo_lower in project_name or project_name in repo_lower:
-                    conv["matched_repo"] = repo_actual
-                    conv["match_type"] = "auto"
-                    conv["match_reason"] = (
-                        f'Name match: "{conv.get("project")}" ~ "{repo_actual}"'
-                    )
-                    auto_matched.append(conv)
-                    matched = True
-                    break
 
         # 3. Content-based matching — look for repo name in topic or excerpt
         if not matched:
@@ -374,23 +410,45 @@ def dismiss_conversation(conv_id: str):
     _save_config(config)
 
 
-def get_conversations_for_repo(repo_name: str) -> list[dict]:
-    """Get all conversations mapped to a specific repo, for timeline view."""
+def get_conversations_for_repo(repo_name: str,
+                               all_repos: list[str] | None = None) -> list[dict]:
+    """Get all conversations mapped to a specific repo, for timeline view.
+
+    Uses the same matcher as map_conversations_to_repos so auto-matched
+    conversations show up here too. Pass all_repos (every repo name in the
+    scan) so a "contains" match can be disambiguated against sibling repos
+    (parentpoint vs parentpointedu); without it only normalized-exact
+    project names match, which can never misattribute a conversation.
+    A manual mapping always wins over name matching; dismissed conversations
+    are never auto-included.
+    """
     conversations = get_conversations()
     config = _load_config()
     mappings = config.get("mappings", {})
-    repo_names_lower = {repo_name.lower()}
+    dismissed = set(config.get("dismissed", []))
+    candidates = list(all_repos) if all_repos else [repo_name]
+    if repo_name not in candidates:
+        candidates.append(repo_name)
 
     result = []
     for conv in conversations:
-        # Check manual mapping
-        if mappings.get(conv.get("id")) == repo_name:
-            result.append(conv)
+        cid = conv.get("id")
+        # Manual mapping is authoritative either way.
+        if cid in mappings:
+            if mappings[cid] == repo_name:
+                result.append(conv)
             continue
-        # Check project name match
-        if (conv.get("project") or "").lower() == repo_name.lower():
-            result.append(conv)
+        if cid in dismissed:
             continue
+        hit = match_project_to_repo(conv.get("project"), candidates)
+        if not hit:
+            continue
+        repo_actual, kind = hit
+        if repo_actual != repo_name:
+            continue
+        if not all_repos and kind != "exact":
+            continue  # can't rule out a better sibling repo without the list
+        result.append(conv)
 
     result.sort(key=lambda c: c.get("date") or "", reverse=True)
     return result

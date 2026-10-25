@@ -164,12 +164,19 @@ def _matched_py_deps(text: str) -> list[str]:
 def detect_firestore_status(client, owner: str, name: str, ref: str) -> dict:
     """Run detection for a single repo. Returns the dict that the template
     consumes (also stored in the firestore-data cache)."""
+    # No catch-all here. A dead PAT (GitHubAuthError) must reach the app's
+    # handler, and any other tree-fetch failure must NOT be turned into an
+    # empty file list — that would produce (and cache) a confident
+    # "not_using" verdict for a repo we never actually looked at. The caller
+    # records the failure per repo.
     try:
         raw_paths = client.get_all_file_paths(owner, name, ref=ref)
+    except GitHubAuthError:
+        raise
     except Exception as e:
         logger.warning("firestore detect: get_all_file_paths failed for %s/%s: %s", owner, name, e)
-        raw_paths = []
-    paths = _filtered_paths(raw_paths)
+        raise
+    paths = _filtered_paths(raw_paths or [])
 
     firebase_json_path = _find_first(paths, "firebase.json")
     firestore_rules_path = _find_first(paths, "firestore.rules")

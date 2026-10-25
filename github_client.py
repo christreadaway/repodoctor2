@@ -22,6 +22,10 @@ class GitHubAuthError(Exception):
     """
 
 
+class GitHubFetchError(Exception):
+    """A read GitHub didn't answer (rate limit, 5xx) — distinct from "empty"."""
+
+
 class GitHubClient:
     def __init__(self, pat: str):
         self.session = requests.Session()
@@ -65,6 +69,15 @@ class GitHubClient:
         if resp.status_code == 429 or (
             resp.status_code == 403 and "rate limit" in resp.text.lower()
         ):
+            reset_at = resp.headers.get("X-RateLimit-Reset", "")
+            if (resp.headers.get("X-RateLimit-Remaining") == "0" and reset_at.isdigit()
+                    and int(reset_at) - time.time() > 60):
+                # The hourly budget is spent and resets well past the 60s cap:
+                # sleeping and retrying can't succeed, it only stalled a scan
+                # by a minute per request. Fail fast and say when it resets.
+                logger.error("GitHub rate limit exhausted; resets in %d min — not retrying %s",
+                             int((int(reset_at) - time.time()) // 60) + 1, url)
+                return resp
             wait = self._rate_limit_wait(resp)
             logger.warning("GitHub rate limit hit (HTTP %d), waiting %ds", resp.status_code, wait)
             time.sleep(wait)
@@ -148,7 +161,10 @@ class GitHubClient:
     def compare_branches(self, owner: str, repo: str, base: str, head: str) -> dict | None:
         """Compare two branches. Returns comparison data or None on error."""
         resp = self._get(
-            f"{GITHUB_API}/repos/{owner}/{repo}/compare/{base}...{head}",
+            # Branch names may hold '#', '?', '%' — unencoded, requests would
+            # cut them off and compare (or report on) a different branch.
+            f"{GITHUB_API}/repos/{owner}/{repo}/compare/"
+            f"{urllib.parse.quote(base, safe='/')}...{urllib.parse.quote(head, safe='/')}",
         )
         if resp.status_code == 200:
             return resp.json()
@@ -246,6 +262,14 @@ class GitHubClient:
                 return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
             except Exception:
                 return None
+        if isinstance(data, dict) and data.get("type") == "file" and data.get("encoding") == "none":
+            # Files over 1 MB come back with empty content; ask for the raw body.
+            raw = self._get(
+                f"{GITHUB_API}/repos/{owner}/{repo}/contents/{encoded_path}",
+                params=params, headers={"Accept": "application/vnd.github.raw"},
+            )
+            if raw.status_code == 200:
+                return raw.content.decode("utf-8", errors="replace")
         return None
 
     def get_root_files(self, owner: str, repo: str, ref: str | None = None) -> list[str]:
@@ -268,19 +292,26 @@ class GitHubClient:
         logger.debug("get_root_files %s/%s: found %d items: %s", owner, repo, len(names), names)
         return names
 
-    def get_all_file_paths(self, owner: str, repo: str, ref: str | None = None) -> list[str]:
+    def get_all_file_paths(self, owner: str, repo: str, ref: str | None = None,
+                           strict: bool = False) -> list[str]:
         """Return every file path in the repo at ref (recursive).
 
-        Uses the git trees recursive API so subfolders are included.
+        Uses the git trees recursive API so subfolders are included. With
+        strict=True a failed fetch (rate limit, 5xx, 404) raises
+        GitHubFetchError instead of returning [], so callers can tell "this
+        repo has no files" from "GitHub didn't answer". An empty repo (409)
+        is still [].
         """
         tree_ref = ref or "HEAD"
         resp = self._get(
-            f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{tree_ref}",
+            f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{urllib.parse.quote(tree_ref, safe='/')}",
             params={"recursive": "1"},
         )
         if resp.status_code != 200:
             logger.warning("get_all_file_paths failed for %s/%s (ref=%s): HTTP %d",
                            owner, repo, tree_ref, resp.status_code)
+            if strict and resp.status_code != 409:
+                raise GitHubFetchError(f"tree fetch HTTP {resp.status_code}")
             return []
         data = resp.json()
         if data.get("truncated"):

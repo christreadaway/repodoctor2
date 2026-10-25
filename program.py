@@ -165,8 +165,7 @@ def generate_program_brief(api_key: str, program_name: str, context_text: str,
     """Generate the program brief. Returns normalized dict + _usage."""
     client = anthropic.Anthropic(api_key=api_key)
     # Structured outputs guarantee schema-valid JSON; a refusal or repeated
-    # truncation raises ValueError. Degrade to a normalized empty brief
-    # instead of failing the whole generation, but log why.
+    # truncation raises ValueError, which is logged and re-raised below.
     try:
         parsed, usage = request_json(
             client,
@@ -184,8 +183,8 @@ def generate_program_brief(api_key: str, program_name: str, context_text: str,
         )
     except ValueError as e:
         logger.warning("program brief generation failed for %s: %s", program_name, e)
-        parsed = {}
-        usage = {"input_tokens": 0, "output_tokens": 0, "model": model}
+        # Re-raise: an empty brief would be saved over a good one by the route.
+        raise
     brief = normalize_program_brief(parsed)
     brief["_usage"] = usage
     return brief

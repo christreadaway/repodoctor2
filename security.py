@@ -12,7 +12,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-CREDENTIALS_PATH = os.path.join(os.path.dirname(__file__), "config", "credentials.enc")
+CREDENTIALS_PATH = os.path.join(os.environ.get("REPODOCTOR_HOME") or os.path.dirname(__file__),
+                                "config", "credentials.enc")
 SALT_LENGTH = 16
 
 

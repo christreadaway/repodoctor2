@@ -81,10 +81,14 @@
    * Show a brief flash of feedback text on a button, then revert.
    */
   function flashButton(button, text, durationMs) {
-    var original = button.textContent;
+    // Remember the real label once: a second click inside the window used to
+    // capture "COPIED!" as the label to restore, so the button stuck on it.
+    if (button.dataset.origText === undefined) button.dataset.origText = button.textContent;
+    clearTimeout(button._flashTimer);
     button.textContent = text;
-    setTimeout(function () {
-      button.textContent = original;
+    button._flashTimer = setTimeout(function () {
+      button.textContent = button.dataset.origText;
+      delete button.dataset.origText;
     }, durationMs || 1500);
   }
 

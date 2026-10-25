@@ -24,12 +24,22 @@
     </div>
 </div>
 {% elif not repos %}
+{% if active_group %}
+{{ group_filter_bar('repo_selector', all_repos_count) }}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No projects in {{ active_group }}.</h2>
+        <p>Pick another group above, or add projects to {{ active_group }} on the <a href="{{ url_for('projects') }}">Projects</a> page.</p>
+    </div>
+</div>
+{% else %}
 <div class="onboarding">
     <div class="onboarding-welcome">
         <h2>No repositories found.</h2>
         <p>Your last scan didn't find any repositories. Check your <a href="{{ url_for('settings') }}">Settings</a> and run a scan again.</p>
     </div>
 </div>
+{% endif %}
 {% else %}
 
 <p class="projects-hint">
@@ -231,7 +241,8 @@
     // --- wire up ----------------------------------------------------------
     checks.forEach(function (c) { c.addEventListener('change', refresh); });
 
-    document.getElementById('sel-all-btn').addEventListener('click', function () {
+    var selAll = document.getElementById('sel-all-btn');
+    if (selAll) selAll.addEventListener('click', function () {
         rows.forEach(function (row) {
             if (row.hidden) return;
             var cb = row.querySelector('.selector-check');
@@ -239,7 +250,8 @@
         });
         refresh();
     });
-    document.getElementById('sel-none-btn').addEventListener('click', function () {
+    var selNone = document.getElementById('sel-none-btn');
+    if (selNone) selNone.addEventListener('click', function () {
         checks.forEach(function (c) { c.checked = false; });
         refresh();
     });

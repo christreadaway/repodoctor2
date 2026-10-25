@@ -7,7 +7,7 @@
     <div class="page-actions">
         {% if scan_results %}
         <form method="post" action="{{ url_for('components_scan') }}" class="comp-scan-form">
-            <button type="submit" class="btn btn-primary">{% if inventory %}RESCAN COMPONENTS{% else %}SCAN COMPONENTS{% endif %}</button>
+            <button type="submit" class="btn btn-primary" data-loading-text="SCANNING…">{% if inventory %}RESCAN COMPONENTS{% else %}SCAN COMPONENTS{% endif %}</button>
         </form>
         {% endif %}
         {% if inventory %}
@@ -60,7 +60,7 @@
     </div>
     <div class="onboarding-action">
         <form method="post" action="{{ url_for('components_scan') }}">
-            <button type="submit" class="btn btn-primary btn-large">SCAN COMPONENTS</button>
+            <button type="submit" class="btn btn-primary btn-large" data-loading-text="SCANNING…">SCAN COMPONENTS</button>
         </form>
         <p>Evidence is path-based only. A repo that uses a library without a telltale filename will not register a hit.</p>
     </div>

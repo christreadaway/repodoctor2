@@ -21,6 +21,8 @@ from __future__ import annotations
 import logging
 import re
 
+import github_client as gh
+
 logger = logging.getLogger(__name__)
 
 MAX_EVIDENCE = 8
@@ -320,7 +322,7 @@ def capability(key: str) -> dict | None:
 def is_skipped(path: str) -> bool:
     """True when any directory segment of the path is a vendor/build dir."""
     parts = path.split("/")
-    return any(p in SKIP_SEGMENTS for p in parts[:-1])
+    return any(p.lower() in SKIP_SEGMENTS for p in parts[:-1])
 
 
 def detect_capabilities(file_paths: list[str]) -> dict[str, dict]:
@@ -346,18 +348,21 @@ def detect_capabilities(file_paths: list[str]) -> dict[str, dict]:
     return result
 
 
-def scan_repo_components(client, repo: dict) -> dict:
-    """Fetch one repo's file tree and detect capabilities. Never raises: a
-    failed repo logs a warning and returns an all-zero detection so one bad
-    repo can't blank the whole inventory."""
+def scan_repo_components(client, repo: dict) -> dict | None:
+    """Fetch one repo's file tree and detect capabilities. Returns None when
+    the tree couldn't be read (rate limit, 5xx) so the caller keeps that
+    repo's previous detection instead of recording "has nothing". A dead PAT
+    (GitHubAuthError) propagates to the app-wide reconnect handler."""
     owner = repo.get("owner", "")
     name = repo.get("name", "")
     ref = repo.get("default_branch") or None
     try:
-        paths = client.get_all_file_paths(owner, name, ref=ref)
+        paths = client.get_all_file_paths(owner, name, ref=ref, strict=True)
+    except gh.GitHubAuthError:
+        raise
     except Exception as e:  # noqa: BLE001 - isolation is the whole point
         logger.warning("components: tree fetch failed for %s/%s@%s: %s", owner, name, ref, e)
-        return detect_capabilities([])
+        return None
     try:
         return detect_capabilities(paths or [])
     except Exception as e:  # noqa: BLE001

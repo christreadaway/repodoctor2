@@ -74,10 +74,11 @@ def clean_markdown(text: str) -> str:
         line = re.sub(r'(?<!\w)\*([^*]+?)\*(?!\w)', r'\1', line)
         # Inline code: `text` -> text
         line = re.sub(r'`([^`]+)`', r'\1', line)
+        # Images FIRST: ![alt](url) -> (remove entirely). Running the link
+        # rule first would turn ![logo](img.png) into a stray "!logo".
+        line = re.sub(r'!\[[^\]]*\]\([^)]+\)', '', line)
         # Links: [text](url) -> text
         line = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', line)
-        # Images: ![alt](url) -> (remove entirely)
-        line = re.sub(r'!\[[^\]]*\]\([^)]+\)', '', line)
         # Blockquote markers
         line = re.sub(r'^>\s*', '', line)
 
@@ -159,10 +160,12 @@ def extract_whats_next(
     # --- PRODUCT_SPEC: roadmap items, inactive features ---
     spec_text = specs.get("PRODUCT_SPEC") or ""
     if spec_text:
-        # Find "Near Term" or "Roadmap" section
+        # Find a "Near Term" / "Roadmap" / "Next ..." / "TODO" HEADING. It
+        # must be a heading line: unanchored, "Built with Next.js" in prose
+        # would capture the stack bullets after it as next steps.
         roadmap_match = re.search(
-            r'(?:Near Term|Roadmap|Next|TODO)[^\n]*\n((?:[\s\S](?!##))*)',
-            spec_text, re.IGNORECASE,
+            r'^[ \t]*#{1,6}[ \t]*(?:Near Term|Roadmap|Next\b|TODO\b)[^\n]*\n((?:[\s\S](?!##))*)',
+            spec_text, re.IGNORECASE | re.MULTILINE,
         )
         if roadmap_match:
             _extract_list_items(roadmap_match.group(1), _add)
@@ -209,6 +212,7 @@ def _extract_list_items(block: str, add_fn):
             # Clean markdown formatting from the item
             item = re.sub(r'\*\*(.+?)\*\*', r'\1', item)
             item = re.sub(r'`([^`]+)`', r'\1', item)
+            item = re.sub(r'!\[[^\]]*\]\([^)]+\)', '', item)  # images before links
             item = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', item)
             # Remove checkbox markers
             item = re.sub(r'^\[[ xX]\]\s*', '', item)

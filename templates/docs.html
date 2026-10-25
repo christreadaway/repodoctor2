@@ -7,15 +7,15 @@
         {% if repos %}
         <select class="docs-repo-select" onchange="if(this.value) location.href=this.value;">
             {% for r in repos %}
-            <option value="{{ url_for('docs_index', repo=r.name) }}"
-                    {% if r.name == active_repo.name %}selected{% endif %}>{{ r.name }}</option>
+            <option value="{{ url_for('docs_index', owner=r.owner, repo=r.name) }}"
+                    {% if r.name == active_repo.name and r.owner == active_repo.owner %}selected{% endif %}>{{ r.name }}</option>
             {% endfor %}
         </select>
         {% if selected %}
         {% if view_raw %}
-        <a href="{{ url_for('docs_index', repo=active_repo.name, path=selected, ref=ref) }}" class="btn btn-secondary">RENDERED</a>
+        <a href="{{ url_for('docs_index', owner=active_repo.owner, repo=active_repo.name, path=selected, ref=ref) }}" class="btn btn-secondary">RENDERED</a>
         {% else %}
-        <a href="{{ url_for('docs_index', repo=active_repo.name, path=selected, ref=ref, raw='1') }}" class="btn btn-secondary">RAW</a>
+        <a href="{{ url_for('docs_index', owner=active_repo.owner, repo=active_repo.name, path=selected, ref=ref, raw='1') }}" class="btn btn-secondary">RAW</a>
         {% endif %}
         {% if file_url %}<a href="{{ file_url }}" target="_blank" rel="noopener" class="btn btn-secondary">ON GITHUB</a>{% endif %}
         {% endif %}
@@ -78,7 +78,7 @@
             <ul class="docs-file-list">
                 {% for f in g.files %}
                 <li>
-                    <a href="{{ url_for('docs_index', repo=active_repo.name, path=f.path, ref=ref) }}"
+                    <a href="{{ url_for('docs_index', owner=active_repo.owner, repo=active_repo.name, path=f.path, ref=ref) }}"
                        class="docs-file-link {% if f.path == selected %}active{% endif %}"
                        title="{{ f.path }}">{{ f.name }}</a>
                 </li>

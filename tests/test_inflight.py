@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import inflight
+import sessions as sessions_mod
 import resume
 import models
 
@@ -57,6 +58,8 @@ class FakeClient:
         return [{"name": b} for b in self._branches]
 
     def get_pulls(self, owner, name, state="open", **kw):
+        if state == "closed":
+            return getattr(self, "closed_pulls", [])
         assert state == "open"
         return self._pulls
 
@@ -145,6 +148,38 @@ class TestGather(unittest.TestCase):
         items = inflight.gather_repo_inflight(client, _repo(), NOW)
         self.assertEqual(len(items), 1)
         self.assertIsNone(items[0]["ahead_by"])
+        # Never reported as "0 commits, keep going" with no data behind it.
+        self.assertEqual(items[0]["kind"], "unknown")
+        self.assertIn("couldn't compare", items[0]["text"])
+
+    def test_squash_merged_branch_is_complete(self):
+        client = FakeClient(["main", "claude/sq"], [], {})
+        client.get_branches = lambda o, n: [{"name": "main"}, {"name": "claude/sq", "commit": {"sha": "h"}}]
+        client.closed_pulls = [dict(_pr(12, "claude/sq"), state="closed", merged_at="2026-10-20T00:00:00Z")]
+        items = inflight.gather_repo_inflight(client, _repo(), NOW)
+        self.assertEqual(items[0]["kind"], "complete")
+        self.assertIn("PR #12", items[0]["text"])
+        self.assertEqual(client.compare_calls, 0)
+        # New commits pushed after the merge: no longer counts as merged.
+        client.get_branches = lambda o, n: [{"name": "main"}, {"name": "claude/sq", "commit": {"sha": "newer"}}]
+        client._compares = {"claude/sq": {"ahead_by": 3, "behind_by": 0, "commits": []}}
+        self.assertNotEqual(inflight.gather_repo_inflight(client, _repo(), NOW)[0]["kind"], "complete")
+
+    def test_compare_cap_never_hides_pr_branches_and_is_reported(self):
+        names = [f"claude/a{n:02d}" for n in range(45)]
+        compares = {b: {"ahead_by": 1, "behind_by": 0, "commits": []} for b in names}
+        client = FakeClient(["main"] + names, [_pr(99, "claude/a44")], compares)
+        truncated = {}
+        items = inflight.gather_repo_inflight(client, _repo(), NOW, truncated)
+        self.assertIn("claude/a44", [i["branch"] for i in items])
+        self.assertEqual(len(items), sessions_mod.MAX_BRANCH_COMPARES + 1)
+        self.assertEqual(truncated, {"chris/demo": 45 - 1 - sessions_mod.MAX_BRANCH_COMPARES})
+
+    def test_one_commit_grammar(self):
+        kind, text = inflight.classify({"ahead_by": 1, "behind_by": 0, "commits": [],
+                                        "last_activity_at": "2026-10-24T00:00:00Z"}, NOW)
+        self.assertEqual(kind, "continue")
+        self.assertIn("1 commit isn't on main yet", text)
 
     def test_cross_repo_skips_tidy_repos_and_isolates_failures(self):
         good = FakeClient(["main", "f"], [], {"f": {"ahead_by": 1, "behind_by": 0,
@@ -169,6 +204,11 @@ class TestGather(unittest.TestCase):
         self.assertEqual(data["repos_checked"], 2)
         self.assertEqual(data["failed_repos"], ["chris/broken"])
         self.assertEqual(calls["n"], 2)  # tidy repo cost zero calls
+        # The scan records the default branch in branch_names: still tidy.
+        tidy_main = _repo(name="tidy2", non_default_branch_count=0, branch_names=["main"])
+        self.assertEqual(inflight.gather_inflight(client, [tidy_main], NOW)["repos_skipped"], 1)
+        # An old scan can't vouch for "no branches": read it anyway.
+        self.assertEqual(inflight.gather_inflight(client, [tidy_main], NOW, scan_fresh=False)["repos_skipped"], 0)
 
     def test_sort_puts_merge_first_then_newest(self):
         items = [
@@ -417,6 +457,8 @@ class TestRoutes(unittest.TestCase):
         exp = self.client.get("/inflight/export.md")
         self.assertEqual(exp.status_code, 200)
         self.assertIn(b"# Work in flight", exp.data)
+        self.assertIn(b"### demo", exp.data)
+        self.assertNotIn(b"### demo", self.client.get("/inflight/export.md?kind=stale").data)
 
     def test_inflight_refresh_not_connected(self):
         self._login()
@@ -484,7 +526,7 @@ class TestRoutes(unittest.TestCase):
     def test_resume_index_lists_repos_with_open_counts(self):
         self._login()
         self._scan()
-        models.save_inflight({"items": [{"repo": "demo", "kind": "merge"}], "gathered_at": "x"})
+        models.save_inflight({"items": [{"owner": "chris", "repo": "demo", "kind": "merge"}], "gathered_at": "x"})
         resp = self.client.get("/resume")
         self.assertEqual(resp.status_code, 200)
         self.assertIn(b"Resume a project", resp.data)
@@ -536,6 +578,12 @@ class TestRoutes(unittest.TestCase):
         self.assertIsNotNone(models.get_components())
         exp = self.client.get("/components/export.md")
         self.assertIn(b"# Component Inventory", exp.data)
+        # A later scan where GitHub doesn't answer keeps the last good result.
+        good = models.get_components()["detections"]["chris/demo"]
+        client.get_all_file_paths.side_effect = RuntimeError("HTTP 403 rate limit")
+        resp = self.client.post("/components/scan", follow_redirects=True)
+        self.assertIn(b"kept their last result", resp.data)
+        self.assertEqual(models.get_components()["detections"]["chris/demo"], good)
 
     # --- Cross-cutting -------------------------------------------------------
 
@@ -576,6 +624,10 @@ class TestRoutes(unittest.TestCase):
             self.assertIsNone(self.m._safe_next())
         with self.m.app.test_request_context("/login"):
             self.assertIsNone(self.m._safe_next())
+        # Browsers read these as //evil.com.
+        for bad in ("/\\evil.com", "/\\/evil.com", "/%09/evil.com", "/\t/evil.com", "/ /evil.com"):
+            with self.m.app.test_request_context("/login", method="POST", data={"next": bad.replace("%09", "\t")}):
+                self.assertIsNone(self.m._safe_next(), bad)
 
     def test_app_log_handler_installed_once(self):
         import logging
@@ -606,3 +658,31 @@ class TestDeleteBranchClient(unittest.TestCase):
         c.session.delete = MagicMock(return_value=MagicMock(status_code=401))
         with self.assertRaises(github_client.GitHubAuthError):
             c.delete_branch("o", "r", "x")
+
+
+class TestLocalOnlyGuard(unittest.TestCase):
+
+    def setUp(self):
+        import app as app_module
+        app_module.app.config["TESTING"] = True
+        self.client = app_module.app.test_client()
+
+    def test_foreign_host_rejected(self):
+        # DNS rebinding: attacker's name resolving to 127.0.0.1.
+        self.assertEqual(self.client.get("/login", headers={"Host": "rebind.evil.example:5001"}).status_code, 403)
+        self.assertEqual(self.client.get("/login", headers={"Host": "127.0.0.1:5001"}).status_code, 200)
+        self.assertEqual(self.client.get("/login", headers={"Host": "localhost:5001"}).status_code, 200)
+
+    def test_cross_origin_post_rejected(self):
+        resp = self.client.post("/login/reset", headers={"Host": "127.0.0.1:5001",
+                                                         "Origin": "http://127.0.0.1:8080"})
+        self.assertEqual(resp.status_code, 403)
+        resp = self.client.post("/login", headers={"Host": "127.0.0.1:5001",
+                                                   "Origin": "http://127.0.0.1:5001"}, data={})
+        self.assertNotEqual(resp.status_code, 403)
+
+    def test_repo_scope_exact(self):
+        import app as app_module
+        self.assertTrue(app_module._has_repo_scope("repo, read:org"))
+        self.assertFalse(app_module._has_repo_scope("public_repo, read:org"))
+        self.assertFalse(app_module._has_repo_scope(""))

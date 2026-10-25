@@ -46,7 +46,7 @@ brew install python@3.12
 
 **Port 5001 already in use** → `start.command` handles this automatically. If it doesn't:
 ```bash
-lsof -ti:5001 | xargs kill -9
+lsof -ti tcp:5001 -sTCP:LISTEN | xargs kill -9
 ```
 
 **`./start.command` permission denied** → Run `chmod +x start.command` once, then retry.

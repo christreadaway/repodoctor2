@@ -19,7 +19,7 @@
         </form>
         {% if cached and items %}
         <button type="button" class="btn btn-primary" id="copy-inflight-btn">COPY FOR CLAUDE</button>
-        <a href="{{ url_for('inflight_export') }}" class="btn btn-secondary">DOWNLOAD .MD</a>
+        <a href="{{ url_for('inflight_export', kind=kind or None, group=active_group or None) }}" class="btn btn-secondary">DOWNLOAD .MD</a>
         {% endif %}
         {% endif %}
     </div>
@@ -61,6 +61,7 @@
     {% if counts.finish %}<span class="briefing-stat briefing-stat-missing"><strong>{{ counts.finish }}</strong> to finish</span>{% endif %}
     {% if counts.continue %}<span class="briefing-stat"><strong>{{ counts.continue }}</strong> need a PR</span>{% endif %}
     {% if counts.stale %}<span class="briefing-stat briefing-stat-missing"><strong>{{ counts.stale }}</strong> stale</span>{% endif %}
+    {% if counts.unknown %}<span class="briefing-stat briefing-stat-missing"><strong>{{ counts.unknown }}</strong> couldn't be checked</span>{% endif %}
     {% if counts.complete %}<span class="briefing-stat briefing-stat-ok"><strong>{{ counts.complete }}</strong> merged (delete)</span>{% endif %}
 </div>
 
@@ -73,6 +74,13 @@
         {% endfor %}
     </div>
 </div>
+
+{% if cached.truncated_repos %}
+<div class="reconnect-banner"><span class="reconnect-banner-icon">⚠</span>
+    <span>Some repos have more than {{ max_compares }} branches without a PR, so not every one is listed:
+    {% for full, n in cached.truncated_repos.items() %}{{ full }} ({{ n }} not shown){% if not loop.last %}, {% endif %}{% endfor %}.
+    Branches with an open PR are always listed. Tidy up merged branches to see the rest.</span></div>
+{% endif %}
 
 {% if cached.failed_repos %}
 <div class="reconnect-banner"><span class="reconnect-banner-icon">⚠</span>
@@ -104,7 +112,7 @@
                 {{ category_badge(i.repo) }}
                 <span class="session-topic">{{ i.topic }}</span>
             </div>
-            <span class="chip next-{{ i.kind if i.kind != 'stale' else 'decide' }}" title="{{ i.text }}">{{ i.label }}</span>
+            <span class="chip next-{{ {'stale': 'decide', 'unknown': 'decide'}.get(i.kind, i.kind) }}" title="{{ i.text }}">{{ i.label }}</span>
         </div>
         <div class="session-meta">
             {% if i.branch_url %}<a href="{{ i.branch_url }}" target="_blank" rel="noopener" class="session-branch">{{ i.branch }}</a>{% else %}<span class="session-branch">{{ i.branch }}</span>{% endif %}

@@ -245,22 +245,9 @@
     }
     lines.push("```");
     var text = lines.join("\n");
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(text);
-    } else {
-      var ta = document.createElement("textarea");
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand("copy"); } catch (e) {}
-      document.body.removeChild(ta);
-    }
+    // Shared helper: reports COPY FAILED honestly instead of always "COPIED!".
     var btn = document.querySelector(".tracker-log-actions .btn");
-    if (btn) {
-      var orig = btn.textContent;
-      btn.textContent = "COPIED!";
-      setTimeout(function () { btn.textContent = orig; }, 1500);
-    }
+    window.copyToClipboard(text, btn);
   };
 
   // ---------- Generation loading overlay ----------
@@ -328,6 +315,11 @@
   });
 
   // ---------- Init ----------
+  // Apply the default chip filters ("Open") on load, not only on a click —
+  // otherwise dismissed rows show while the count says they're hidden.
+  applyNextFilters();
+  applyModuleFilters();
+
   // If URL has a hash like #row-N5, scroll there once the panel is correct.
   if (window.location.hash) {
     var id = window.location.hash.slice(1);

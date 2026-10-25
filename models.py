@@ -11,6 +11,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 
 from ai_analyzer import DEFAULT_MODEL, VALID_MODELS
 
@@ -30,10 +31,15 @@ def get_ai_model() -> str:
     model = get_preferences().get("ai_model", DEFAULT_MODEL)
     return model if model in VALID_MODELS else DEFAULT_MODEL
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
+# REPODOCTOR_HOME re-roots every on-disk location (data/, config/,
+# ~/.repodoctor). The test suite sets it (conftest.py) so a test run can never
+# write fake errors into the real debug log or touch real groups/credentials.
+_HOME_OVERRIDE = os.environ.get("REPODOCTOR_HOME")
+DATA_DIR = os.path.join(_HOME_OVERRIDE or os.path.dirname(__file__), "data")
+CONFIG_DIR = os.path.join(_HOME_OVERRIDE or os.path.dirname(__file__), "config")
 # User-scoped storage that survives wiping/re-cloning the project directory.
-USER_DATA_DIR = os.path.join(os.path.expanduser("~"), ".repodoctor")
+USER_DATA_DIR = (os.path.join(_HOME_OVERRIDE, "user") if _HOME_OVERRIDE
+                 else os.path.join(os.path.expanduser("~"), ".repodoctor"))
 
 
 def _ensure_dirs():
@@ -47,18 +53,29 @@ def _ensure_dirs():
 def _load_json(path: str) -> dict | list:
     if not os.path.exists(path):
         return {}
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        # Corrupted or unreadable file should not crash the app. Rename it
-        # aside so the user can inspect, and start fresh.
-        logger.warning("Could not load %s (%s); renaming to .corrupt and starting fresh", path, e)
+    for attempt in (1, 2):
         try:
-            os.rename(path, path + ".corrupt")
-        except OSError:
-            pass
-        return {}
+            with open(path, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            # Corrupted file should not crash the app. Rename it aside so the
+            # user can inspect, and start fresh.
+            logger.warning("Could not parse %s (%s); renaming to .corrupt and starting fresh", path, e)
+            try:
+                os.rename(path, path + ".corrupt")
+            except OSError:
+                pass
+            return {}
+        except OSError as e:
+            # A transient read error (Windows sharing violation while a writer
+            # os.replace()s, EMFILE) is NOT corruption: renaming the good file
+            # aside here meant the next save made the loss permanent. Retry
+            # once, then surface the error instead of discarding data.
+            if attempt == 2:
+                logger.error("Could not read %s: %s", path, e)
+                raise
+            time.sleep(0.05)
+    return {}
 
 
 def _atomic_write(path: str, write_fn, mode: str = "w"):
@@ -92,7 +109,13 @@ def _save_json(path: str, data):
 
 # --- Preferences ---
 
-PREFS_PATH = os.path.join(CONFIG_DIR, "preferences.json")
+# The app writes preferences.local.json (gitignored). config/preferences.json
+# is tracked in git, and the app used to rewrite it on every group switch:
+# that dirty tracked file made the launchers' `git pull origin main` refuse to
+# run the moment upstream touched it. It is now read once as the starting
+# point for an existing install and never written again.
+PREFS_PATH = os.path.join(CONFIG_DIR, "preferences.local.json")
+_LEGACY_PREFS_PATH = os.path.join(CONFIG_DIR, "preferences.json")
 
 DEFAULT_PREFS = {
     "local_root": "~/claudesync2",
@@ -108,7 +131,8 @@ DEFAULT_PREFS = {
 def get_preferences() -> dict:
     prefs = _load_json(PREFS_PATH)
     if not prefs:
-        prefs = DEFAULT_PREFS.copy()
+        legacy = _load_json(_LEGACY_PREFS_PATH) if PREFS_PATH != _LEGACY_PREFS_PATH else {}
+        prefs = {**DEFAULT_PREFS, **(legacy if isinstance(legacy, dict) else {})}
         _save_json(PREFS_PATH, prefs)
     for k, v in DEFAULT_PREFS.items():
         if k not in prefs:
@@ -428,19 +452,33 @@ def rename_group(old_name: str, new_name: str) -> bool:
         if new_name in groups:
             # Would silently overwrite a different group — refuse.
             return False
+        if old_name in CATEGORY_GROUPS:
+            # Categories are looked up by these exact names; renaming one
+            # silently empties every project's category.
+            return False
         groups[new_name] = groups.pop(old_name)
         save_groups(groups)
         prefs = get_preferences()
         if prefs.get("active_group") == old_name:
             prefs["active_group"] = new_name
             save_preferences(prefs)
+        # Program notes and the cached program brief are keyed by group name:
+        # carry them over so a rename doesn't orphan them.
+        meta = get_program_meta()
+        if old_name in meta and new_name not in meta:
+            meta[new_name] = meta.pop(old_name)
+            _save_json(PROGRAM_META_PATH, meta)
+        briefs = get_program_briefs()
+        if old_name in briefs and new_name not in briefs:
+            briefs[new_name] = briefs.pop(old_name)
+            _save_json(PROGRAM_BRIEFS_PATH, briefs)
         return True
 
 
 def delete_group(name: str) -> bool:
     with _STORE_LOCK:
         groups = get_groups()
-        if name not in groups:
+        if name not in groups or name in CATEGORY_GROUPS:
             return False
         groups.pop(name)
         save_groups(groups)

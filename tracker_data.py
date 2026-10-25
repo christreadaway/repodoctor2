@@ -171,7 +171,30 @@ def _check(errors: list[str], ok: bool, msg: str) -> None:
 
 
 def _ids_of(rows: Iterable[dict]) -> set[str]:
-    return {r.get("id", "") for r in rows if isinstance(r, dict)}
+    # String ids only: a list/dict id from the model is unhashable and would
+    # raise TypeError here (the bad id is reported by the ID-format check).
+    return {r.get("id") for r in rows
+            if isinstance(r, dict) and isinstance(r.get("id"), str)}
+
+
+def _ref_list(errors: list[str], row: dict, key: str, label: str) -> list[str]:
+    """A row's cross-reference list (related_ids / depends_on / blocks /
+    modules), reporting a non-list value or non-string entries as validation
+    errors instead of letting them raise TypeError on set membership — a
+    crash would bypass the generator's validation-retry loop entirely."""
+    v = row.get(key)
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        errors.append(f"{label}: {key} must be a list of IDs, got {type(v).__name__}")
+        return []
+    out = []
+    for ref in v:
+        if isinstance(ref, str):
+            out.append(ref)
+        else:
+            errors.append(f"{label}: {key} entry {ref!r:.60} is not a string ID")
+    return out
 
 
 def validate_tracker(tracker: dict) -> list[str]:
@@ -222,6 +245,8 @@ def validate_tracker(tracker: dict) -> list[str]:
             # bypassing the generator's retry loop.
             _check(errors, bool(ID_PATTERNS[prefix].match(rid if isinstance(rid, str) else "")),
                    f"{label}: bad ID '{rid}' (must match ^{prefix}\\d+$)")
+            if not isinstance(rid, str):
+                continue  # already reported above; unhashable for `seen`
             _check(errors, rid not in seen, f"{label}: duplicate ID '{rid}'")
             seen.add(rid)
 
@@ -250,7 +275,7 @@ def validate_tracker(tracker: dict) -> list[str]:
     for g in infra_gaps:
         _check(errors, g.get("priority") in PRIORITIES,
                f"infra_gap {g.get('id')}: priority '{g.get('priority')}' not in {PRIORITIES}")
-        for blocked in g.get("blocks", []) or []:
+        for blocked in _ref_list(errors, g, "blocks", f"infra_gap {g.get('id')}"):
             _check(errors, blocked in module_ids,
                    f"infra_gap {g.get('id')}: blocks '{blocked}' is not a real module ID")
 
@@ -262,7 +287,7 @@ def validate_tracker(tracker: dict) -> list[str]:
                f"feature {f.get('id')}: roll_priority '{f.get('roll_priority')}' not in {PRIORITIES}")
         _check(errors, f.get("status") in FEATURE_STATUSES,
                f"feature {f.get('id')}: status '{f.get('status')}' not in {FEATURE_STATUSES}")
-        for mid in f.get("modules", []) or []:
+        for mid in _ref_list(errors, f, "modules", f"feature {f.get('id')}"):
             _check(errors, mid in module_ids,
                    f"feature {f.get('id')}: modules '{mid}' is not a real module ID")
 
@@ -287,10 +312,10 @@ def validate_tracker(tracker: dict) -> list[str]:
         prompt_len = len(prompt.strip()) if isinstance(prompt, str) else 0
         _check(errors, isinstance(prompt, str) and prompt_len >= 50,
                f"next_action {n.get('id')}: prompt must be ≥50 chars (got {prompt_len})")
-        for rid in n.get("related_ids", []) or []:
+        for rid in _ref_list(errors, n, "related_ids", f"next_action {n.get('id')}"):
             _check(errors, rid in valid_any_id,
                    f"next_action {n.get('id')}: related_ids '{rid}' is not a real ID in this tracker")
-        for dep in n.get("depends_on", []) or []:
+        for dep in _ref_list(errors, n, "depends_on", f"next_action {n.get('id')}"):
             _check(errors, dep != n.get("id"),
                    f"next_action {n.get('id')}: depends_on cannot self-reference")
             # depends_on may reference any row type — e.g. an N can depend on
@@ -312,7 +337,7 @@ def validate_tracker(tracker: dict) -> list[str]:
                f"recent_change '{c.get('title', '')}': bad date '{date}' (must be YYYY-MM-DD)")
         _check(errors, c.get("kind") in CHANGE_KINDS,
                f"recent_change '{c.get('title', '')}': kind '{c.get('kind')}' not in {CHANGE_KINDS}")
-        for rid in c.get("related_ids", []) or []:
+        for rid in _ref_list(errors, c, "related_ids", f"recent_change '{c.get('title', '')}'"):
             _check(errors, rid in valid_any_id,
                    f"recent_change '{c.get('title', '')}': related_ids '{rid}' is not a real ID in this tracker")
 
@@ -336,9 +361,10 @@ def _no_cycles(next_actions: list[dict]) -> bool:
     graph: dict[str, list[str]] = {}
     for n in next_actions:
         nid = n.get("id")
-        if not nid:
-            continue
-        graph[nid] = list(n.get("depends_on") or [])
+        if not nid or not isinstance(nid, str):
+            continue  # non-string ids are reported by validate_tracker
+        deps = n.get("depends_on")
+        graph[nid] = [d for d in deps if isinstance(d, str)] if isinstance(deps, list) else []
 
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {nid: WHITE for nid in graph}

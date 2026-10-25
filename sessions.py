@@ -40,7 +40,15 @@ logger = logging.getLogger(__name__)
 try:
     from zoneinfo import ZoneInfo
     _LOCAL_TZ = ZoneInfo("America/Chicago")  # the owner is in Austin
-except Exception:  # pragma: no cover - zoneinfo always present on 3.9+
+except Exception as _tz_err:  # pragma: no cover - needs tzdata on Windows
+    # zoneinfo itself is stdlib, but Windows has no system tz database; the
+    # `tzdata` package (requirements.txt) supplies it. Without it every day
+    # window silently becomes a UTC day — say so loudly in the log.
+    logger.warning(
+        "America/Chicago timezone unavailable (%s: %s) — Yesterday/Next Up "
+        "day windows will use UTC. Install tzdata: pip install tzdata",
+        type(_tz_err).__name__, _tz_err,
+    )
     _LOCAL_TZ = None
 
 # --- Tuning knobs -----------------------------------------------------------
@@ -123,7 +131,7 @@ def resolve_window(args) -> Window:
             # Build the label without %-d / %e — %-d raises ValueError on Windows.
             label = f"{start.strftime('%A, %b')} {start.day}, {start.year}"
             return Window(start, end, label, f"date:{explicit}", "date")
-        except ValueError:
+        except (ValueError, OverflowError):  # ?date=9999-12-31 overflows +1 day
             logger.warning("bad date arg %r; falling back to yesterday", explicit)
 
     preset = (args.get("range") or "yesterday").strip().lower()
@@ -286,9 +294,26 @@ def classify_next(session: dict) -> tuple[str, str]:
 # Gathering
 # ----------------------------------------------------------------------
 
-def _repo_touched_since(repo: dict, since: datetime.datetime) -> bool:
+def _repo_touched_since(repo: dict, since: datetime.datetime,
+                        until: datetime.datetime | None = None,
+                        scanned_at: str | datetime.datetime | None = None) -> bool:
     """Cheap prune using the cached scan's pushed_at — a repo not pushed since
-    the window opened cannot have commits inside it."""
+    the window opened cannot have commits inside it.
+
+    The pushed_at values come from a scan SNAPSHOT (often restored from disk),
+    so they only prove "no push in the window" when that snapshot was taken
+    at or after the window closed. If the scan is older than the window end,
+    or the scan time is unknown, the repo is never pruned (a stale snapshot
+    would otherwise silently drop repos with real in-window commits)."""
+    if until is None or scanned_at is None:
+        return True  # can't prove the snapshot covers the window — keep it
+    scanned = scanned_at if isinstance(scanned_at, datetime.datetime) else _parse_ts(str(scanned_at))
+    if scanned is None:
+        return True
+    if scanned.tzinfo is None:
+        scanned = scanned.replace(tzinfo=datetime.timezone.utc)
+    if scanned < until:
+        return True  # snapshot predates the window end — pushed_at may be stale
     pushed = _parse_ts(last_push_ts(repo))
     if pushed is None:
         return True  # unknown — don't rule it out
@@ -337,6 +362,8 @@ def _pr_view(pr: dict) -> dict:
         "state": pr.get("state"),
         "merged": bool(pr.get("merged_at")),
         "merged_at": pr.get("merged_at") or "",
+        "closed_at": pr.get("closed_at") or "",
+        "merge_commit_sha": pr.get("merge_commit_sha") or "",
         "created_at": pr.get("created_at") or "",
         "updated_at": pr.get("updated_at") or "",
         "html_url": pr.get("html_url", ""),
@@ -387,16 +414,34 @@ def _session_from_branch(client, repo: dict, branch: str, window: Window) -> dic
                           comp.get("ahead_by", 0), comp.get("behind_by", 0))
 
 
+_PR_REF_SUFFIX_RE = re.compile(r"\(#(\d+)\)\s*$")
+
+
+def _is_pr_landing_commit(commit: dict, covered_prs: set[int]) -> bool:
+    """True when a default-branch commit is a squash/rebase landing of a PR
+    already shown as its own session — GitHub titles those "<title> (#N)"."""
+    m = _PR_REF_SUFFIX_RE.search(commit.get("summary") or "")
+    return bool(m) and int(m.group(1)) in covered_prs
+
+
 def _session_from_default(client, repo: dict, window: Window,
-                          covered_shas: set[str]) -> dict | None:
+                          covered_shas: set[str],
+                          covered_prs: set[int] | None = None) -> dict | None:
     """Direct-to-default commits in the window not already attributed to a PR
-    branch and not merge commits — i.e. work pushed straight to main."""
+    branch and not merge commits — i.e. work pushed straight to main.
+
+    covered_shas should include each covered PR's merge_commit_sha (the squash
+    or rebase result lands on main with a NEW sha); covered_prs holds the
+    covered PR numbers so a "... (#N)" squash title is excluded even when the
+    merge sha wasn't reported."""
     owner, name = repo["owner"], repo["name"]
     default = repo.get("default_branch", "main")
     raw = client.get_commits_since(owner, name, window.since_iso, ref=default,
                                    until_iso=window.until_iso)
+    covered_prs = covered_prs or set()
     commits = [c for c in _commits_in_window(raw, window, drop_merges=True)
-               if c["sha"] not in covered_shas]
+               if c["sha"] not in covered_shas
+               and not _is_pr_landing_commit(c, covered_prs)]
     if not commits:
         return None
     return _build_session(repo, default, True, commits, window, None, 0, 0)
@@ -415,6 +460,7 @@ def _gather_repo_sessions(client, repo: dict, window: Window) -> list[dict]:
     out: list[dict] = []
     covered_branches: set[str] = set()
     covered_shas: set[str] = set()
+    covered_prs: set[int] = set()
 
     for pr_raw in pulls:
         # Sorted newest-updated first: once a PR hasn't been touched since the
@@ -426,6 +472,11 @@ def _gather_repo_sessions(client, repo: dict, window: Window) -> list[dict]:
             out.append(sess)
             covered_branches.add(sess["branch"])
             covered_shas.update(c["sha"] for c in sess["commits"])
+            pr = sess.get("pr") or {}
+            if pr.get("merge_commit_sha"):
+                covered_shas.add(pr["merge_commit_sha"])
+            if isinstance(pr.get("number"), int):
+                covered_prs.add(pr["number"])
 
     # Bare branches (no PR) with in-window commits — the "in progress, never
     # opened a PR yet" case, which is exactly "where I left off".
@@ -447,23 +498,30 @@ def _gather_repo_sessions(client, repo: dict, window: Window) -> list[dict]:
             out.append(sess)
             covered_shas.update(c["sha"] for c in sess["commits"])
 
-    direct = _session_from_default(client, repo, window, covered_shas)
+    direct = _session_from_default(client, repo, window, covered_shas, covered_prs)
     if direct:
         out.append(direct)
 
     return out
 
 
-def gather_sessions(client, repos: list[dict], window: Window) -> list[dict]:
+def gather_sessions(client, repos: list[dict], window: Window,
+                    scanned_at: str | datetime.datetime | None = None) -> list[dict]:
     """All sessions across all repos in the window, newest activity first.
 
     A repo-level failure (a single bad branch/PR fetch) is logged and skipped
     so one broken repo never blanks the whole page. GitHub auth errors
     propagate so the app's global handler can show the re-auth remedy.
+
+    scanned_at is the scan snapshot's timestamp (the scan's "scanned_at").
+    Repos are pruned by their pushed_at only when it's given and the scan was
+    taken at/after the window end; otherwise every repo is checked live.
     """
     sessions: list[dict] = []
+    pruned = 0
     for repo in repos:
-        if not _repo_touched_since(repo, window.since):
+        if not _repo_touched_since(repo, window.since, window.until, scanned_at):
+            pruned += 1
             continue
         try:
             sessions.extend(_gather_repo_sessions(client, repo, window))
@@ -472,6 +530,9 @@ def gather_sessions(client, repos: list[dict], window: Window) -> list[dict]:
         except Exception as e:  # noqa: BLE001 - never let one repo blank the page
             logger.warning("session gather failed for %s/%s: %s",
                            repo.get("owner"), repo.get("name"), e)
+    if pruned:
+        logger.info("session gather pruned %d/%d repos not pushed in window %s",
+                    pruned, len(repos), window.key)
     sessions.sort(key=lambda s: s.get("last_activity_at") or "", reverse=True)
     return sessions
 
@@ -482,7 +543,14 @@ def gather_one_session(client, repo: dict, branch: str, window: Window) -> dict 
     owner, name = repo["owner"], repo["name"]
     default = repo.get("default_branch", "main")
     if branch == default:
-        return _session_from_default(client, repo, window, set())
+        # Re-run the full repo gather so the default-branch session excludes
+        # exactly what the page excluded (PR commits, squash/rebase landings,
+        # bare-branch commits). A bare set() here would give a different
+        # last_sha than the page and the recap would read stale forever.
+        for sess in _gather_repo_sessions(client, repo, window):
+            if sess.get("is_default"):
+                return sess
+        return None
 
     # Prefer the PR view if one exists for this head (richer state).
     pulls = client.get_pulls(owner, name, state="all", sort="updated",
@@ -582,12 +650,10 @@ def normalize_recap(raw: dict) -> dict:
 
 def summarize_session(api_key: str, session: dict, model: str = DEFAULT_MODEL) -> dict:
     """Generate one session's plain-English recap. Returns normalized dict +
-    _usage. A refusal/unparseable response degrades to an empty recap rather
-    than raising (mirrors briefing.generate_brief)."""
+    _usage. A refusal/unparseable response raises ValueError (logged here) so
+    the route keeps any existing good recap instead of saving an empty one
+    stamped with the current _source_sha (which would then read as fresh)."""
     client = anthropic.Anthropic(api_key=api_key)
-    # Structured outputs guarantee schema-valid JSON; a refusal or repeated
-    # truncation raises ValueError. Degrade to an empty recap instead of
-    # failing the whole generation, but log why.
     try:
         parsed, usage = request_json(
             client,
@@ -600,8 +666,7 @@ def summarize_session(api_key: str, session: dict, model: str = DEFAULT_MODEL) -
     except ValueError as e:
         logger.warning("session recap generation failed for %s/%s: %s",
                        session.get("repo", "?"), session.get("branch", "?"), e)
-        parsed = {}
-        usage = {"input_tokens": 0, "output_tokens": 0, "model": model}
+        raise
     recap = normalize_recap(parsed)
     recap["_usage"] = usage
     return recap

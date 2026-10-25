@@ -39,10 +39,10 @@ if [ ! -d "venv" ]; then
 fi
 source venv/bin/activate
 
-# Install dependencies until they succeed once (stamp file). Gating on the
-# venv dir alone meant a failed first-run pip install was never retried —
-# every later launch died with ModuleNotFoundError and no guidance.
-if [ ! -f "venv/.deps-installed" ]; then
+# Install dependencies until they succeed (stamp file), and again whenever
+# requirements.txt is newer than the stamp — the launcher pulls main on every
+# run, so a newly added package must get installed or the app won't start.
+if [ ! -f "venv/.deps-installed" ] || [ requirements.txt -nt venv/.deps-installed ]; then
     echo "Installing dependencies..."
     if pip install -r requirements.txt; then
         touch venv/.deps-installed
@@ -56,10 +56,11 @@ if [ ! -f "venv/.deps-installed" ]; then
     fi
 fi
 
-# Kill any existing instance on port 5001
-if lsof -ti:5001 > /dev/null 2>&1; then
+# Kill any existing instance on port 5001. LISTEN only: plain `lsof -ti:5001`
+# also matches the browser's open connections to the app and would kill it.
+if lsof -ti tcp:5001 -sTCP:LISTEN > /dev/null 2>&1; then
     echo "Stopping existing RepoDoctor instance..."
-    lsof -ti:5001 | xargs kill 2>/dev/null
+    lsof -ti tcp:5001 -sTCP:LISTEN | xargs kill 2>/dev/null
     sleep 1
 fi
 

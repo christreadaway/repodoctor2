@@ -3862,12 +3862,14 @@ kbd {
 
 .tracker-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
 }
 
 .tracker-gen-form {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.45rem;
 }
@@ -4665,6 +4667,8 @@ button.tracker-stat-jump:focus {
 
 .tracker-debug {
   display: grid;
+  /* minmax(0, 1fr): a long log line must scroll inside its box, not widen the page. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-lg);
 }
 
@@ -4701,7 +4705,7 @@ button.tracker-stat-jump:focus {
   line-height: 1.5;
   color: var(--text-primary);
   max-height: 400px;
-  overflow-y: auto;
+  overflow: auto;
   white-space: pre;
   margin-top: 0.5rem;
 }
@@ -4843,6 +4847,7 @@ button.tracker-stat-jump:focus {
 /* --- Responsive --- */
 
 @media (max-width: 800px) {
+  .tracker-pick { min-width: 0; }
   .tracker-toolbar { flex-direction: column; align-items: stretch; }
   .tracker-actions { justify-content: flex-start; }
   .tracker-recent-item { grid-template-columns: 1fr; }
@@ -5803,3 +5808,13 @@ a.session-branch:hover { border-color: var(--tk-cyan-fg); }
   overflow: auto;
 }
 .debug-log-actions { display: flex; gap: var(--space-sm); margin-top: var(--space-sm); }
+
+/* Author display rules (.selector-row{display:flex}, .resume-pick{display:block})
+   override the browser's [hidden] rule, so JS filters that set .hidden left
+   rows on screen. Make [hidden] always win. */
+[hidden] { display: none !important; }
+
+/* Long unbroken repo names (100 chars is legal on GitHub) must wrap inside
+   their card instead of stretching it past the viewport. */
+.project-name, .resume-pick-name, .session-repo, .session-branch, .project-card h3 { overflow-wrap: anywhere; min-width: 0; }
+.project-card, .resume-pick { min-width: 0; }

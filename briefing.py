@@ -192,8 +192,9 @@ def generate_brief(
         "Write the chat briefing JSON now. Return ONLY the JSON object."
     )
     # Structured outputs guarantee schema-valid JSON; a refusal or repeated
-    # truncation raises ValueError. Degrade to a normalized empty brief
-    # instead of failing the whole generation, but log why.
+    # truncation raises ValueError. Log it and RE-RAISE: returning an empty
+    # brief here would be saved by the route with a fresh _generated_at,
+    # overwriting a good brief and then counting as "fresh" forever.
     try:
         parsed, usage = request_json(
             client,
@@ -205,8 +206,7 @@ def generate_brief(
         )
     except ValueError as e:
         logger.warning("brief generation failed for %s: %s", repo_name, e)
-        parsed = {}
-        usage = {"input_tokens": 0, "output_tokens": 0, "model": model}
+        raise
     brief = normalize_brief(parsed)
     brief["_usage"] = usage
     return brief
@@ -297,11 +297,11 @@ def open_tracker_actions(tracker: dict | None) -> list[dict]:
         out.append({
             "id": n.get("id", ""),
             "title": n.get("title", ""),
-            "priority": n.get("priority", "—"),
+            "priority": n.get("priority") if isinstance(n.get("priority"), str) else "—",
             "status": n.get("status", "todo"),
             "status_note": n.get("status_note", ""),
         })
-    out.sort(key=lambda a: (_PRIORITY_ORDER.get(a["priority"], 5), a["id"]))
+    out.sort(key=lambda a: (_PRIORITY_ORDER.get(a["priority"], 5), str(a.get("id") or "")))
     return out
 
 

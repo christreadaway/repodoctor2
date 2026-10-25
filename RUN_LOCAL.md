@@ -61,8 +61,8 @@ If `winget` reports Python or Git already installed, that's fine — keep going.
 
 **Port 5001 already in use** → Both launch scripts free the port automatically. If one doesn't:
 
-- Mac: `lsof -ti:5001 | xargs kill -9`
-- Windows: `Get-NetTCPConnection -LocalPort 5001 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }`
+- Mac: `lsof -ti tcp:5001 -sTCP:LISTEN | xargs kill -9` (the `-sTCP:LISTEN` part matters: without it this also kills your browser)
+- Windows: `Get-NetTCPConnection -LocalPort 5001 -State Listen | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }`
 
 **`./start.command` permission denied (Mac)** → Run `chmod +x start.command` once, then retry.
 

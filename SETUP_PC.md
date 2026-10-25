@@ -64,7 +64,7 @@ When you double-click **RepoDoctor** on your desktop, a PowerShell window opens,
 
 **Port 5001 already in use** → `start.ps1` handles this automatically. If it doesn't, run:
 ```powershell
-Get-NetTCPConnection -LocalPort 5001 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }
+Get-NetTCPConnection -LocalPort 5001 -State Listen | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }
 ```
 
 **GitHub asks for a password** → Use a Personal Access Token from https://github.com/settings/tokens (scope: `repo`).

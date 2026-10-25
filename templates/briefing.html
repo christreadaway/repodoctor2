@@ -142,9 +142,9 @@
                 Pushed {{ p.last_push }} · docs {{ p.files_present }}/{{ p.files_total }}
                 {%- if p.brief_generated_at %} · brief {{ p.brief_generated_at[:10] }}{% endif %}
             </span>
-            <button type="button" class="btn btn-secondary btn-sm briefing-copy-section" data-target="section-md-{{ p.name }}">COPY SECTION</button>
+            <button type="button" class="btn btn-secondary btn-sm briefing-copy-section" data-target="section-md-{{ loop.index }}">COPY SECTION</button>
         </div>
-        <textarea id="section-md-{{ p.name }}" hidden readonly>{{ sections_md[p.name] }}</textarea>
+        <textarea id="section-md-{{ loop.index }}" hidden readonly>{{ sections_md[p.name] }}</textarea>
     </div>
     {% endfor %}
 </div>

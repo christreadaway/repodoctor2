@@ -12,6 +12,8 @@ env/
 
 # Config (contains encrypted credentials)
 config/credentials.enc
+# Preferences the app writes (config/preferences.json is the tracked seed)
+config/preferences.local.json
 
 # User-specific project groups (legacy path; current location is ~/.repodoctor/groups.json)
 config/groups.json
@@ -28,6 +30,7 @@ data/session_recaps.json
 data/inflight.json
 data/resume_history.json
 data/components.json
+data/program_briefs.json
 data/*.json.corrupt
 data/specs/
 data/trackers/

@@ -13,6 +13,8 @@ from __future__ import annotations
 import logging
 import os
 
+from github_client import GitHubAuthError
+
 logger = logging.getLogger(__name__)
 
 MD_EXTS = (".md", ".markdown")
@@ -68,9 +70,13 @@ def _sort_key(entry: dict):
 
 def list_md_files(client, owner: str, name: str, ref: str | None = None) -> list[dict]:
     """Every Markdown file in the repo at `ref`, vendor dirs excluded, sorted
-    root-first. Returns [] on any tree-fetch failure (logged)."""
+    root-first. Returns [] on a transient tree-fetch failure (logged); a GitHub
+    auth failure propagates so the app's handler shows the re-auth remedy
+    instead of a misleading "no Markdown files"."""
     try:
-        paths = client.get_all_file_paths(owner, name, ref=ref)
+        paths = client.get_all_file_paths(owner, name, ref=ref) or []
+    except GitHubAuthError:
+        raise
     except Exception as e:  # noqa: BLE001 - a bad tree fetch shouldn't 500 the page
         logger.warning("docs: tree fetch failed for %s/%s@%s: %s", owner, name, ref, e)
         return []

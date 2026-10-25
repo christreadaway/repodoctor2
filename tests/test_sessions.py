@@ -250,7 +250,11 @@ class TestGather(unittest.TestCase):
     def test_prune_repo_not_pushed_since(self):
         client = self._client()
         old = _repo(pushed_at="2026-07-01T00:00:00Z")
-        out = sessions.gather_sessions(client, [old], self.w)
+        # Pruning on pushed_at is only safe when the scan snapshot was taken
+        # at/after the window closed (see test_session21_fixes for the stale
+        # snapshot case).
+        out = sessions.gather_sessions(client, [old], self.w,
+                                       scanned_at="2026-07-29T06:00:00Z")
         self.assertEqual(out, [])
         client.get_branches.assert_not_called()
 

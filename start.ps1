@@ -63,7 +63,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Free port 5001 if something's already on it
-$existing = Get-NetTCPConnection -LocalPort 5001 -ErrorAction SilentlyContinue
+$existing = Get-NetTCPConnection -LocalPort 5001 -State Listen -ErrorAction SilentlyContinue
 if ($existing) {
     Write-Host "Stopping existing instance on port 5001..." -ForegroundColor Yellow
     $existing | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object {
