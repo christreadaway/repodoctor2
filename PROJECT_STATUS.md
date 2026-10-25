@@ -1,14 +1,27 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-08-21 (Session 19 — Repo Selector: pick repos, 3-sentence blurbs, copy/paste; org repos now scanned)
-**Current Branch:** `main` (Session 19 work landed directly on `main`; also on `claude/repo-selector-summaries-gck5md`)
+**Last Updated:** 2026-10-25 (Session 20 — In Flight, Resume packets, Components inventory, app-wide log, usability fixes)
+**Current Branch:** `claude/confident-wright-gfnscy` (not yet merged — open a PR and merge on GitHub)
 **Overall Progress:** ~97%
 
 ---
 
 ## Snapshot
 
-RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch counts, required-spec-file presence, code size, AI-generated project summaries, named groups for filtering, a Stats view with Commits / Code Size bar charts across time periods (aggregatable by group), an aggregated What's Next view, a per-repo Codebase Tracker, a Chat Briefing screen that composes a single portfolio document for pasting into a Claude chat session, a **Yesterday** screen that reconstructs what you were doing across every repo (broken out by session, with a where-you-left-off call), a **Docs Explorer** for reading each repo's Markdown files in the browser, and a **Repo Selector** for ticking any repos (personal, private, public, and organization repos) and copying a clean three-sentence summary sheet into another document. **Runs locally as a Flask app — this is the supported way to use it.** A Node.js/Netlify serverless port still lives in `netlify/` for reference, but the hosted deployment was decommissioned on 2026-07-23.
+RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch counts, required-spec-file presence, code size, AI-generated project summaries, named groups for filtering, a Stats view with Commits / Code Size bar charts across time periods (aggregatable by group), an aggregated What's Next view, a per-repo Codebase Tracker, a Chat Briefing screen that composes a single portfolio document for pasting into a Claude chat session, a **Yesterday** screen that reconstructs what you were doing across every repo (broken out by session, with a where-you-left-off call), a **Docs Explorer** for reading each repo's Markdown files in the browser, a **Repo Selector** for ticking any repos (personal, private, public, and organization repos) and copying a clean three-sentence summary sheet into another document, an **In Flight** view of every unmerged branch and open PR across all repos, a **Resume** packet per project for context switching, and a **Components** inventory of reusable infrastructure across repos. **Runs locally as a Flask app — this is the supported way to use it.** A Node.js/Netlify serverless port still lives in `netlify/` for reference, but the hosted deployment was decommissioned on 2026-07-23.
+
+---
+
+## Latest — Session 20 (2026-10-25)
+
+Came back after two months. Verified the state (327 tests green, branch equal to `main`), then built the three things the coming weeks need. Nav stays at ten tabs: the three "pick back up" screens share the **Next Up** tab via a sub-nav. See `SESSION_NOTES.md` for the full log.
+
+- **In Flight (`/inflight`, Next Up → In flight).** Every unmerged branch and open PR across every repo, regardless of age — the live list of coding you've kicked off that isn't finished. Deterministic status per branch: READY TO MERGE / FINISH IT / NEEDS PR / STALE / MERGED (delete). Cached in `data/inflight.json` (REFRESH regathers; tidy repos cost zero API calls), group + status filters, COPY FOR CLAUDE / DOWNLOAD .MD, each card links to the repo's Resume packet. Logged to `data/logs/inflight.log`.
+- **Resume (`/resume`, Next Up → Resume a project).** Pick a project, get one page + one paste with: what it is, stage, open branches, last 14 days of sessions, top of PROJECT_STATUS.md, latest SESSION_NOTES.md entry, open tracker actions, planned next steps, and a suggested first prompt for Claude Code. Live from GitHub, zero AI cost. Picker shows open-branch counts and "recently resumed". Logged to `data/logs/resume.log`.
+- **Components (`/components`, new tab).** Path-based detection of 20 reusable capabilities across 9 buckets (your list: marketing/GTM, design, BI/data viz, testing, security, Claude docs, communications, APIs, platform/ops) in every repo — best extraction source with evidence, who else has it, gaps, suggested extraction order. Companion doc: `COMPONENTIZATION_PLAN.md` (recommended architecture: Claude Code plugin for knowledge/process components, packages for runnable code, a thin template repo; first three to extract: Claude docs management, logging, testing).
+- **App-wide log.** Everything Python logs now also goes to `data/logs/app.log` (rotating, 2 MB × 3). Settings → Debug log shows the tail with COPY FOR CLAUDE CODE.
+- **Usability fixes.** Reconnect banner now links to the login page with a return-to-this-page `?next=` (no logout, scan data kept); stale-scan banner with RE-SCAN NOW once the scan is 2+ days old; mobile nav no longer stacks the tabs in a column beside the logo; `btn-outline` finally has a style (app.js emitted it with no CSS rule).
+- **Tests: 395 passing** (was 327: +28 components, +40 inflight/resume/logging/routes). Every screen rendered in Chromium at desktop and phone widths with fixture data — no console errors, no horizontal scroll.
 
 ---
 

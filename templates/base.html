@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Fira+Code:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
 </head>
 <body>
     <div class="scanlines"></div>
@@ -23,9 +24,10 @@
                 <a href="{{ url_for('projects') }}" class="nav-link {% if request.endpoint == 'projects' %}active{% endif %}">Projects</a>
                 <a href="{{ url_for('repo_selector') }}" class="nav-link {% if request.endpoint == 'repo_selector' %}active{% endif %}">Selector</a>
                 <a href="{{ url_for('stats') }}" class="nav-link {% if request.endpoint == 'stats' %}active{% endif %}">Stats</a>
-                <a href="{{ url_for('yesterday_view') }}" class="nav-link {% if request.endpoint in ['yesterday_view', 'whats_next_all'] %}active{% endif %}">Next Up</a>
+                <a href="{{ url_for('yesterday_view') }}" class="nav-link {% if request.endpoint in ['yesterday_view', 'whats_next_all', 'inflight_view', 'resume_index', 'resume_view'] %}active{% endif %}">Next Up</a>
                 <a href="{{ url_for('briefing_view') }}" class="nav-link {% if request.endpoint in ['briefing_view', 'program_view'] %}active{% endif %}">Briefing</a>
                 <a href="{{ url_for('docs_index') }}" class="nav-link {% if request.endpoint == 'docs_index' %}active{% endif %}">Docs</a>
+                <a href="{{ url_for('components_view') }}" class="nav-link {% if request.endpoint in ['components_view'] %}active{% endif %}">Components</a>
                 <a href="{{ url_for('tracker_index') }}" class="nav-link {% if request.endpoint in ['tracker_index', 'tracker_view', 'tracker_debug'] %}active{% endif %}">Tracker</a>
                 <a href="{{ url_for('settings') }}" class="nav-link {% if request.endpoint in ['settings', 'mac_setup'] %}active{% endif %}">Settings</a>
             </div>
@@ -44,7 +46,15 @@
         {% if session.get('authenticated') and not github_connected %}
         <div class="reconnect-banner">
             <span class="reconnect-banner-icon">⚠</span>
-            <span>The app restarted, so it lost your GitHub connection. Scanning and AI generation (summaries, briefs, blurbs) won't work until you <a href="{{ url_for('logout') }}">log out and back in</a>.</span>
+            <span>The app restarted, so it lost your GitHub connection. Scanning, In Flight, Resume, and AI generation won't work until you <a href="{{ url_for('login', next=request.full_path.rstrip('?')) }}">enter your password to reconnect</a> (your scan data is kept).</span>
+        </div>
+        {% elif session.get('authenticated') and scan_age_days is not none and scan_age_days >= 2 and request.endpoint != 'dashboard' %}
+        <div class="stale-scan-banner">
+            <span class="reconnect-banner-icon">◷</span>
+            <span>Your repo scan is {{ scan_age_days }} days old — new repos and branch counts won't show until you re-scan.</span>
+            <form method="POST" action="{{ url_for('scan') }}" class="inline-form">
+                <button type="submit" class="btn btn-sm btn-outline" data-loading-text="SCANNING…">RE-SCAN NOW</button>
+            </form>
         </div>
         {% endif %}
         {% with messages = get_flashed_messages(with_categories=true) %}

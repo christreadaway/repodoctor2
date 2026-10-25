@@ -25,6 +25,9 @@ data/selector_blurbs.json
 data/henry_summaries.json
 data/briefs.json
 data/session_recaps.json
+data/inflight.json
+data/resume_history.json
+data/components.json
 data/*.json.corrupt
 data/specs/
 data/trackers/

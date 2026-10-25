@@ -786,3 +786,89 @@ class SessionCost:
             "total_cost": round(self.total_cost, 4),
             "analyses_count": self.analyses_count,
         }
+
+
+# --- In Flight (open branches / PRs across repos) -------------------------
+# Cached so the page opens instantly; REFRESH regathers from GitHub.
+INFLIGHT_PATH = os.path.join(DATA_DIR, "inflight.json")
+INFLIGHT_LOG_PATH = os.path.join(DATA_DIR, "logs", "inflight.log")
+
+
+def get_inflight() -> dict | None:
+    data = _load_json(INFLIGHT_PATH)
+    return data if isinstance(data, dict) and data.get("items") is not None else None
+
+
+def save_inflight(data: dict):
+    _save_json(INFLIGHT_PATH, data)
+
+
+def log_inflight_event(event: str, **fields):
+    _append_log_event(INFLIGHT_LOG_PATH, event, fields)
+
+
+def tail_inflight_log(n: int = 100) -> list[dict]:
+    return _tail_log(INFLIGHT_LOG_PATH, n)
+
+
+# --- Resume (context-switch packets) --------------------------------------
+# Remembers when each project was last resumed so the picker can say "you
+# last opened this 3 days ago" — the whole point is not having to remember.
+RESUME_HISTORY_PATH = os.path.join(DATA_DIR, "resume_history.json")
+RESUME_LOG_PATH = os.path.join(DATA_DIR, "logs", "resume.log")
+
+
+def get_resume_history() -> dict:
+    data = _load_json(RESUME_HISTORY_PATH)
+    return data if isinstance(data, dict) else {}
+
+
+def record_resume(full_name: str):
+    with _STORE_LOCK:
+        hist = get_resume_history()
+        entry = hist.get(full_name) or {"count": 0}
+        entry["count"] = int(entry.get("count", 0)) + 1
+        entry["last_resumed_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        hist[full_name] = entry
+        _save_json(RESUME_HISTORY_PATH, hist)
+
+
+def log_resume_event(event: str, **fields):
+    _append_log_event(RESUME_LOG_PATH, event, fields)
+
+
+# --- App-wide log (everything Python logs, plus request lines) ------------
+APP_LOG_PATH = os.path.join(DATA_DIR, "logs", "app.log")
+
+
+def tail_app_log(n: int = 200) -> list[str]:
+    """Last n lines of the plain-text app log (empty list if none yet)."""
+    try:
+        with open(APP_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    return [ln.rstrip("\n") for ln in lines[-n:]]
+
+
+# --- Components inventory (reusable-infrastructure detection per repo) -----
+COMPONENTS_PATH = os.path.join(DATA_DIR, "components.json")
+COMPONENTS_LOG_PATH = os.path.join(DATA_DIR, "logs", "components.log")
+
+
+def get_components() -> dict | None:
+    """{"scanned_at": iso, "detections": {full_name: detection}} or None."""
+    data = _load_json(COMPONENTS_PATH)
+    return data if isinstance(data, dict) and isinstance(data.get("detections"), dict) else None
+
+
+def save_components(data: dict):
+    _save_json(COMPONENTS_PATH, data)
+
+
+def log_components_event(event: str, **fields):
+    _append_log_event(COMPONENTS_LOG_PATH, event, fields)
+
+
+def tail_components_log(n: int = 100) -> list[dict]:
+    return _tail_log(COMPONENTS_LOG_PATH, n)

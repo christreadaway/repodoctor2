@@ -1,0 +1,209 @@
+/* ================================================================
+   RepoDoctor — Components Inventory
+   Layered on style.css: reuses the terminal tokens (--bg-card, --border,
+   --tk-* chip palette) and the session-card / chip / briefing-stat
+   primitives. Everything here is prefixed `comp-`.
+   ================================================================ */
+
+.comp-scan-form { display: inline; }
+
+.comp-stats { margin-top: 4px; }
+
+/* --- Bucket sections --- */
+
+.comp-group { margin: 28px 0 8px; }
+
+.comp-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--green-100);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+  margin-bottom: 14px;
+}
+
+.comp-group-count {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--tk-slate-bg);
+  border: 1px solid var(--tk-slate-bd);
+  border-radius: 4px;
+  padding: 1px 7px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.comp-empty,
+.comp-gap-note {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin: 8px 0 0;
+}
+
+/* --- Capability cards --- */
+
+.comp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px;
+}
+
+.comp-card { min-width: 0; }
+.comp-card-found { border-left-color: var(--tk-green-bd); }
+.comp-card-gap   { border-left-color: var(--tk-red-bd); opacity: 0.85; }
+
+.comp-cap-label {
+  font-weight: 700;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.comp-cap-desc {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin: 6px 0 0;
+}
+
+.comp-chip-count {
+  background: var(--tk-green-bg);
+  color: var(--tk-green-fg);
+  border-color: var(--tk-green-bd);
+}
+
+/* Best source block */
+
+.comp-best { margin-top: 12px; }
+
+.comp-best-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.comp-hits {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--tk-amber-fg);
+  background: var(--tk-amber-bg);
+  border: 1px solid var(--tk-amber-bd);
+  border-radius: 4px;
+  padding: 1px 7px;
+}
+
+.comp-evidence { margin-top: 8px; font-size: 0.78rem; }
+
+.comp-evidence summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.comp-evidence summary:hover { color: var(--green-100); }
+
+.comp-evidence-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.comp-evidence-list code {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--tk-cyan-fg, var(--cyan-100));
+  word-break: break-all;
+}
+
+/* Other repos as chips */
+
+.comp-others { margin-top: 12px; }
+
+.comp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+a.comp-chip-repo {
+  background: var(--tk-slate-bg);
+  color: var(--text-primary);
+  border-color: var(--tk-slate-bd);
+  text-decoration: none;
+  font-weight: 500;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+a.comp-chip-repo:hover {
+  color: var(--green-100);
+  border-color: var(--green-80);
+  text-decoration: none;
+}
+
+.comp-chip-hits {
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+/* --- Extraction order --- */
+
+.comp-order { margin-top: 36px; }
+
+.comp-order-list {
+  margin: 10px 0 0 1.4rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.comp-order-list li {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+
+.comp-order-list li::marker {
+  color: var(--green-100);
+  font-weight: 700;
+}
+
+.comp-order-label {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.comp-order-meta { color: var(--text-secondary); font-size: 0.78rem; }
+
+.comp-order-src { color: var(--text-secondary); font-size: 0.78rem; }
+
+.comp-order-src code {
+  font-family: var(--font-mono);
+  color: var(--tk-cyan-fg, var(--cyan-100));
+}
+
+/* --- Responsive --- */
+
+@media (max-width: 640px) {
+  .comp-grid { grid-template-columns: 1fr; }
+  .comp-order-list li { flex-direction: column; gap: 4px; }
+}

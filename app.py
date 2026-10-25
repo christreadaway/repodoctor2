@@ -38,6 +38,9 @@ import tracker_data
 import tracker_generator
 import briefing
 import sessions
+import inflight
+import resume
+import components
 import docs_explorer
 import md_render
 import program
@@ -71,6 +74,32 @@ def _load_or_create_secret_key() -> str:
         )
     return key
 
+
+def _configure_file_logging() -> None:
+    """Send everything Python logs (every module's logger, Werkzeug's request
+    lines, unhandled exceptions Flask reports) to a rotating file at
+    data/logs/app.log, in addition to the console. One place to look — and to
+    copy from Settings → Debug log — when something goes wrong. Idempotent."""
+    root = logging.getLogger()
+    if any(getattr(h, "_repodoctor_app_log", False) for h in root.handlers):
+        return
+    try:
+        from logging.handlers import RotatingFileHandler
+        os.makedirs(os.path.dirname(models.APP_LOG_PATH), exist_ok=True)
+        handler = RotatingFileHandler(models.APP_LOG_PATH, maxBytes=2_000_000,
+                                      backupCount=3, encoding="utf-8")
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        handler.setLevel(logging.INFO)
+        handler._repodoctor_app_log = True  # type: ignore[attr-defined]
+        root.addHandler(handler)
+        if root.level > logging.INFO or root.level == logging.NOTSET:
+            root.setLevel(logging.INFO)
+    except OSError as e:  # never let logging setup take the app down
+        logger.warning("Could not open app log file: %s", e)
+
+
+_configure_file_logging()
 
 app = Flask(__name__)
 app.secret_key = _load_or_create_secret_key()
@@ -203,7 +232,22 @@ def inject_preferences():
         # badges, plus the fixed list for the Categorize dropdowns.
         "repo_categories": models.get_repo_categories(),
         "category_groups": models.CATEGORY_GROUPS,
+        # Age of the cached scan in whole days (None when there is no scan),
+        # so base.html can nudge a re-scan once it's a couple of days old.
+        "scan_age_days": _scan_age_days(),
     }
+
+
+def _scan_age_days() -> int | None:
+    if not _scan_results or not _scan_results.get("scanned_at"):
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(str(_scan_results["scanned_at"]).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return max(0, (datetime.datetime.now(datetime.timezone.utc) - dt).days)
 
 
 def _require_auth(f):
@@ -260,6 +304,15 @@ def _get_credentials() -> dict | None:
 
 # --- Auth Routes ---
 
+def _safe_next() -> str | None:
+    """A same-site relative path from ?next= (or the form), else None. Rejects
+    anything that could redirect off-site ('//evil', 'http://...')."""
+    target = (request.form.get("next") or request.args.get("next") or "").strip()
+    if target.startswith("/") and not target.startswith("//") and "://" not in target:
+        return target.rstrip("?")
+    return None
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     has_creds = security.credentials_exist()
@@ -305,7 +358,7 @@ def login():
 
             _init_session(creds, user_info)
             session["authenticated"] = True
-            return redirect(url_for("dashboard"))
+            return redirect(_safe_next() or url_for("dashboard"))
         else:
             github_pat = request.form.get("github_pat", "").strip()
             anthropic_key = request.form.get("anthropic_key", "").strip()
@@ -622,6 +675,8 @@ def settings():
         preferences=prefs,
         specs=specs,
         session_cost=_session_cost.to_dict(),
+        app_log_tail=models.tail_app_log(150),
+        app_log_path=models.APP_LOG_PATH,
     )
 
 
@@ -1576,6 +1631,274 @@ def yesterday_summarize_one(token):
 # first); one content call fetches the selected file, rendered to SAFE HTML by
 # the dependency-free md_render (every line escaped before markup, link schemes
 # checked). A ?raw=1 toggle shows the source instead.
+
+# --- In Flight: every unmerged branch / open PR across repos -----------------
+# Window-independent counterpart to Next Up: "what have I kicked off that is
+# still running or waiting on me?" Cached in data/inflight.json so the page
+# opens instantly; REFRESH regathers. Logged to data/logs/inflight.log.
+
+_INFLIGHT_KINDS = [("", "All"), ("merge", "Ready to merge"), ("finish", "Finish it"),
+                   ("continue", "Needs PR"), ("stale", "Stale"), ("complete", "Merged")]
+
+
+def _inflight_scope():
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups)
+    all_repos = _yesterday_repos()
+    scoped = _filter_by_group(all_repos, active_group, groups)
+    return groups, active_group, all_repos, scoped
+
+
+@app.route("/inflight")
+@_require_auth
+def inflight_view():
+    groups, active_group, all_repos, scoped = _inflight_scope()
+    kind = request.args.get("kind", "")
+    if kind not in {k for k, _ in _INFLIGHT_KINDS}:
+        kind = ""
+    if not _scan_results:
+        return render_template("inflight.html", scan_results=None, groups=groups,
+                               active_group=active_group, all_repos_count=0,
+                               kinds=_INFLIGHT_KINDS, kind=kind)
+
+    cached = models.get_inflight()
+    items_all = (cached or {}).get("items") or []
+    scoped_names = {r["name"] for r in scoped}
+    items_scoped = inflight.filter_items(items_all, repos=scoped_names)
+    items = inflight.filter_items(items_scoped, kind=kind or None)
+    counts = inflight.summarize_counts(items_scoped)
+    markdown = inflight.compose_markdown(items, session.get("github_user", ""),
+                                         (cached or {}).get("gathered_at", "")) if cached else ""
+    return render_template(
+        "inflight.html",
+        scan_results=_scan_results,
+        github_connected=_get_github_client() is not None,
+        cached=cached,
+        items=items,
+        counts=counts,
+        markdown=markdown,
+        kinds=_INFLIGHT_KINDS,
+        kind=kind,
+        groups=groups,
+        active_group=active_group,
+        all_repos_count=len(all_repos),
+        gathered_age_days=inflight.age_days((cached or {}).get("gathered_at", "")) if cached else None,
+    )
+
+
+@app.route("/inflight/refresh", methods=["POST"])
+@_require_auth
+def inflight_refresh():
+    client = _get_github_client()
+    if not _scan_results:
+        flash("No scan data yet — run a scan first.", "error")
+        return redirect(url_for("inflight_view"))
+    if not client:
+        flash(NOT_CONNECTED_REMEDY, "error")
+        return redirect(url_for("inflight_view"))
+    t0 = time.monotonic()
+    # Always gather the whole portfolio so the cache is complete; the view
+    # scopes to the active group afterwards.
+    data = inflight.gather_inflight(client, _yesterday_repos())
+    models.save_inflight(data)
+    counts = inflight.summarize_counts(data["items"])
+    models.log_inflight_event(
+        "refresh", items=counts["total"], repos=counts["repos"],
+        repos_checked=data["repos_checked"], repos_skipped=data["repos_skipped"],
+        failed=data["failed_repos"], elapsed_ms=int((time.monotonic() - t0) * 1000),
+    )
+    msg = (f"In flight refreshed: {counts['total']} unmerged branch"
+           f"{'es' if counts['total'] != 1 else ''} across {counts['repos']} repo"
+           f"{'s' if counts['repos'] != 1 else ''}.")
+    if data["failed_repos"]:
+        msg += f" Couldn't read {len(data['failed_repos'])} repo(s): {', '.join(data['failed_repos'][:5])}."
+    flash(msg, "success" if not data["failed_repos"] else "error")
+    return redirect(url_for("inflight_view"))
+
+
+@app.route("/inflight/export.md")
+@_require_auth
+def inflight_export():
+    cached = models.get_inflight()
+    if not cached:
+        flash("Nothing cached yet — click REFRESH first.", "error")
+        return redirect(url_for("inflight_view"))
+    groups, active_group, _, scoped = _inflight_scope()
+    items = inflight.filter_items(cached["items"], repos={r["name"] for r in scoped})
+    markdown = inflight.compose_markdown(items, session.get("github_user", ""),
+                                         cached.get("gathered_at", ""))
+    return Response(markdown, mimetype="text/markdown; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="work-in-flight.md"'})
+
+
+# --- Resume: a context-switch packet for one project ---------------------------
+# Deterministic, zero AI cost: composes everything RepoDoctor knows about one
+# repo (open work, recent sessions, docs excerpts, tracker actions, planned
+# steps) into a page + paste-ready Markdown. Logged to data/logs/resume.log.
+
+@app.route("/resume")
+@_require_auth
+def resume_index():
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups)
+    if not _scan_results:
+        return render_template("resume.html", scan_results=None, groups=groups,
+                               active_group=active_group, all_repos_count=0, repos=[])
+    all_repos = sorted(_yesterday_repos(), key=lambda r: briefing.last_push_ts(r) or "", reverse=True)
+    scoped = _filter_by_group(all_repos, active_group, groups)
+    history = models.get_resume_history()
+    inflight_cache = models.get_inflight() or {}
+    open_by_repo: dict[str, int] = {}
+    for i in inflight_cache.get("items") or []:
+        if i.get("kind") != "complete":
+            open_by_repo[i["repo"]] = open_by_repo.get(i["repo"], 0) + 1
+    repos = []
+    for r in scoped:
+        full = r.get("full_name", f"{r['owner']}/{r['name']}")
+        h = history.get(full) or {}
+        repos.append({**r, "full_name": full, "open_count": open_by_repo.get(r["name"], 0),
+                      "last_resumed_at": h.get("last_resumed_at", ""),
+                      "resume_count": h.get("count", 0)})
+    recent = sorted([r for r in repos if r["last_resumed_at"]],
+                    key=lambda r: r["last_resumed_at"], reverse=True)[:6]
+    return render_template("resume.html", scan_results=_scan_results, repos=repos,
+                           recent=recent, groups=groups, active_group=active_group,
+                           all_repos_count=len(all_repos), packet=None)
+
+
+def _build_resume_packet(owner: str, name: str):
+    """Shared by the page and the export. Returns (packet, error_redirect)."""
+    client = _get_github_client()
+    repo = next((r for r in _yesterday_repos() if r["owner"] == owner and r["name"] == name), None)
+    if not repo:
+        flash("Repo not found in the last scan — run a scan first.", "error")
+        return None, redirect(url_for("resume_index"))
+    if not client:
+        flash(NOT_CONNECTED_REMEDY, "error")
+        return None, redirect(url_for("resume_index"))
+    t0 = time.monotonic()
+    packet = resume.build_packet(
+        client, repo,
+        summary=models.get_project_summaries().get(name),
+        brief=models.get_briefs().get(name),
+        blurb=models.get_selector_blurbs().get(f"{owner}/{name}"),
+        tracker=models.get_tracker(owner, name),
+        groups=models.get_groups(),
+        categories=models.get_repo_categories(),
+        history=models.get_resume_history(),
+    )
+    models.log_resume_event(
+        "build", repo=f"{owner}/{name}", inflight=len(packet["inflight"]),
+        sessions=len(packet["recent_sessions"]), errors=packet["errors"],
+        elapsed_ms=int((time.monotonic() - t0) * 1000),
+    )
+    return packet, None
+
+
+@app.route("/resume/<owner>/<name>")
+@_require_auth
+def resume_view(owner, name):
+    packet, bounce = _build_resume_packet(owner, name)
+    if bounce:
+        return bounce
+    models.record_resume(f"{owner}/{name}")
+    groups = models.get_groups()
+    return render_template(
+        "resume.html",
+        scan_results=_scan_results,
+        packet=packet,
+        markdown=resume.compose_markdown(packet, session.get("github_user", "")),
+        groups=groups,
+        active_group=_resolve_active_group(groups, persist=False),
+        all_repos_count=len(_yesterday_repos()),
+        repos=[],
+    )
+
+
+@app.route("/resume/<owner>/<name>/export.md")
+@_require_auth
+def resume_export(owner, name):
+    packet, bounce = _build_resume_packet(owner, name)
+    if bounce:
+        return bounce
+    markdown = resume.compose_markdown(packet, session.get("github_user", ""))
+    return Response(markdown, mimetype="text/markdown; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="resume-{name}.md"'})
+
+
+
+# --- Components: reusable-infrastructure inventory across repos ---------------
+# Step one of componentizing: which repo has which capability (auth, logging,
+# email/SMS, testing, Claude docs, deployment, ...) and which is the best
+# extraction source. Path-based detection (one tree call per repo), cached in
+# data/components.json, logged to data/logs/components.log.
+
+@app.route("/components")
+@_require_auth
+def components_view():
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups)
+    if not _scan_results:
+        return render_template("components.html", scan_results=None, inventory=None,
+                               markdown="", all_repos_count=0, groups=groups,
+                               active_group=active_group, components_meta={})
+    all_repos = _yesterday_repos()
+    scoped = _filter_by_group(all_repos, active_group, groups)
+    cached = models.get_components()
+    inv = markdown = None
+    if cached:
+        inv = components.inventory(scoped, cached.get("detections") or {})
+        markdown = components.compose_markdown(inv)
+    return render_template(
+        "components.html", scan_results=_scan_results, inventory=inv, markdown=markdown or "",
+        all_repos_count=len(all_repos), groups=groups, active_group=active_group,
+        components_meta={"scanned_at": (cached or {}).get("scanned_at", "")},
+        github_connected=_get_github_client() is not None,
+    )
+
+
+@app.route("/components/scan", methods=["POST"])
+@_require_auth
+def components_scan():
+    client = _get_github_client()
+    if not _scan_results:
+        flash("No scan data yet — run a scan first.", "error")
+        return redirect(url_for("components_view"))
+    if not client:
+        flash(NOT_CONNECTED_REMEDY, "error")
+        return redirect(url_for("components_view"))
+    t0 = time.monotonic()
+    detections = {}
+    for r in _yesterday_repos():  # whole portfolio so the cache is complete
+        full = r.get("full_name", f"{r['owner']}/{r['name']}")
+        detections[full] = components.scan_repo_components(client, r)
+    data = {"scanned_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "detections": detections}
+    models.save_components(data)
+    inv = components.inventory(_yesterday_repos(), detections)
+    models.log_components_event(
+        "scan", repos=len(detections), capabilities_found=inv.get("capabilities_found"),
+        gaps=len(inv.get("gaps") or []), elapsed_ms=int((time.monotonic() - t0) * 1000),
+    )
+    flash(f"Components scanned: {len(detections)} repos, "
+          f"{inv.get('capabilities_found', 0)} capabilities found.", "success")
+    return redirect(url_for("components_view"))
+
+
+@app.route("/components/export.md")
+@_require_auth
+def components_export():
+    cached = models.get_components()
+    if not cached or not _scan_results:
+        flash("Nothing to export yet — run a components scan first.", "error")
+        return redirect(url_for("components_view"))
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups, persist=False)
+    scoped = _filter_by_group(_yesterday_repos(), active_group, groups)
+    markdown = components.compose_markdown(components.inventory(scoped, cached["detections"]))
+    return Response(markdown, mimetype="text/markdown; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="component-inventory.md"'})
+
 
 @app.route("/docs")
 @_require_auth

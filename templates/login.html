@@ -11,7 +11,7 @@
         {% if has_credentials %}
         <h2>Enter Password</h2>
         <p class="text-secondary">Your credentials are encrypted. Enter your password to unlock.</p>
-        <form method="POST" action="{{ url_for('login') }}">
+        <form method="POST" action="{{ url_for('login', next=request.args.get('next') or None) }}">
             <div class="form-group">
                 <label for="password">Password</label>
                 <input type="password" id="password" name="password" required autofocus
@@ -32,7 +32,7 @@
         {% else %}
         <h2>First-Time Setup</h2>
         <p class="text-secondary">Enter your API keys and choose a password to encrypt them.</p>
-        <form method="POST" action="{{ url_for('login') }}">
+        <form method="POST" action="{{ url_for('login', next=request.args.get('next') or None) }}">
             <div class="form-group">
                 <label for="github_pat">GitHub Personal Access Token</label>
                 <input type="password" id="github_pat" name="github_pat" required

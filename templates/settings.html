@@ -100,6 +100,17 @@
         </ul>
     </div>
 
+    <!-- Debug log -->
+    <div class="settings-card settings-card-wide">
+        <h2>Debug log</h2>
+        <p class="text-secondary">Everything the app logs (requests, warnings, errors) goes to <code>data/logs/app.log</code>, rotated at 2 MB. The last {{ app_log_tail|length }} lines are below. Hit a bug? Click COPY FOR CLAUDE CODE and paste it into your next session. Per-feature event logs (one JSON line per event) live beside it: tracker, briefing, sessions, summaries, selector, inflight, resume, components.</p>
+        <textarea id="app-log-tail" class="debug-log" rows="12" readonly spellcheck="false">{% if app_log_tail %}{{ app_log_tail|join('\n') }}{% else %}(no log lines yet){% endif %}</textarea>
+        <div class="debug-log-actions">
+            <button type="button" class="btn btn-secondary btn-sm" id="copy-app-log">COPY FOR CLAUDE CODE</button>
+            <a href="{{ url_for('settings') }}" class="btn btn-outline btn-sm">REFRESH</a>
+        </div>
+    </div>
+
     <!-- Credentials -->
     <div class="settings-card">
         <h2>Credentials</h2>
@@ -121,4 +132,13 @@
         </form>
     </div>
 </div>
+<script>
+(function () {
+  var btn = document.getElementById("copy-app-log");
+  var ta = document.getElementById("app-log-tail");
+  if (btn && ta) btn.addEventListener("click", function () {
+    copyToClipboard("Here is the tail of RepoDoctor's data/logs/app.log:\n\n```\n" + ta.value + "\n```", btn);
+  });
+})();
+</script>
 {% endblock %}

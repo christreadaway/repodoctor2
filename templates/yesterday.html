@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import category_badge with context %}
+{% from "_macros.html" import category_badge, next_up_subnav with context %}
 {% block title %}RepoDoctor — Next Up{% endblock %}
 {% block content %}
 <div class="page-header">
@@ -19,6 +19,8 @@
     </div>
 </div>
 
+{{ next_up_subnav('sessions') }}
+
 {% if not scan_results %}
 <div class="onboarding">
     <div class="onboarding-welcome">
@@ -30,7 +32,7 @@
 <div class="onboarding">
     <div class="onboarding-welcome">
         <h2>Not connected to GitHub.</h2>
-        <p>Yesterday reads live activity from GitHub, and the app has restarted since you logged in. <a href="{{ url_for('logout') }}">Log out</a> and back in, then reload.</p>
+        <p>Next Up reads live activity from GitHub, and the app has restarted since you logged in. <a href="{{ url_for('login', next=request.path) }}">Enter your password to reconnect</a>, and you'll land right back here.</p>
     </div>
 </div>
 {% else %}

@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% from "_macros.html" import category_badge, group_filter_bar with context %}
+{% block title %}RepoDoctor — Components{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Components</h1>
+    <div class="page-actions">
+        {% if scan_results %}
+        <form method="post" action="{{ url_for('components_scan') }}" class="comp-scan-form">
+            <button type="submit" class="btn btn-primary">{% if inventory %}RESCAN COMPONENTS{% else %}SCAN COMPONENTS{% endif %}</button>
+        </form>
+        {% endif %}
+        {% if inventory %}
+        <button type="button" class="btn btn-secondary" id="copy-components-btn">COPY FOR CLAUDE</button>
+        <a href="{{ url_for('components_export') }}" class="btn btn-secondary">DOWNLOAD .MD</a>
+        {% endif %}
+    </div>
+</div>
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first, then come back to inventory the reusable pieces across your repos.</p>
+    </div>
+</div>
+
+{% elif not inventory %}
+{{ group_filter_bar('components_view', all_repos_count) }}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>Find the reusable parts of your repos.</h2>
+        <p>A components scan reads the file tree of every repo in your latest scan (one GitHub call per repo, no file contents)
+        and looks for path evidence of shared infrastructure: auth, logging, email and SMS, payments, testing, deployment config,
+        Claude docs, design tokens, charts, and more. The result is a map of <strong>which repo has which capability</strong> and
+        <strong>which one is the best source to extract from</strong>.</p>
+    </div>
+    <div class="onboarding-steps">
+        <div class="onboarding-step">
+            <div class="step-number">1</div>
+            <div class="step-content">
+                <h3>Scan</h3>
+                <p>Fetches each repo's file list and matches it against ~20 capability patterns. Vendor folders are skipped.</p>
+            </div>
+        </div>
+        <div class="onboarding-step">
+            <div class="step-number">2</div>
+            <div class="step-content">
+                <h3>Pick the best source</h3>
+                <p>For every capability, the repo with the most matching files (most recently pushed wins ties) is flagged as the extraction source.</p>
+            </div>
+        </div>
+        <div class="onboarding-step">
+            <div class="step-number">3</div>
+            <div class="step-content">
+                <h3>Hand it to Claude</h3>
+                <p>Copy the inventory as Markdown and start the extraction work with a full picture of where everything lives.</p>
+            </div>
+        </div>
+    </div>
+    <div class="onboarding-action">
+        <form method="post" action="{{ url_for('components_scan') }}">
+            <button type="submit" class="btn btn-primary btn-large">SCAN COMPONENTS</button>
+        </form>
+        <p>Evidence is path-based only. A repo that uses a library without a telltale filename will not register a hit.</p>
+    </div>
+</div>
+
+{% else %}
+{{ group_filter_bar('components_view', all_repos_count) }}
+
+<p class="projects-hint">
+    Which repo has which reusable capability, grouped into your component buckets. Each card names the
+    <strong>best source</strong> to extract from (most matching files, most recently pushed on ties), then every other
+    repo that has it. <em>Evidence is file-path based: no file contents were read.</em>
+    {% if components_meta and components_meta.scanned_at %}Scanned {{ components_meta.scanned_at|central_time }}.{% endif %}
+</p>
+
+<div class="briefing-stats comp-stats">
+    <span class="briefing-stat"><strong>{{ inventory.repos_scanned }}</strong> repo{% if inventory.repos_scanned != 1 %}s{% endif %} scanned</span>
+    <span class="briefing-stat briefing-stat-ok"><strong>{{ inventory.capabilities_found }}</strong> capabilit{% if inventory.capabilities_found == 1 %}y{% else %}ies{% endif %} found</span>
+    <span class="briefing-stat {% if inventory.gaps %}briefing-stat-warn{% endif %}"><strong>{{ inventory.gaps|length }}</strong> gap{% if inventory.gaps|length != 1 %}s{% endif %}</span>
+</div>
+
+<textarea id="components-markdown" hidden readonly>{{ markdown }}</textarea>
+
+{% for group in inventory.groups %}
+<section class="comp-group">
+    <h2 class="comp-group-title">{{ group.name }}
+        <span class="comp-group-count">{{ group.capabilities|selectattr('repo_count', 'gt', 0)|list|length }}/{{ group.capabilities|length }}</span>
+    </h2>
+    {% if not group.capabilities %}
+    <p class="comp-empty">No capabilities defined in this bucket yet.</p>
+    {% else %}
+    <div class="comp-grid">
+        {% for cap in group.capabilities %}
+        <div class="session-card comp-card {% if cap.best_source %}comp-card-found{% else %}comp-card-gap{% endif %}" id="cap-{{ cap.key }}">
+            <div class="session-card-header">
+                <div class="session-title">
+                    <span class="comp-cap-label">{{ cap.label }}</span>
+                </div>
+                {% if cap.best_source %}
+                <span class="chip comp-chip-count" title="Repos with path evidence of this capability">{{ cap.repo_count }} repo{% if cap.repo_count != 1 %}s{% endif %}</span>
+                {% else %}
+                <span class="chip chip-missing">GAP</span>
+                {% endif %}
+            </div>
+            <p class="comp-cap-desc">{{ cap.description }}</p>
+
+            {% if cap.best_source %}
+            {% set best = cap.best_source %}
+            <div class="comp-best">
+                <div class="session-section-label">Best source</div>
+                <div class="comp-best-row">
+                    <a href="{{ url_for('repo_detail', owner=best.owner, name=best.name) }}" class="session-repo">{{ best.name }}</a>
+                    {{ category_badge(best.name) }}
+                    <span class="comp-hits">{{ best.hits }} hit{% if best.hits != 1 %}s{% endif %}</span>
+                    {% if best.pushed_at %}<span class="session-when">pushed {{ best.pushed_at|central_time }}</span>{% endif %}
+                </div>
+                {% if best.evidence %}
+                <details class="comp-evidence">
+                    <summary>Evidence ({{ best.evidence|length }}{% if best.hits > best.evidence|length %} of {{ best.hits }}{% endif %})</summary>
+                    <ul class="comp-evidence-list">
+                        {% for p in best.evidence %}<li><code>{{ p }}</code></li>{% endfor %}
+                    </ul>
+                </details>
+                {% endif %}
+            </div>
+            {% if cap.others %}
+            <div class="comp-others">
+                <div class="session-section-label">Also in</div>
+                <div class="comp-chips">
+                    {% for o in cap.others %}
+                    <a href="{{ url_for('repo_detail', owner=o.owner, name=o.name) }}" class="chip comp-chip-repo" title="{{ o.hits }} hit{% if o.hits != 1 %}s{% endif %}{% if o.evidence %}: {{ o.evidence|join(', ') }}{% endif %}">
+                        {{ o.name }} <span class="comp-chip-hits">{{ o.hits }}</span>
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            {% else %}
+            <p class="comp-gap-note">No repo has path evidence of this yet. If you build it once, this is where it will show up.</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</section>
+{% endfor %}
+
+<section class="comp-group comp-order">
+    <h2 class="comp-group-title">Suggested extraction order</h2>
+    <p class="projects-hint">Score = repos that have it × spread (fraction of all repos). The most duplicated, most battle-tested capabilities come out first.</p>
+    {% if inventory.extraction_order %}
+    <ol class="comp-order-list">
+        {% for r in inventory.extraction_order %}
+        <li>
+            <a href="#cap-{{ r.key }}" class="comp-order-label">{{ r.label }}</a>
+            <span class="comp-order-meta">{{ r.repo_count }} repo{% if r.repo_count != 1 %}s{% endif %} · {{ (r.spread * 100)|round|int }}% spread · score {{ r.score }}</span>
+            {% if r.best_source %}<span class="comp-order-src">start from <code>{{ r.best_source }}</code></span>{% endif %}
+        </li>
+        {% endfor %}
+    </ol>
+    {% else %}
+    <p class="comp-empty">Nothing to extract yet.</p>
+    {% endif %}
+</section>
+
+<script>
+(function () {
+    var copyBtn = document.getElementById('copy-components-btn');
+    var source = document.getElementById('components-markdown');
+    if (copyBtn && source) {
+        copyBtn.addEventListener('click', function () {
+            window.copyToClipboard(source.value, copyBtn);
+        });
+    }
+})();
+</script>
+{% endif %}
+{% endblock %}

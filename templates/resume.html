@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% from "_macros.html" import category_badge, group_filter_bar, next_up_subnav with context %}
+{% block title %}RepoDoctor — {% if packet %}Resume {{ packet.repo.name }}{% else %}Resume a project{% endif %}{% endblock %}
+{% block content %}
+
+{% if packet %}
+{# ======================= ONE PROJECT'S PACKET ======================= #}
+<div class="page-header">
+    <div class="page-header-title">
+        <div class="breadcrumb">
+            <a href="{{ url_for('resume_index') }}" class="breadcrumb-link">&larr; Resume a project</a>
+            <span class="breadcrumb-sep">/</span>
+            <span class="breadcrumb-current">{{ packet.repo.name }}</span>
+        </div>
+        <h1>Resume: {{ packet.repo.name }} {{ category_badge(packet.repo.name) }}</h1>
+        <p class="page-subtitle last-scanned">Built {{ packet.built_at | central_time }} · zero AI cost
+            {% if packet.history.last_resumed_at %} · you last opened this {{ packet.history.last_resumed_at | central_time }}{% endif %}</p>
+    </div>
+    <div class="page-actions">
+        <button type="button" class="btn btn-primary" id="copy-resume-btn">COPY FOR CLAUDE CODE</button>
+        <a href="{{ url_for('resume_export', owner=packet.repo.owner, name=packet.repo.name) }}" class="btn btn-secondary">DOWNLOAD .MD</a>
+        <a href="{{ packet.repo.html_url }}" target="_blank" rel="noopener" class="btn btn-secondary">GITHUB</a>
+    </div>
+</div>
+
+{{ next_up_subnav('resume') }}
+
+<textarea id="resume-markdown" hidden readonly>{{ markdown }}</textarea>
+
+{% if packet.errors %}
+<div class="reconnect-banner"><span class="reconnect-banner-icon">⚠</span>
+    <span>Some sections couldn't be read from GitHub: {{ packet.errors|join(' · ') }}. The packet below is still usable; details in <code>data/logs/resume.log</code>.</span></div>
+{% endif %}
+
+<div class="resume-first-prompt">
+    <div class="session-section-label session-label-next">Suggested first prompt for Claude Code</div>
+    <pre class="resume-prompt-text" id="resume-first-prompt">{{ packet.first_prompt }}</pre>
+    <button type="button" class="btn btn-sm btn-outline" id="copy-prompt-btn">COPY PROMPT</button>
+</div>
+
+<div class="resume-grid">
+    <div class="resume-col">
+        <div class="settings-card resume-card">
+            <h2>Where you left off</h2>
+            {% set what = (packet.brief.what_it_is if packet.brief else '') or (packet.summary.what_it_does if packet.summary else '') or packet.blurb %}
+            {% if what %}<p class="resume-what">{{ what }}</p>{% endif %}
+            <ul class="resume-facts">
+                {% if packet.brief and packet.brief.stage %}<li><span>Stage</span><strong>{{ packet.brief.stage }}</strong></li>{% endif %}
+                {% if packet.last_push %}<li><span>Last push</span><strong>{{ packet.last_push | central_time }}</strong></li>{% endif %}
+                {% if packet.groups %}<li><span>Groups</span><strong>{{ packet.groups|join(', ') }}</strong></li>{% endif %}
+                {% if packet.languages %}<li><span>Languages</span><strong>{{ packet.languages|join(', ') }}</strong></li>{% endif %}
+                <li><span>Docs</span><strong>{{ packet.docs_present|length }}/{{ (packet.docs_present|length) + (packet.docs_missing|length) }}{% if packet.docs_missing %} <em class="resume-missing">missing {{ packet.docs_missing|join(', ') }}</em>{% endif %}</strong></li>
+            </ul>
+            {% if packet.brief and packet.brief.where_we_are %}
+            <div class="session-section"><div class="session-section-label">AI brief: where we are</div>
+                <p class="session-section-text">{{ packet.brief.where_we_are }}</p></div>
+            {% endif %}
+        </div>
+
+        <div class="settings-card resume-card">
+            <h2>Work in flight <span class="group-count">{{ packet.inflight|length }}</span></h2>
+            {% if packet.inflight %}
+            <div class="sessions-list">
+                {% for i in packet.inflight %}
+                <div class="session-card inflight-card inflight-{{ i.kind }}">
+                    <div class="session-card-header">
+                        <div class="session-title"><span class="session-topic">{{ i.topic }}</span></div>
+                        <span class="chip next-{{ i.kind if i.kind != 'stale' else 'decide' }}">{{ i.label }}</span>
+                    </div>
+                    <div class="session-meta">
+                        {% if i.branch_url %}<a href="{{ i.branch_url }}" target="_blank" rel="noopener" class="session-branch">{{ i.branch }}</a>{% else %}<span class="session-branch">{{ i.branch }}</span>{% endif %}
+                        {% if i.pr %}<a href="{{ i.pr.html_url }}" target="_blank" rel="noopener" class="session-pr session-pr-open">PR #{{ i.pr.number }}{% if i.pr.draft %} · draft{% endif %}</a>{% endif %}
+                        {% if i.ahead_by is not none %}<span class="session-count">+{{ i.ahead_by }} / &minus;{{ i.behind_by }}</span>{% endif %}
+                        {% if i.age_days is not none %}<span class="session-when {% if i.age_days >= 14 %}inflight-old{% endif %}">{{ i.age_days }}d old</span>{% endif %}
+                    </div>
+                    <p class="session-section-text">{{ i.text }}</p>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-secondary">Nothing unmerged. Every branch is in {{ packet.repo.default_branch }}.</p>
+            {% endif %}
+        </div>
+
+        <div class="settings-card resume-card">
+            <h2>Recent sessions <span class="resume-sub">{{ packet.recent_label or 'last 14 days' }}</span></h2>
+            {% if packet.recent_sessions %}
+            <ul class="resume-sessions">
+                {% for s in packet.recent_sessions %}
+                <li>
+                    <div class="resume-session-head">
+                        <span class="session-branch">{{ s.branch }}</span>
+                        <span class="chip next-{{ s.next_kind }}">{{ s.next_label }}</span>
+                    </div>
+                    <div class="resume-session-topic">{{ s.topic }} · {{ s.commit_count }} commit{{ 's' if s.commit_count != 1 }}{% if s.last_commit_at %} · {{ s.last_commit_at | central_time }}{% endif %}</div>
+                    {% if s.commits %}<ul class="resume-commits">{% for c in s.commits[:3] %}<li>{{ c.summary }}</li>{% endfor %}</ul>{% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="text-secondary">No Claude Code activity in this window.</p>
+            {% endif %}
+        </div>
+
+        {% if packet.tracker_actions or packet.planned_steps %}
+        <div class="settings-card resume-card">
+            <h2>What's queued</h2>
+            {% if packet.tracker_actions %}
+            <div class="session-section-label">Open tracker actions</div>
+            <ul class="resume-actions">
+                {% for a in packet.tracker_actions %}
+                <li><span class="chip chip-code">{{ a.priority }}</span> <strong>{{ a.id }}</strong> {{ a.title }} <em class="text-secondary">({{ a.status }})</em>{% if a.status_note %} — {{ a.status_note }}{% endif %}</li>
+                {% endfor %}
+            </ul>
+            <p class="resume-link"><a href="{{ url_for('tracker_view', owner=packet.repo.owner, name=packet.repo.name) }}">Open the tracker &rarr;</a></p>
+            {% endif %}
+            {% if packet.planned_steps %}
+            <div class="session-section-label">Planned next steps (project summary)</div>
+            <ul class="resume-steps">{% for s in packet.planned_steps %}<li>{{ s }}</li>{% endfor %}</ul>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="resume-col">
+        <div class="settings-card resume-card">
+            <h2>{{ packet.status_source or 'PROJECT_STATUS.md' }} <span class="resume-sub">top of file</span></h2>
+            {% if packet.status_excerpt %}
+            <pre class="resume-doc">{{ packet.status_excerpt }}</pre>
+            <p class="resume-link"><a href="{{ url_for('docs_index', repo=packet.repo.name) }}">Read it rendered in Docs &rarr;</a></p>
+            {% else %}
+            <p class="text-secondary">This repo has no PROJECT_STATUS.md (or README). Adding one is the single biggest help for future context switches.</p>
+            {% endif %}
+        </div>
+        <div class="settings-card resume-card">
+            <h2>SESSION_NOTES.md <span class="resume-sub">latest entry</span></h2>
+            {% if packet.notes_excerpt %}
+            <pre class="resume-doc">{{ packet.notes_excerpt }}</pre>
+            {% else %}
+            <p class="text-secondary">No SESSION_NOTES.md found in this repo.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+  var btn = document.getElementById("copy-resume-btn");
+  var ta = document.getElementById("resume-markdown");
+  if (btn && ta) btn.addEventListener("click", function () { copyToClipboard(ta.value, btn); });
+  var pb = document.getElementById("copy-prompt-btn");
+  var pre = document.getElementById("resume-first-prompt");
+  if (pb && pre) pb.addEventListener("click", function () { copyToClipboard(pre.textContent, pb); });
+})();
+</script>
+
+{% else %}
+{# ======================= PICKER ======================= #}
+<div class="page-header">
+    <div class="page-header-title">
+        <h1>Resume a project</h1>
+        <p class="page-subtitle">Pick a project and get everything you need to switch back into it — on one page, in one paste.</p>
+    </div>
+</div>
+
+{{ next_up_subnav('resume') }}
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first.</p>
+    </div>
+</div>
+{% else %}
+
+<p class="projects-hint">
+    A <strong>Resume packet</strong> pulls together what the project is, every unmerged branch, the last two weeks of
+    Claude Code sessions, the top of PROJECT_STATUS.md, the latest SESSION_NOTES.md entry, open tracker actions, and a
+    suggested first prompt — read live from GitHub, no AI cost. Open counts come from the last <a href="{{ url_for('inflight_view') }}">In flight</a> refresh.
+</p>
+
+{{ group_filter_bar('resume_index', all_repos_count) }}
+
+{% if recent %}
+<div class="resume-recent">
+    <div class="session-section-label">Recently resumed</div>
+    <div class="resume-recent-row">
+        {% for r in recent %}
+        <a href="{{ url_for('resume_view', owner=r.owner, name=r.name) }}" class="resume-recent-chip" title="Last opened {{ r.last_resumed_at | central_time }}">{{ r.name }}</a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<div class="resume-search-row">
+    <input type="search" id="resume-search" class="resume-search" placeholder="Filter projects…" autocomplete="off" aria-label="Filter projects">
+</div>
+
+<div class="resume-picker" id="resume-picker">
+    {% for r in repos %}
+    <a href="{{ url_for('resume_view', owner=r.owner, name=r.name) }}" class="resume-pick" data-name="{{ (r.name ~ ' ' ~ (r.description or ''))|lower }}">
+        <div class="resume-pick-head">
+            <span class="resume-pick-name">{{ r.name }}</span>
+            {{ category_badge(r.name) }}
+            {% if r.open_count %}<span class="chip next-merge" title="unmerged branches (from In flight)">{{ r.open_count }} open</span>{% endif %}
+        </div>
+        {% if r.description %}<div class="resume-pick-desc">{{ r.description }}</div>{% endif %}
+        <div class="resume-pick-meta">
+            {% if r.pushed_at %}<span>pushed {{ r.pushed_at | central_time }}</span>{% endif %}
+            {% if r.last_resumed_at %}<span>· resumed {{ r.last_resumed_at | central_time }}</span>{% endif %}
+        </div>
+    </a>
+    {% endfor %}
+</div>
+
+<script>
+(function () {
+  var input = document.getElementById("resume-search");
+  var picks = Array.prototype.slice.call(document.querySelectorAll(".resume-pick"));
+  if (!input) return;
+  input.addEventListener("input", function () {
+    var q = input.value.trim().toLowerCase();
+    picks.forEach(function (el) { el.hidden = q && el.getAttribute("data-name").indexOf(q) === -1; });
+  });
+  input.focus();
+})();
+</script>
+{% endif %}
+{% endif %}
+{% endblock %}

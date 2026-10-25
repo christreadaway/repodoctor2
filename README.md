@@ -2,7 +2,9 @@
 
 A Flask web app that gives you a single-screen view of every GitHub repo you can reach — personal, private, public, and the ones inside your organizations — with branch counts, required-file status, AI-generated project summaries, and a Claude conversation-to-repo mapping. Built for people running multiple projects through Claude Code.
 
-It also includes a **Repo Selector**: tick any repos (each tagged public or private), generate a three-sentence summary for each, and copy a clean sheet to paste into a deck, a status update, or any other document.
+It also includes a **Repo Selector** (tick repos, get three-sentence summaries, copy a clean sheet), and three screens for switching between projects: **In Flight** (every unmerged branch and open PR across all repos, with a ready-to-merge / finish / stale call on each), **Resume** (a one-page, one-paste context packet for any project, read live from GitHub with no AI cost), and **Components** (which repo holds which reusable infrastructure, so it can be extracted into shared components — see `COMPONENTIZATION_PLAN.md`).
+
+Everything the app does is logged to `data/logs/app.log` (plus one JSON-lines event log per feature). Settings → Debug log shows the tail with a COPY FOR CLAUDE CODE button.
 
 ## Run It Locally
 
@@ -44,3 +46,4 @@ Both open your browser to **http://127.0.0.1:5001** when ready. First run takes 
 - [PRODUCT_SPEC.md](PRODUCT_SPEC.md) — what this is and why
 - [PROJECT_STATUS.md](PROJECT_STATUS.md) — current state, what's built
 - [PROJECT_RULES.md](PROJECT_RULES.md) — engineering conventions
+- [COMPONENTIZATION_PLAN.md](COMPONENTIZATION_PLAN.md) — how shared infrastructure gets extracted into reusable components

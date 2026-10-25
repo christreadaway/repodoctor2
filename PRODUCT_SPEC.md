@@ -303,6 +303,37 @@ One screen to pick from **every** repo the scan reaches — personal, private, p
 - **Copy / paste out.** An output preview rebuilds live from the current selection with a **Markdown / Plain text** toggle; COPY puts it on the clipboard, DOWNLOAD .MD saves it (client-side Blob, newlines preserved exactly). Selection persists per-device in `localStorage`, so it survives the page reload after generation.
 - **Storage:** blurbs cached in `data/selector_blurbs.json`, keyed by `owner/name` (NOT bare name) so an org repo can't collide with a personal one. Every generation start / done / skip / error logs to `data/logs/selector.log` (one JSON object per line, per the CLAUDE.md logging mandate).
 
+### 4.7g In Flight (Next Up → "In flight")
+
+**Files:** `inflight.py`, `app.py` (`/inflight`, `/inflight/refresh`, `/inflight/export.md`), `templates/inflight.html`, `models.py` (`data/inflight.json` cache + `data/logs/inflight.log`)
+
+The window-independent half of "where do I pick back up?": **every unmerged non-default branch and open PR across every repo, no matter how old.** Each Claude Code web session lands in GitHub as a `claude/<slug>` branch, so this list IS the set of coding work that is started but not finished. A session that hasn't pushed yet cannot appear, and the page says so.
+
+- **Deterministic status per branch** (pure function of git facts, no AI): READY TO MERGE (open PR; notes if behind base), FINISH IT (draft PR or WIP-looking last commit), NEEDS PR (fresh commits, no PR), STALE (no PR, no activity for 14+ days), MERGED (0 ahead of base — delete the branch). Sorted by what needs a decision first, then newest activity.
+- **Cheap to gather.** Repos whose cached scan shows only the default branch cost zero API calls; others cost one branches call + one open-PRs call + one compare per branch (capped at 40). One repo's failure is logged and reported in a banner, never blanks the page.
+- **Cached, not live.** Results persist in `data/inflight.json` so the page opens instantly; REFRESH regathers the whole portfolio and the view scopes by group and status filter. COPY FOR CLAUDE / DOWNLOAD .MD produce a grouped "Work in flight" document. Each card links to that repo's Resume packet.
+
+### 4.7h Resume (Next Up → "Resume a project")
+
+**Files:** `resume.py`, `app.py` (`/resume`, `/resume/<owner>/<name>`, `/resume/<owner>/<name>/export.md`), `templates/resume.html`, `models.py` (`data/resume_history.json`, `data/logs/resume.log`)
+
+A **context-switch packet** for one project, built on demand with zero AI cost, so switching campaigns doesn't depend on remembering where each one was. The picker lists every repo (group-scoped, searchable, newest-push-first) with its open-branch count from the In Flight cache and a "recently resumed" row. One project's packet composes:
+
+1. What it is (cached AI brief → project summary → selector blurb, whichever exists), stage, last push, groups, languages, docs present/missing.
+2. **Work in flight** for this repo (live).
+3. **Recent sessions** (last 14 days, live, via `sessions.gather_sessions`).
+4. The **top of PROJECT_STATUS.md** (cut at a section boundary) and the **latest SESSION_NOTES.md entry** (first `## ` section), read from the default branch; README fallback when neither exists.
+5. Open tracker actions (P0 first) and planned next steps from the project summary.
+6. A **suggested first prompt for Claude Code**, chosen deterministically from the most pressing fact (unfinished branch → PR ready to merge → P0/P1 tracker action → first planned step → "summarize and propose").
+
+COPY FOR CLAUDE CODE / DOWNLOAD .MD hand over the whole packet as Markdown. Each open is recorded in `data/resume_history.json` so the picker can say when you last opened a project.
+
+### 4.7i Components Inventory
+
+**Files:** `components.py`, `app.py` (`/components`, `/components/scan`, `/components/export.md`), `templates/components.html`, `static/css/components.css`, `models.py` (`data/components.json`, `data/logs/components.log`), `COMPONENTIZATION_PLAN.md`
+
+Step one of componentizing shared infrastructure: **which repo has which reusable capability, and which repo is the best source to extract it from.** Twenty capabilities (auth, Firebase/Firestore, database, email, SMS, payments, API clients, AI integration, logging, testing, security, deployment, Claude docs, data viz, marketing/GTM, design system, notifications/webhooks, scheduling, PDF export, scripts/launchers) grouped into nine buckets matching the owner's component list. Detection is **path-based only** (one git-tree call per repo, vendor dirs skipped; no file contents are read) and the page says so. Each capability card names the best source (most matching files, most recent push on ties) with evidence paths, every other repo that has it, and a GAP marker when none does; a "Suggested extraction order" ranks by repo count × spread. Cached in `data/components.json`; COPY FOR CLAUDE / DOWNLOAD .MD export the inventory. The architecture and sequencing for the actual extraction live in `COMPONENTIZATION_PLAN.md`.
+
 ### 4.8 Settings & Preferences
 
 **Files:** `app.py` (settings route), `models.py`, `templates/settings.html`
@@ -448,6 +479,15 @@ Flask Application (app.py)
 | POST | `/api/projects/summary/<name>` | Active | Generate the AI summary for one repo (client-side queue) |
 | GET | `/selector` | Active | Repo Selector — pick any repos (org repos included), tagged public/private |
 | POST | `/api/selector/blurb/<owner>/<name>` | Active | Generate one repo's three-sentence blurb (`{force:true}` to regenerate) |
+| GET | `/inflight` | Active | In Flight — every unmerged branch / open PR across repos (`?kind=`, `?group=`) |
+| POST | `/inflight/refresh` | Active | Regather In Flight from GitHub and cache it |
+| GET | `/inflight/export.md` | Active | In Flight as a Markdown download |
+| GET | `/resume` | Active | Resume picker — every repo with open-branch counts and last-resumed stamps |
+| GET | `/resume/<owner>/<name>` | Active | One project's context-switch packet (live, zero AI) |
+| GET | `/resume/<owner>/<name>/export.md` | Active | The packet as a Markdown download |
+| GET | `/components` | Active | Components inventory (capability × repo matrix, best source, gaps) |
+| POST | `/components/scan` | Active | Detect capabilities in every repo from its file tree and cache |
+| GET | `/components/export.md` | Active | Inventory as a Markdown download |
 | POST | `/projects/groups/save` | Active | Create or rename a group + set its repo membership |
 | POST | `/projects/groups/delete` | Active | Delete a group (prefers hidden `original_name` field) |
 | POST | `/api/categorize` | Active | Set one project's category (Church/School/Combined/Personal, or empty to clear) |

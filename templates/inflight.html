@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% from "_macros.html" import category_badge, group_filter_bar, next_up_subnav with context %}
+{% block title %}RepoDoctor — In Flight{% endblock %}
+{% block content %}
+<div class="page-header">
+    <div class="page-header-title">
+        <h1>In Flight</h1>
+        {% if cached %}
+        <p class="page-subtitle last-scanned">As of {{ cached.gathered_at | central_time }}{% if gathered_age_days is not none and gathered_age_days >= 1 %} <span class="stale-note">({{ gathered_age_days }} day{{ 's' if gathered_age_days != 1 }} old — refresh)</span>{% endif %}</p>
+        {% endif %}
+    </div>
+    <div class="page-actions">
+        {% if scan_results %}
+        <form method="POST" action="{{ url_for('inflight_refresh') }}" class="inline-form">
+            <button type="submit" class="btn {% if cached %}btn-secondary{% else %}btn-primary{% endif %}" data-loading-text="READING GITHUB…"
+                    {% if not github_connected %}disabled title="Reconnect to GitHub first (see the banner above)."{% endif %}>
+                {% if cached %}REFRESH{% else %}READ FROM GITHUB{% endif %}
+            </button>
+        </form>
+        {% if cached and items %}
+        <button type="button" class="btn btn-primary" id="copy-inflight-btn">COPY FOR CLAUDE</button>
+        <a href="{{ url_for('inflight_export') }}" class="btn btn-secondary">DOWNLOAD .MD</a>
+        {% endif %}
+        {% endif %}
+    </div>
+</div>
+
+{{ next_up_subnav('inflight') }}
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first, then come back to see every branch you have in flight.</p>
+    </div>
+</div>
+{% else %}
+
+<p class="projects-hint">
+    Every piece of coding you've kicked off that isn't finished yet — <strong>every unmerged branch and open PR across
+    all your repos</strong>, no matter how old. Each Claude Code web session becomes a <code>claude/…</code> branch, so this
+    is the live list of what's running or waiting on you. Sorted by what needs a decision first.
+    <em>A session that hasn't pushed anything yet can't show up here.</em>
+</p>
+
+{{ group_filter_bar('inflight_view', all_repos_count) }}
+
+{% if not cached %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>Nothing read yet.</h2>
+        <p>Click <strong>READ FROM GITHUB</strong> to list every unmerged branch across your repos. It reads branch and PR state only (nothing is changed) and takes a few seconds per repo that has open branches.</p>
+    </div>
+</div>
+{% else %}
+
+<div class="briefing-stats yesterday-stats">
+    <span class="briefing-stat"><strong>{{ counts.total }}</strong> branch{% if counts.total != 1 %}es{% endif %}</span>
+    <span class="briefing-stat"><strong>{{ counts.repos }}</strong> repo{% if counts.repos != 1 %}s{% endif %}</span>
+    {% if counts.merge %}<span class="briefing-stat briefing-stat-warn"><strong>{{ counts.merge }}</strong> ready to merge</span>{% endif %}
+    {% if counts.finish %}<span class="briefing-stat briefing-stat-missing"><strong>{{ counts.finish }}</strong> to finish</span>{% endif %}
+    {% if counts.continue %}<span class="briefing-stat"><strong>{{ counts.continue }}</strong> need a PR</span>{% endif %}
+    {% if counts.stale %}<span class="briefing-stat briefing-stat-missing"><strong>{{ counts.stale }}</strong> stale</span>{% endif %}
+    {% if counts.complete %}<span class="briefing-stat briefing-stat-ok"><strong>{{ counts.complete }}</strong> merged (delete)</span>{% endif %}
+</div>
+
+<div class="group-bar">
+    <div class="group-tabs">
+        {% for k, label in kinds %}
+        <a href="{{ url_for('inflight_view', kind=k or None, group=active_group or None) }}"
+           class="group-tab {% if kind == k %}active{% endif %}">{{ label }}
+           {% if k %}<span class="group-count">{{ counts[k] }}</span>{% else %}<span class="group-count">{{ counts.total }}</span>{% endif %}</a>
+        {% endfor %}
+    </div>
+</div>
+
+{% if cached.failed_repos %}
+<div class="reconnect-banner"><span class="reconnect-banner-icon">⚠</span>
+    <span>Couldn't read {{ cached.failed_repos|length }} repo(s) on the last refresh: {{ cached.failed_repos|join(', ') }}. Their branches aren't listed. Check <code>data/logs/inflight.log</code>.</span></div>
+{% endif %}
+
+<textarea id="inflight-markdown" hidden readonly>{{ markdown }}</textarea>
+
+{% if items %}
+<div class="sessions-list">
+    {% for i in items %}
+    <div class="session-card inflight-card inflight-{{ i.kind }}">
+        <div class="session-card-header">
+            <div class="session-title">
+                <a href="{{ url_for('resume_view', owner=i.owner, name=i.repo) }}" class="session-repo" title="Open the Resume packet for {{ i.repo }}">{{ i.repo }}</a>
+                {{ category_badge(i.repo) }}
+                <span class="session-topic">{{ i.topic }}</span>
+            </div>
+            <span class="chip next-{{ i.kind if i.kind != 'stale' else 'decide' }}" title="{{ i.text }}">{{ i.label }}</span>
+        </div>
+        <div class="session-meta">
+            {% if i.branch_url %}<a href="{{ i.branch_url }}" target="_blank" rel="noopener" class="session-branch">{{ i.branch }}</a>{% else %}<span class="session-branch">{{ i.branch }}</span>{% endif %}
+            {% if i.pr %}
+            <a href="{{ i.pr.html_url }}" target="_blank" rel="noopener" class="session-pr session-pr-open">PR #{{ i.pr.number }}{% if i.pr.draft %} · draft{% endif %}</a>
+            {% endif %}
+            {% if i.ahead_by is not none %}<span class="session-count" title="commits ahead / behind {{ i.base }}">+{{ i.ahead_by }} / &minus;{{ i.behind_by }}</span>{% endif %}
+            {% if i.last_activity_at %}<span class="session-when">last {{ i.last_activity_at|central_time }}</span>{% endif %}
+            {% if i.age_days is not none %}<span class="session-when {% if i.age_days >= 14 %}inflight-old{% endif %}">{{ i.age_days }}d old</span>{% endif %}
+        </div>
+        <div class="session-section">
+            <div class="session-section-label session-label-next">Next</div>
+            <p class="session-section-text">{{ i.text }}</p>
+        </div>
+        {% if i.commits %}
+        <details class="session-commits">
+            <summary>{{ i.commits|length }} recent commit{% if i.commits|length != 1 %}s{% endif %}</summary>
+            <ul class="session-commit-list">
+                {% for c in i.commits %}
+                <li>
+                    <span class="session-commit-msg">{{ c.summary }}</span>
+                    <span class="session-commit-time">{{ c.date|central_time }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </details>
+        {% endif %}
+        <div class="inflight-actions">
+            <a href="{{ url_for('resume_view', owner=i.owner, name=i.repo) }}" class="btn btn-sm btn-outline">RESUME {{ i.repo|upper }}</a>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>{% if kind %}Nothing in this bucket.{% else %}Nothing in flight.{% endif %}</h2>
+        <p>{% if kind %}Try another filter above.{% else %}Every branch in {% if active_group %}{{ active_group }}{% else %}your repos{% endif %} is merged. Clean slate.{% endif %}</p>
+    </div>
+</div>
+{% endif %}
+{% endif %}
+{% endif %}
+
+<script>
+(function () {
+  var btn = document.getElementById("copy-inflight-btn");
+  var ta = document.getElementById("inflight-markdown");
+  if (btn && ta) btn.addEventListener("click", function () { copyToClipboard(ta.value, btn); });
+})();
+</script>
+{% endblock %}

@@ -1,11 +1,64 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 19
-**Date Range:** 2025-02-14 to 2026-08-21
-**Last Updated:** 2026-08-21 (Session 19)
+**Total Sessions Logged:** 20
+**Date Range:** 2025-02-14 to 2026-10-25
+**Last Updated:** 2026-10-25 (Session 20)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 20 — 2026-10-25 (In Flight, Resume packets, Components inventory, app-wide log, usability fixes)
+
+Branch: `claude/confident-wright-gfnscy`. Chris came back to the product after two months with one ask ("review where we are, find usability fixes, help me run it and see exactly where we are across projects") and three goals for the coming weeks: componentize infrastructure across repos, see what coding he has kicked off across repos, and make context switching between campaigns easier.
+
+### Where we were
+- Branch equal to `main` at `4e568e9`; 327 tests green; docs current as of Session 19. Nothing broken, nothing half-finished.
+
+### What We Built
+
+**1. In Flight (`inflight.py`, `/inflight`).** Goal 2. Next Up answers "what did I do in this window?"; In Flight answers "what have I started that isn't finished?" — every unmerged non-default branch + open PR across every repo, window-independent. Deterministic classifier (`classify`): READY TO MERGE (open PR; notes if behind base), FINISH IT (draft PR or WIP-looking last commit, reusing `sessions._looks_unfinished`), NEEDS PR, STALE (14+ days, no PR), MERGED (0 ahead → delete). Gather skips repos whose cached scan shows only the default branch (zero calls), caps compares at 40/repo, isolates per-repo failures and surfaces them in a banner. Cached in `data/inflight.json` so the page opens instantly; REFRESH regathers the whole portfolio and the view scopes by group + `?kind=`. COPY FOR CLAUDE / DOWNLOAD .MD. Honest limit stated on the page: a session that hasn't pushed can't appear.
+
+**2. Resume (`resume.py`, `/resume`, `/resume/<owner>/<name>`).** Goal 3. A deterministic, zero-AI context-switch packet per project: what it is (brief → summary → blurb fallback), stage, last push, groups, languages, docs present/missing; this repo's in-flight branches (live); last 14 days of sessions (live via `sessions.gather_sessions`); top of PROJECT_STATUS.md cut at a section boundary; latest SESSION_NOTES.md entry (first `## `); open tracker actions P0-first; planned next steps; and a **suggested first prompt** chosen from the most pressing fact. Picker: group-scoped, searchable, newest-push-first, open-branch counts from the In Flight cache, "recently resumed" chips from `data/resume_history.json`. GitHub failures in any section leave it empty and listed under "Gaps in this packet" rather than failing the page.
+
+**3. Components (`components.py`, `/components`) + `COMPONENTIZATION_PLAN.md`.** Goal 1. Built by a parallel agent against a precise brief, then integrated. Path-based detection (one tree call per repo, vendor dirs skipped, no contents read — the page says so) of 20 capabilities in 9 buckets matching Chris's list. Per capability: best source (hits, then most recent push), evidence paths, other repos, GAP marker; "Suggested extraction order" = repo count × spread. Cached in `data/components.json`. The plan doc compares submodules/packages vs. Claude Code plugins vs. a template repo and recommends plugins for knowledge/process components, packages for runnable code, a thin template for boilerplate; first three extractions: Claude docs management, logging, testing.
+
+**4. Nav.** The three pick-back-up screens share the **Next Up** tab via a `next_up_subnav` macro (Recent sessions · In flight · Resume a project). Components is a tenth top-level tab (Chris can fold it later; it will be a weeks-long working surface).
+
+**5. App-wide log.** `_configure_file_logging()` attaches a rotating file handler (`data/logs/app.log`, 2 MB × 3) to the root logger at import — every module's logger, Werkzeug request lines, and Flask's unhandled-exception reports land there. Settings gained a **Debug log** panel (tail 150 lines, COPY FOR CLAUDE CODE wraps it in a fenced block). Per CLAUDE.md's logging mandate; previously only per-feature JSON event logs existed.
+
+**6. Usability fixes found by rendering every page in Chromium (desktop + 390px) with fixture data.**
+- Reconnect banner said "log out and back in". Now links to `/login?next=<this page>` — password only, no logout, scan kept, lands you back where you were. `_safe_next()` accepts same-site relative paths only. Next Up and Docs not-connected states use the same link.
+- Stale-scan banner (quiet slate style) once the scan is 2+ days old, with RE-SCAN NOW, on every page except the dashboard (which already shows the scan time + button).
+- Mobile nav stacked the tabs in a vertical column beside the logo (the ≤900px rule kept `flex-wrap: wrap` on `.nav-links`). Now one horizontally scrollable row.
+- `btn-outline` had no CSS rule although app.js emitted it on every inline COPY button. Added.
+- Caught in the first render: the In Flight stat row printed `<built-in method items of dict…>` because Jinja resolves `counts.items` to `dict.items`. Renamed the key to `total`.
+
+### Tests
+**395 passing** (was 327). New `tests/test_inflight.py` (40: classifier, gather incl. tidy-repo skip + failure isolation + sort, counts/filter/markdown, resume excerpt helpers, first-prompt priority, packet composition + failure isolation + README fallback, storage round-trips, all new routes, stale banner, reconnect link, `_safe_next`, log handler idempotence) and `tests/test_components.py` (28). Every screen screenshot-verified; no console errors, no horizontal scroll at 390px.
+
+### Decisions Made
+- In Flight is **cached** (REFRESH) rather than live like Next Up: it spans every branch in every repo, and it's a glance-often page.
+- Resume is **deterministic** (no AI) so it's free and instant; the AI brief is used when one is already cached.
+- Components detection is path-based by design; a content scan is a later feature (see plan's out-of-scope).
+- Did not land on `main` directly: Chris merges online himself (his standing preference), so this branch needs a PR.
+
+### Current Status
+- ✅ In Flight, Resume, Components built, tested, screenshot-verified
+- ✅ App-wide log + Debug log panel
+- ✅ Usability fixes (reconnect, stale scan, mobile nav)
+- 🚧 Branch `claude/confident-wright-gfnscy` not yet merged — open the PR on GitHub and merge
+- 🚧 First real run: RE-SCAN (two months of new repos/branches), then In Flight → READ FROM GITHUB, then Components → SCAN COMPONENTS
+
+### Next Steps
+1. Merge, pull on the Mac (`./start.command` pulls main automatically), re-scan, read In Flight and Components with real data, and sanity-check the classifications against what you know.
+2. Start the first extraction from `COMPONENTIZATION_PLAN.md` (Claude docs management as a Claude Code plugin) using the inventory's best-source repo.
+3. Decide whether Components stays a top-level tab or folds under Projects once the inventory is familiar.
+4. Optional: a "Mark as done / delete branch" action on MERGED items in In Flight (needs a delete-branch GitHub call — a write, so deliberately not added without asking).
+
+### Questions/Blockers
+- None blocking. Branch delete from In Flight is the one write action deferred for an explicit yes.
 
 ---
 

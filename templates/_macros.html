@@ -31,3 +31,15 @@
 </div>
 {% endif %}
 {%- endmacro %}
+
+{# Sub-navigation for the three "where do I pick back up?" screens that share
+   the Next Up tab: Recent sessions (time window), In flight (every unmerged
+   branch), Resume (one project's context packet). `current` is one of
+   'sessions' | 'inflight' | 'resume'. #}
+{% macro next_up_subnav(current) -%}
+<div class="subnav" role="tablist" aria-label="Next Up views">
+    <a href="{{ url_for('yesterday_view') }}" class="subnav-link {% if current == 'sessions' %}active{% endif %}">Recent sessions</a>
+    <a href="{{ url_for('inflight_view') }}" class="subnav-link {% if current == 'inflight' %}active{% endif %}">In flight</a>
+    <a href="{{ url_for('resume_index') }}" class="subnav-link {% if current == 'resume' %}active{% endif %}">Resume a project</a>
+</div>
+{%- endmacro %}
