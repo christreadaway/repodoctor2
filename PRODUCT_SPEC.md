@@ -334,7 +334,22 @@ COPY FOR CLAUDE CODE / DOWNLOAD .MD hand over the whole packet as Markdown. Each
 
 **Files:** `components.py`, `app.py` (`/components`, `/components/scan`, `/components/export.md`), `templates/components.html`, `static/css/components.css`, `models.py` (`data/components.json`, `data/logs/components.log`), `COMPONENTIZATION_PLAN.md`
 
-Step one of componentizing shared infrastructure: **which repo has which reusable capability, and which repo is the best source to extract it from.** Twenty capabilities (auth, Firebase/Firestore, database, email, SMS, payments, API clients, AI integration, logging, testing, security, deployment, Claude docs, data viz, marketing/GTM, design system, notifications/webhooks, scheduling, PDF export, scripts/launchers) grouped into nine buckets matching the owner's component list. Detection is **path-based only** (one git-tree call per repo, vendor dirs skipped; no file contents are read) and the page says so. Each capability card names the best source (most matching files, most recent push on ties) with evidence paths, every other repo that has it, and a GAP marker when none does; a "Suggested extraction order" ranks by repo count × spread. Cached in `data/components.json`; COPY FOR CLAUDE / DOWNLOAD .MD export the inventory. The architecture and sequencing for the actual extraction live in `COMPONENTIZATION_PLAN.md`.
+Step one of componentizing shared infrastructure: **which repo has which reusable capability, and which repo is the best source to extract it from.** Twenty-five capabilities (auth, Firebase/Firestore, database, email, SMS, payments, API clients, AI integration, logging, testing, security, deployment, Claude docs, data viz, marketing/GTM, design system, notifications/webhooks, scheduling, PDF export, scripts/launchers, plus video production, audio & transcription, courseware, CRM & contacts, privacy & PII redaction added in Session 22) grouped into eleven buckets matching the owner's component list. Detection is **path-based only** (one git-tree call per repo, vendor dirs skipped; no file contents are read) and the page says so. Each capability card names the best source (most matching files, most recent push on ties) with evidence paths, every other repo that has it, and a GAP marker when none does; a "Suggested extraction order" ranks by repo count × spread. Cached in `data/components.json`; COPY FOR CLAUDE / DOWNLOAD .MD export the inventory. The architecture and sequencing for the actual extraction live in `COMPONENTIZATION_PLAN.md`.
+
+### 4.7j Portfolio (top-level tab: By theme · Infrastructure · Components scan)
+
+**Files:** `portfolio.py`, `app.py` (`/portfolio`, `/api/portfolio/tag`, `/portfolio/tags`, `/api/portfolio/suggest`, `/portfolio/suggestions`, `/portfolio/infra-home`, `/portfolio/export.md`), `templates/portfolio.html`, `models.py` (`tag_repo`, `create_tag`, `data/portfolio_suggestions.json`, `~/.repodoctor/infra_homes.json`, `data/logs/portfolio.log`)
+
+Every project at a glance, grouped by theme, built for context switching.
+
+- **Tags ARE groups.** One data model: a tag picked here scopes every other screen through the shared group filter. Each theme section links straight to that theme's In flight, Briefing, Resume and Recent sessions views. A project can carry several tags; Church / School / Combined / Personal stay single-select categories (adding one replaces the other).
+- **Default themes** (Investing / Personal Finance, Marketing / GTM, School, Church, Infrastructure) are created once on first open; a deleted default never comes back (`portfolio_seeded` preference).
+- **Per project:** name (links to its Resume packet), public/private, open-branch count from the In Flight cache, a one-line summary (cheapest cached source first: Selector blurb → Projects summary → GitHub description), last push, how finished it is, and its tag chips (× removes, + TAG adds an existing or new tag; saved instantly via `/api/portfolio/tag`). SUMMARIZE N MISSING writes Selector blurbs for projects with no one-liner (same per-repo queue as the Selector).
+- **Tag manager:** create, rename, delete (categories are fixed). Rename carries Program notes/briefs over.
+- **SUGGEST TAGS:** one AI call over the untagged projects (or RE-SUGGEST ALL) proposes 1-2 tags each, preferring existing tags and creating a new one only when 3+ projects share a theme. Suggestions are saved for review, never applied automatically: tick/untick, APPLY TICKED or DISMISS ALL. Only suggested repo::tag pairs can be applied (forged pairs are ignored). A failed AI call saves nothing.
+- **Infrastructure tab:** one card per functional area (marketing, video production, security, messaging, BI/data viz, courseware, plus audio/transcription, AI integration, sign-in & data, CRM & contacts, privacy & PII redaction, payments, logging, testing, Claude docs, deploy/launchers/scheduling, documents & PDF). Each card holds a **home repo** you assign (stored in `~/.repodoctor/infra_homes.json`) and the top 3 source repos from the last Components scan, or a GAP marker.
+- **Components** moved under this tab's sub-nav (nav stays at ten tabs); it gained Video Production, Audio & Transcription, Courseware, CRM & Contacts and Privacy & PII Redaction capabilities (25 total).
+- COPY FOR CLAUDE / DOWNLOAD .MD export the grouped portfolio plus the infrastructure map. Every tag change, suggestion run and home assignment logs to `data/logs/portfolio.log`.
 
 ### 4.8 Settings & Preferences
 
@@ -484,6 +499,13 @@ Flask Application (app.py)
 | GET | `/inflight` | Active | In Flight — every unmerged branch / open PR across repos (`?kind=`, `?group=`) |
 | POST | `/inflight/refresh` | Active | Regather In Flight from GitHub and cache it |
 | GET | `/inflight/export.md` | Active | In Flight as a Markdown download |
+| GET | `/portfolio` | Active | Portfolio — projects by theme tag (`?tab=infra` for the infrastructure map) |
+| POST | `/api/portfolio/tag` | Active | Add/remove one tag on one repo (`{repo, tag, add}`) |
+| POST | `/portfolio/tags` | Active | Create / rename / delete a tag |
+| POST | `/api/portfolio/suggest` | Active | AI tag suggestions for untagged (or all) repos, saved for review |
+| POST | `/portfolio/suggestions` | Active | Apply ticked suggestions or dismiss them |
+| POST | `/portfolio/infra-home` | Active | Set the home repo for an infrastructure area |
+| GET | `/portfolio/export.md` | Active | Portfolio + infrastructure map as Markdown |
 | POST | `/inflight/delete-merged` | Active | Delete fully merged branches (`target=owner/repo:branch`, repeatable; each re-verified live) |
 | GET | `/resume` | Active | Resume picker — every repo with open-branch counts and last-resumed stamps |
 | GET | `/resume/<owner>/<name>` | Active | One project's context-switch packet (live, zero AI) |

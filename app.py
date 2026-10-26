@@ -47,6 +47,7 @@ import sessions
 import inflight
 import resume
 import components
+import portfolio
 import docs_explorer
 import md_render
 import program
@@ -2091,6 +2092,244 @@ def components_export():
     markdown = components.compose_markdown(components.inventory(scoped, cached["detections"]))
     return Response(markdown, mimetype="text/markdown; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="component-inventory.md"'})
+
+
+# --- Portfolio: every repo grouped by theme tag + the infrastructure map -------
+# Tags ARE groups, so a tag picked here scopes every other screen. AI tag
+# suggestions are saved for review and only applied on an explicit click.
+# Logged to data/logs/portfolio.log.
+
+_PORTFOLIO_ACTIVE_DAYS = 30
+
+
+def _portfolio_seed_tags():
+    """Create the owner's default themes once (empty), never again after they
+    delete one — the flag lives in preferences."""
+    if models.get_preferences().get("portfolio_seeded"):
+        return
+    for tag in portfolio.DEFAULT_TAGS:
+        models.create_tag(tag)
+    models.update_preferences(lambda p: p.update(portfolio_seeded=True))
+    models.log_portfolio_event("seed_tags", tags=portfolio.DEFAULT_TAGS)
+
+
+def _portfolio_view_data():
+    groups = models.get_groups()
+    cutoff = (datetime.datetime.now(datetime.timezone.utc)
+              - datetime.timedelta(days=_PORTFOLIO_ACTIVE_DAYS)).isoformat()
+    view = portfolio.build_view(
+        _yesterday_repos(), groups, models.get_selector_blurbs(),
+        models.get_project_summaries(), (models.get_inflight() or {}).get("items") or [],
+        activity_cutoff=cutoff.replace("+00:00", "Z"),
+    )
+    infra = portfolio.infrastructure_view(models.get_components(), _yesterday_repos(),
+                                          models.get_infra_homes(), components)
+    return groups, view, infra
+
+
+@app.route("/portfolio")
+@_require_auth
+def portfolio_view():
+    if not _scan_results:
+        return render_template("portfolio.html", scan_results=None)
+    _portfolio_seed_tags()
+    groups, view, infra = _portfolio_view_data()
+    tab = request.args.get("tab", "themes")
+    if tab not in ("themes", "infra"):
+        tab = "themes"
+    suggestions = models.get_portfolio_suggestions()
+    markdown = portfolio.compose_markdown(view, infra, session.get("github_user", ""), _central_today())
+    return render_template(
+        "portfolio.html",
+        scan_results=_scan_results,
+        github_connected=_get_github_client() is not None,
+        view=view,
+        infra=infra,
+        tab=tab,
+        groups=groups,
+        category_tags=models.CATEGORY_GROUPS,
+        suggestions=suggestions.get("items") or [],
+        suggestions_at=suggestions.get("generated_at", ""),
+        components_scanned=bool(models.get_components()),
+        markdown=markdown,
+        active_days=_PORTFOLIO_ACTIVE_DAYS,
+    )
+
+
+def _portfolio_back():
+    return redirect(url_for("portfolio_view", tab=request.form.get("tab") or None))
+
+
+@app.route("/api/portfolio/tag", methods=["POST"])
+@_require_auth_api
+def portfolio_tag_repo():
+    """Add or remove one tag on one repo (chip × / + tag). Saved instantly."""
+    data = request.get_json(silent=True) or {}
+    repo = (data.get("repo") or "").strip()
+    tag = portfolio.clean_tag(data.get("tag") or "")
+    add = bool(data.get("add", True))
+    if not repo or not _find_repo_by_name(repo):
+        return jsonify({"error": f"Repo '{repo}' isn't in the latest scan."}), 404
+    if not tag:
+        return jsonify({"error": f"Tag names are 1-{portfolio.MAX_TAG_LEN} characters, no < or >."}), 400
+    if add and tag in models.CATEGORY_GROUPS:
+        # Categories stay single-select (one per repo), as on Projects.
+        models.set_repo_category(repo, tag)
+    elif not models.tag_repo(repo, tag, add=add):
+        return jsonify({"error": f"No tag named '{tag}'."}), 404
+    models.log_portfolio_event("tag_add" if add else "tag_remove", repo=repo, tag=tag)
+    tags = sorted(t for t, members in models.get_groups().items() if repo in members)
+    return jsonify({"ok": True, "repo": repo, "tags": tags})
+
+
+@app.route("/portfolio/tags", methods=["POST"])
+@_require_auth
+def portfolio_tags():
+    """Create / rename / delete a tag from the Portfolio tag manager."""
+    action = request.form.get("action", "")
+    name = portfolio.clean_tag(request.form.get("name") or "")
+    groups = models.get_groups()
+    if action == "create":
+        if not name:
+            flash(f"Tag names are 1-{portfolio.MAX_TAG_LEN} characters, no < or >.", "error")
+        elif name in groups:
+            flash(f'A tag named "{name}" already exists.', "error")
+        else:
+            models.create_tag(name)
+            models.log_portfolio_event("tag_create", tag=name)
+            flash(f'Tag "{name}" created. Add projects to it with + TAG on any row.', "success")
+    elif action == "rename":
+        new = portfolio.clean_tag(request.form.get("new_name") or "")
+        if not name or not new or name not in groups:
+            flash("Pick a tag and give it a new name.", "error")
+        elif name in models.CATEGORY_GROUPS:
+            flash(f'"{name}" is a category and can\'t be renamed.', "error")
+        elif new in groups:
+            flash(f'A tag named "{new}" already exists.', "error")
+        elif models.rename_group(name, new):
+            models.log_portfolio_event("tag_rename", old=name, new=new)
+            flash(f'Renamed "{name}" to "{new}".', "success")
+        else:
+            flash("Could not rename the tag.", "error")
+    elif action == "delete":
+        if name in models.CATEGORY_GROUPS:
+            flash(f'"{name}" is a category and can\'t be deleted.', "error")
+        elif name and models.delete_group(name):
+            models.log_portfolio_event("tag_delete", tag=name)
+            flash(f'Deleted tag "{name}". The projects themselves are untouched.', "success")
+        else:
+            flash("Tag not found.", "error")
+    else:
+        flash("Unknown tag action.", "error")
+    return _portfolio_back()
+
+
+@app.route("/api/portfolio/suggest", methods=["POST"])
+@_require_auth_api
+def portfolio_suggest():
+    """One AI call proposes tags for the untagged repos (or all repos). The
+    result is saved for review; nothing is applied here."""
+    creds = _get_credentials()
+    if not creds:
+        return jsonify({"error": NOT_CONNECTED_REMEDY}), 401
+    if not _scan_results:
+        return jsonify({"error": "No scan data yet — run a scan first."}), 400
+    scope = ((request.get_json(silent=True) or {}).get("scope") or "untagged")
+    _, view, _ = _portfolio_view_data()
+    rows = list(view["rows"].values())
+    if scope != "all":
+        rows = [r for r in rows if not r["tags"]]
+    if not rows:
+        return jsonify({"ok": True, "count": 0, "note": "Every repo already has a tag."})
+    model = models.get_ai_model()
+    t0 = time.monotonic()
+    try:
+        raw, usage = ai.request_json(
+            anthropic.Anthropic(api_key=creds["anthropic_key"]),
+            model=model, max_tokens=min(8000, 400 + 60 * len(rows)),
+            schema=portfolio.SUGGEST_SCHEMA,
+            messages=[{"role": "user", "content": portfolio.suggestion_prompt(rows, view["tag_names"])}],
+        )
+    except Exception as e:  # noqa: BLE001 - surfaced to the page, nothing saved
+        detail = f"{type(e).__name__}: {str(e)[:300]}"
+        models.log_portfolio_event("suggest_error", scope=scope, repos=len(rows), error=detail)
+        return jsonify({"error": detail}), 502
+    items = portfolio.normalize_suggestions(raw, rows, view["tag_names"])
+    _session_cost.add(usage["input_tokens"], usage["output_tokens"],
+                      ai.estimate_cost(usage["input_tokens"], usage["output_tokens"], model=model))
+    models.save_portfolio_suggestions({
+        "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "scope": scope, "items": items,
+    })
+    models.log_portfolio_event(
+        "suggest_done", scope=scope, repos=len(rows), suggested=len(items), model=model,
+        input_tokens=usage["input_tokens"], output_tokens=usage["output_tokens"],
+        elapsed_ms=int((time.monotonic() - t0) * 1000),
+    )
+    return jsonify({"ok": True, "count": len(items)})
+
+
+@app.route("/portfolio/suggestions", methods=["POST"])
+@_require_auth
+def portfolio_apply_suggestions():
+    """Apply the ticked suggestions (repo::tag pairs), or dismiss them all."""
+    data = models.get_portfolio_suggestions()
+    items = data.get("items") or []
+    if request.form.get("action") == "dismiss":
+        models.save_portfolio_suggestions({})
+        models.log_portfolio_event("suggest_dismiss", count=len(items))
+        flash("Suggestions dismissed.", "success")
+        return _portfolio_back()
+    allowed = {(i["repo"], t) for i in items for t in i["tags"]}
+    picked = []
+    for raw in request.form.getlist("pick"):
+        repo, sep, tag = raw.partition("::")
+        if sep and (repo, tag) in allowed and _find_repo_by_name(repo):
+            picked.append((repo, tag))
+    for repo, tag in picked:
+        if tag in models.CATEGORY_GROUPS:
+            models.set_repo_category(repo, tag)
+        else:
+            models.tag_repo(repo, tag, add=True)
+    done = set(picked)
+    remaining = []
+    for i in items:
+        left = [t for t in i["tags"] if (i["repo"], t) not in done]
+        if left and request.form.get("action") != "apply_close":
+            remaining.append({**i, "tags": left})
+    models.save_portfolio_suggestions({**data, "items": remaining} if remaining else {})
+    models.log_portfolio_event("suggest_apply", applied=[f"{r}::{t}" for r, t in picked],
+                               remaining=len(remaining))
+    flash(f"Applied {len(picked)} tag{'s' if len(picked) != 1 else ''}.", "success")
+    return _portfolio_back()
+
+
+@app.route("/portfolio/infra-home", methods=["POST"])
+@_require_auth
+def portfolio_infra_home():
+    area = request.form.get("area", "")
+    full = (request.form.get("repo") or "").strip()
+    if area not in portfolio._AREA_KEYS:
+        flash("Unknown infrastructure area.", "error")
+    elif full and not _find_repo_by_full_name(full):
+        flash(f"'{full}' isn't in the latest scan.", "error")
+    else:
+        models.set_infra_home(area, full)
+        models.log_portfolio_event("infra_home", area=area, repo=full)
+        flash("Home repo saved." if full else "Home repo cleared.", "success")
+    return redirect(url_for("portfolio_view", tab="infra"))
+
+
+@app.route("/portfolio/export.md")
+@_require_auth
+def portfolio_export():
+    if not _scan_results:
+        flash("No scan data yet — run a scan first.", "error")
+        return redirect(url_for("portfolio_view"))
+    _, view, infra = _portfolio_view_data()
+    markdown = portfolio.compose_markdown(view, infra, session.get("github_user", ""), _central_today())
+    return Response(markdown, mimetype="text/markdown; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="portfolio-{_central_today()}.md"'})
 
 
 @app.route("/docs")

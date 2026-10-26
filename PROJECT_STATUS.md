@@ -1,7 +1,7 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-10-25 (Session 21 — delete merged branches, full bug sweep: 70+ verified fixes, critical → low)
-**Current Branch:** `main` (Sessions 20 + 21 pushed to `main`; also on `claude/confident-wright-gfnscy`)
+**Last Updated:** 2026-10-26 (Session 22 — Portfolio: projects by theme tag, editable tags with AI suggestions, infrastructure map)
+**Current Branch:** `main` (Sessions 20-22 pushed to `main`; also on `claude/confident-wright-gfnscy`)
 **Overall Progress:** ~97%
 
 ---
@@ -12,7 +12,18 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 
 ---
 
-## Latest — Session 21 (2026-10-25)
+## Latest — Session 22 (2026-10-26)
+
+- **Portfolio (new tab).** Every project grouped by theme tag, with a one-line summary, open branches and last push, for fast context switching. Each theme links to its In flight, Briefing, Resume and Recent sessions views. Tags are the app's groups, so a theme picked here filters every screen.
+- **Editable tags.** Add/remove tags per project with chips, create / rename / delete tags, and SUGGEST TAGS (one AI call) proposes themes that you review and tick before anything changes. Default themes: Investing / Personal Finance, Marketing / GTM, School, Church, Infrastructure.
+- **Infrastructure map.** One card per functional area (your list: marketing, video, security, messaging, BI, courseware; plus audio, AI, sign-in & data, CRM, privacy/PII, payments, logging, testing, Claude docs, deploy, documents), each with a home repo you pick and the best sources from the Components scan. `COMPONENTIZATION_PLAN.md` has the area table with likely source repos.
+- **Components** moved under Portfolio's sub-nav (nav stays at ten tabs) and gained 5 capabilities (25 total).
+- **Netlify:** asked and deferred ("not now"). The local app stays the supported way to run it.
+- **Tests: 485 passing** (+15). Portfolio and Infrastructure verified in Chromium at 390px and 1280px, including a real tag add / new tag / remove round trip.
+
+---
+
+## Session 21 (2026-10-25)
 
 Built the one item Session 20 held for a yes (delete merged branches), then ran a four-way bug sweep across the whole app and fixed every finding that reproduced. See `SESSION_NOTES.md` for the full list.
 

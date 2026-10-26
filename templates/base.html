@@ -21,13 +21,13 @@
             </a>
             <div class="nav-links">
                 <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">My Repos</a>
+                <a href="{{ url_for('portfolio_view') }}" class="nav-link {% if request.endpoint in ['portfolio_view', 'components_view'] %}active{% endif %}">Portfolio</a>
                 <a href="{{ url_for('projects') }}" class="nav-link {% if request.endpoint == 'projects' %}active{% endif %}">Projects</a>
                 <a href="{{ url_for('repo_selector') }}" class="nav-link {% if request.endpoint == 'repo_selector' %}active{% endif %}">Selector</a>
                 <a href="{{ url_for('stats') }}" class="nav-link {% if request.endpoint == 'stats' %}active{% endif %}">Stats</a>
                 <a href="{{ url_for('yesterday_view') }}" class="nav-link {% if request.endpoint in ['yesterday_view', 'whats_next_all', 'inflight_view', 'resume_index', 'resume_view'] %}active{% endif %}">Next Up</a>
                 <a href="{{ url_for('briefing_view') }}" class="nav-link {% if request.endpoint in ['briefing_view', 'program_view'] %}active{% endif %}">Briefing</a>
                 <a href="{{ url_for('docs_index') }}" class="nav-link {% if request.endpoint == 'docs_index' %}active{% endif %}">Docs</a>
-                <a href="{{ url_for('components_view') }}" class="nav-link {% if request.endpoint in ['components_view'] %}active{% endif %}">Components</a>
                 <a href="{{ url_for('tracker_index') }}" class="nav-link {% if request.endpoint in ['tracker_index', 'tracker_view', 'tracker_debug'] %}active{% endif %}">Tracker</a>
                 <a href="{{ url_for('settings') }}" class="nav-link {% if request.endpoint in ['settings', 'mac_setup'] %}active{% endif %}">Settings</a>
             </div>

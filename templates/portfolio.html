@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+{% from "_macros.html" import portfolio_subnav with context %}
+{% block title %}RepoDoctor — Portfolio{% endblock %}
+{% macro repo_row(r) -%}
+<div class="pf-row" data-repo="{{ r.name }}">
+    <div class="pf-row-main">
+        <div class="pf-row-head">
+            <a href="{{ url_for('resume_view', owner=r.owner, name=r.name) }}" class="pf-name" title="Open the Resume packet for {{ r.name }}">{{ r.name }}</a>
+            {% if r.private %}<span class="badge badge-dim">PRIVATE</span>{% else %}<span class="badge badge-public">PUBLIC</span>{% endif %}
+            {% if r.open_branches %}<a href="{{ url_for('resume_view', owner=r.owner, name=r.name) }}" class="chip next-merge" title="unmerged branches (from In flight)">{{ r.open_branches }} open</a>{% endif %}
+        </div>
+        <p class="pf-one-liner">{% if r.one_liner %}{{ r.one_liner }}{% else %}<span class="pf-muted">No summary yet.</span>{% endif %}</p>
+        <div class="pf-meta">
+            {% if r.pushed_at %}<span>pushed {{ r.pushed_at|central_time }}</span>{% endif %}
+            {% if r.how_finished %}<span>· {{ r.how_finished }}</span>{% endif %}
+        </div>
+    </div>
+    <div class="pf-tags">
+        {% for t in r.tags %}
+        <span class="pf-chip">{{ t }}<button type="button" class="pf-chip-x" data-repo="{{ r.name }}" data-tag="{{ t }}" aria-label="Remove tag {{ t }} from {{ r.name }}">×</button></span>
+        {% endfor %}
+        <select class="pf-add-tag" data-repo="{{ r.name }}" aria-label="Add a tag to {{ r.name }}">
+            <option value="">+ TAG</option>
+            {% for t in view.tag_names if t not in r.tags %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+            <option value="__new__">New tag…</option>
+        </select>
+    </div>
+</div>
+{%- endmacro %}
+{% block content %}
+<div class="page-header">
+    <div class="page-header-title">
+        <h1>Portfolio</h1>
+        <p class="page-subtitle">Every project at a glance, grouped by theme — and the shared infrastructure every new build can plug into.</p>
+    </div>
+    {% if scan_results %}
+    <div class="page-actions">
+        <button type="button" class="btn btn-primary" id="copy-portfolio-btn">COPY FOR CLAUDE</button>
+        <a href="{{ url_for('portfolio_export') }}" class="btn btn-secondary">DOWNLOAD .MD</a>
+    </div>
+    {% endif %}
+</div>
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first, then come back to see every project grouped by theme.</p>
+    </div>
+</div>
+{% else %}
+
+{{ portfolio_subnav(tab) }}
+
+<textarea id="portfolio-markdown" hidden readonly>{{ markdown }}</textarea>
+
+{% if tab == 'themes' %}
+<p class="projects-hint">
+    Tags are your groups, so they work everywhere: pick a theme here, then jump straight to its
+    <strong>In flight</strong>, <strong>Briefing</strong>, or <strong>Resume</strong> view. A project can carry more than one tag.
+    Church, School, Combined and Personal are categories: a project gets one of those at most.
+</p>
+
+<div class="briefing-stats">
+    <span class="briefing-stat"><strong>{{ view.total }}</strong> projects</span>
+    <span class="briefing-stat briefing-stat-ok"><strong>{{ view.tagged }}</strong> tagged</span>
+    {% if view.untagged %}<span class="briefing-stat briefing-stat-missing"><strong>{{ view.untagged|length }}</strong> untagged</span>{% endif %}
+    <span class="briefing-stat"><strong>{{ view.tag_names|length }}</strong> tags</span>
+</div>
+
+<div class="pf-toolbar">
+    <button type="button" class="btn btn-primary btn-sm" id="pf-suggest-btn" data-scope="untagged"
+            {% if not github_connected %}disabled title="Reconnect first (see the banner above)."{% elif not view.untagged %}disabled title="Every project already has a tag."{% endif %}>
+        SUGGEST TAGS{% if view.untagged %} FOR {{ view.untagged|length }} UNTAGGED{% endif %}
+    </button>
+    <button type="button" class="btn btn-outline btn-sm" id="pf-suggest-all-btn" data-scope="all"
+            {% if not github_connected %}disabled{% endif %} title="Ask for a fresh tag pass over every project. Nothing changes until you approve it.">RE-SUGGEST ALL</button>
+    {% if view.missing_one_liners %}
+    <button type="button" class="btn btn-outline btn-sm" id="pf-summarize-btn" {% if not github_connected %}disabled{% endif %}
+            title="Writes the three-sentence Selector summary for projects that have none (~$0.001 each).">SUMMARIZE {{ view.missing_one_liners|length }} MISSING</button>
+    {% endif %}
+    <details class="pf-manage">
+        <summary class="btn btn-outline btn-sm">MANAGE TAGS</summary>
+        <div class="pf-manage-body">
+            <form method="POST" action="{{ url_for('portfolio_tags') }}" class="pf-inline-form">
+                <input type="hidden" name="action" value="create">
+                <input type="text" name="name" maxlength="40" placeholder="New tag name" required aria-label="New tag name">
+                <button type="submit" class="btn btn-sm btn-primary">CREATE</button>
+            </form>
+            <ul class="pf-tag-list">
+                {% for t in view.tag_names %}
+                <li>
+                    <span class="pf-tag-name">{{ t }}</span>
+                    {% if t in category_tags %}
+                    <span class="pf-muted">category (fixed)</span>
+                    {% else %}
+                    <form method="POST" action="{{ url_for('portfolio_tags') }}" class="pf-inline-form">
+                        <input type="hidden" name="action" value="rename">
+                        <input type="hidden" name="name" value="{{ t }}">
+                        <input type="text" name="new_name" maxlength="40" placeholder="Rename to…" required aria-label="Rename {{ t }}">
+                        <button type="submit" class="btn btn-sm btn-outline">RENAME</button>
+                    </form>
+                    <form method="POST" action="{{ url_for('portfolio_tags') }}" class="pf-inline-form"
+                          data-confirm="Delete the tag {{ t }}? Its projects stay; only the tag goes.">
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="name" value="{{ t }}">
+                        <button type="submit" class="btn btn-sm btn-secondary">DELETE</button>
+                    </form>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </details>
+</div>
+
+{% if suggestions %}
+<form method="POST" action="{{ url_for('portfolio_apply_suggestions') }}" class="pf-suggestions">
+    <div class="pf-suggestions-head">
+        <h2>Suggested tags <span class="pf-muted">({{ suggestions|length }} project{{ 's' if suggestions|length != 1 }}{% if suggestions_at %}, {{ suggestions_at|central_time }}{% endif %})</span></h2>
+        <p class="pf-muted">Nothing has changed yet. Untick anything that's wrong, then apply. <span class="pf-new">NEW</span> means the tag gets created.</p>
+    </div>
+    <div class="pf-suggestion-list">
+        {% for s in suggestions %}
+        <div class="pf-suggestion">
+            <span class="pf-name">{{ s.repo }}</span>
+            <span class="pf-suggestion-tags">
+            {% for t in s.tags %}
+                <label class="pf-pick"><input type="checkbox" name="pick" value="{{ s.repo }}::{{ t }}" checked> {{ t }}{% if t in s.new_tags %} <span class="pf-new">NEW</span>{% endif %}</label>
+            {% endfor %}
+            </span>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="pf-suggestion-actions">
+        <button type="submit" name="action" value="apply_close" class="btn btn-primary btn-sm">APPLY TICKED</button>
+        <button type="submit" name="action" value="dismiss" class="btn btn-secondary btn-sm" formnovalidate>DISMISS ALL</button>
+    </div>
+</form>
+{% endif %}
+
+<nav class="pf-jump" aria-label="Jump to a theme">
+    {% if view.untagged %}<a href="#pf-untagged" class="group-tab">Untagged <span class="group-count">{{ view.untagged|length }}</span></a>{% endif %}
+    {% for sec in view.sections if sec.count %}<a href="#pf-tag-{{ loop.index }}" class="group-tab">{{ sec.tag }} <span class="group-count">{{ sec.count }}</span></a>{% endfor %}
+</nav>
+
+{% if view.untagged %}
+<section class="pf-section pf-section-untagged" id="pf-untagged">
+    <div class="pf-section-head">
+        <h2>Untagged <span class="pf-count">{{ view.untagged|length }}</span></h2>
+        <span class="pf-muted">Give each one a theme with + TAG, or let SUGGEST TAGS propose them.</span>
+    </div>
+    {% for r in view.untagged %}{{ repo_row(r) }}{% endfor %}
+</section>
+{% endif %}
+
+{% for sec in view.sections if sec.count %}
+<section class="pf-section" id="pf-tag-{{ loop.index }}">
+    <div class="pf-section-head">
+        <h2>{{ sec.tag }} <span class="pf-count">{{ sec.count }}</span></h2>
+        <span class="pf-muted">{{ sec.active }} active in the last {{ active_days }} days{% if sec.open_branches %} · {{ sec.open_branches }} open branch{{ 'es' if sec.open_branches != 1 }}{% endif %}</span>
+        {% if sec.count %}
+        <span class="pf-section-links">
+            <a href="{{ url_for('inflight_view', group=sec.tag) }}">In flight</a>
+            <a href="{{ url_for('briefing_view', group=sec.tag) }}">Briefing</a>
+            <a href="{{ url_for('resume_index', group=sec.tag) }}">Resume</a>
+            <a href="{{ url_for('yesterday_view', group=sec.tag) }}">Recent sessions</a>
+        </span>
+        {% endif %}
+    </div>
+    {% for r in sec.repos %}{{ repo_row(r) }}{% endfor %}
+    {% if sec.missing %}<p class="pf-muted pf-missing">Also in this tag but not in the latest scan: {{ sec.missing|join(', ') }}</p>{% endif %}
+</section>
+{% endfor %}
+{% set empty_tags = view.sections|selectattr('count', 'equalto', 0)|map(attribute='tag')|list %}
+{% if empty_tags %}
+<p class="pf-empty">No projects yet in: {{ empty_tags|join(' · ') }}. Add them with + TAG on any project, or remove unused tags under MANAGE TAGS.</p>
+{% endif %}
+
+{% else %}
+<p class="projects-hint">
+    The shared building blocks any new project should attach to instead of rebuilding. For each area, pick the
+    <strong>home repo</strong> where that component lives (or will live). The best sources come from the last
+    <a href="{{ url_for('components_view') }}">Components</a> scan: the repos with the most matching files to extract from.
+    The plan for extracting them is in <code>COMPONENTIZATION_PLAN.md</code>.
+</p>
+{% if not components_scanned %}
+<div class="stale-scan-banner">
+    <span>No Components scan yet, so best sources are blank.</span>
+    <a href="{{ url_for('components_view') }}" class="btn btn-sm btn-outline">RUN A COMPONENTS SCAN</a>
+</div>
+{% endif %}
+<div class="pf-infra-grid">
+    {% for a in infra %}
+    <div class="pf-infra-card {% if a.home %}pf-infra-homed{% endif %}">
+        <h3>{{ a.label }}</h3>
+        <p class="pf-infra-desc">{{ a.description }}</p>
+        <form method="POST" action="{{ url_for('portfolio_infra_home') }}" class="pf-inline-form pf-infra-home">
+            <input type="hidden" name="area" value="{{ a.key }}">
+            <label class="pf-muted" for="home-{{ a.key }}">Home repo</label>
+            <select name="repo" id="home-{{ a.key }}">
+                <option value="">— none yet —</option>
+                {% for full, r in view.rows|dictsort %}<option value="{{ full }}" {% if a.home == full %}selected{% endif %}>{{ r.name }}{% if r.owner != session.get('github_user') %} ({{ r.owner }}){% endif %}</option>{% endfor %}
+            </select>
+            <button type="submit" class="btn btn-sm btn-outline">SAVE</button>
+        </form>
+        <div class="pf-infra-sources">
+            {% if a.sources %}
+            <span class="pf-muted">Best sources ({{ a.repo_count }} repo{{ 's' if a.repo_count != 1 }} have it):</span>
+            <ul>
+                {% for s in a.sources %}<li><a href="{{ url_for('resume_view', owner=s.owner, name=s.name) }}">{{ s.name }}</a> <span class="pf-muted">{{ s.hits }} file{{ 's' if s.hits != 1 }}</span></li>{% endfor %}
+            </ul>
+            {% elif a.scanned %}
+            <span class="pf-gap">GAP — no repo has this yet.</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endif %}
+
+<script>
+(function () {
+  var copyBtn = document.getElementById("copy-portfolio-btn");
+  var md = document.getElementById("portfolio-markdown");
+  if (copyBtn && md) copyBtn.addEventListener("click", function () { copyToClipboard(md.value, copyBtn); });
+
+  function post(url, body) {
+    return fetch(url, {
+      method: "POST", credentials: "same-origin",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+    }).then(function (r) {
+      return r.json().catch(function () { return {error: "Server error (" + r.status + ")"}; })
+        .then(function (d) { if (!r.ok || d.error) throw new Error(d.error || ("Server error (" + r.status + ")")); return d; });
+    });
+  }
+
+  function setTag(repo, tag, add, control) {
+    if (control) control.disabled = true;
+    post("/api/portfolio/tag", {repo: repo, tag: tag, add: add})
+      .then(function () { window.location.reload(); })
+      .catch(function (e) { if (control) control.disabled = false; alert(e.message); });
+  }
+
+  document.querySelectorAll(".pf-chip-x").forEach(function (b) {
+    b.addEventListener("click", function () { setTag(b.dataset.repo, b.dataset.tag, false, b); });
+  });
+  document.querySelectorAll(".pf-add-tag").forEach(function (sel) {
+    sel.addEventListener("change", function () {
+      var tag = sel.value;
+      if (!tag) return;
+      if (tag === "__new__") {
+        tag = (window.prompt("New tag name (it's created and added to " + sel.dataset.repo + "):") || "").trim();
+        if (!tag) { sel.value = ""; return; }
+      }
+      setTag(sel.dataset.repo, tag, true, sel);
+    });
+  });
+
+  ["pf-suggest-btn", "pf-suggest-all-btn"].forEach(function (id) {
+    var btn = document.getElementById(id);
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      var scope = btn.dataset.scope;
+      if (scope === "all" && !window.confirm("Suggest tags for every project? Nothing changes until you approve the suggestions.")) return;
+      var label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "THINKING…";
+      post("/api/portfolio/suggest", {scope: scope})
+        .then(function (d) {
+          if (!d.count && d.note) alert(d.note);
+          window.location.reload();
+        })
+        .catch(function (e) { btn.disabled = false; btn.textContent = label; alert("Tag suggestion failed: " + e.message); });
+    });
+  });
+
+  var sumBtn = document.getElementById("pf-summarize-btn");
+  if (sumBtn) sumBtn.addEventListener("click", function () {
+    window.runGenerationQueue({
+      targets: {{ view.missing_one_liners|tojson }},
+      urlFor: function (fullName) {
+        var parts = fullName.split("/");
+        return "/api/selector/blurb/" + encodeURIComponent(parts[0]) + "/" + encodeURIComponent(parts.slice(1).join("/"));
+      },
+      body: {},
+      title: "SUMMARIZING",
+      detail: "Reading each repo's docs or README, then writing a three-sentence summary. A few seconds per project.",
+    });
+  });
+})();
+</script>
+{% endblock %}

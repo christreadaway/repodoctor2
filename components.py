@@ -46,6 +46,8 @@ GROUPS = [
     "Claude Docs Management",
     "Communications",
     "APIs & Integrations",
+    "Media / Video",
+    "Courseware / Learning",
     "Platform & Ops",
 ]
 
@@ -293,6 +295,61 @@ CAPABILITIES: list[dict] = [
         "patterns": [
             r"(^|/)[^/]*(pdf|reportlab|pdfkit|weasyprint|docx|export|exporter|printable)[^/]*\.(py|js|ts|mjs|html)$",
             r"(^|/)(pdf|pdfs|exports?)/",
+        ],
+    },
+    {
+        "key": "crm_contacts",
+        "label": "CRM & Contacts",
+        "group": "APIs & Integrations",
+        "description": "Contact / people records, leads, pipelines, follow-up reminders.",
+        "patterns": [
+            r"(^|/)(crm|contacts?|leads?|pipeline|prospects?|people)/",
+            r"(^|/)[^/]*(crm|contact|lead|prospect|followup|follow_up)[^/]*\.(py|js|ts|json|sql)$",
+        ],
+    },
+    {
+        "key": "privacy_redaction",
+        "label": "Privacy & PII Redaction",
+        "group": "Security",
+        "description": "Anonymizing documents, PII detection and redaction, data minimization.",
+        "patterns": [
+            r"(^|/)[^/]*(anonymi[sz]|redact|pii|scrub|deidentif|sanitiz)[^/]*\.(py|js|ts|json|md)$",
+            r"(^|/)(redaction|anonymi[sz]er|pii)/",
+        ],
+    },
+    # --- Media / Video ---
+    {
+        "key": "video_production",
+        "label": "Video Production",
+        "group": "Media / Video",
+        "description": "Remotion / ffmpeg render pipelines, video scripts, captions and subtitles.",
+        "patterns": [
+            r"(^|/)remotion\.config\.[a-z]+$",
+            r"(^|/)(videos?|remotion|render|renders|clips|footage|storyboards?)/",
+            r"(^|/)[^/]*(ffmpeg|remotion|video|storyboard|b-?roll)[^/]*\.(py|js|ts|tsx|jsx|sh|json|md)$",
+            r"\.(srt|vtt)$",
+        ],
+    },
+    {
+        "key": "audio_transcription",
+        "label": "Audio & Transcription",
+        "group": "Media / Video",
+        "description": "Recording, Whisper-style transcription, audio processing.",
+        "patterns": [
+            r"(^|/)(audio|transcripts?|transcriptions?|recordings?)/",
+            r"(^|/)[^/]*(whisper|transcri|speech|diariz|audio)[^/]*\.(py|js|ts|json|md)$",
+        ],
+    },
+    # --- Courseware / Learning ---
+    {
+        "key": "courseware",
+        "label": "Courseware",
+        "group": "Courseware / Learning",
+        "description": "Lessons, curricula, standards alignment, quizzes, gradebooks.",
+        "patterns": [
+            r"(^|/)(lessons?|curriculum|curricula|courses?|coursework|syllabus|syllabi|quizzes|quiz|units|standards|gradebook)/",
+            r"(^|/)[^/]*(lesson|curriculum|syllabus|quiz|rubric|gradebook|standards?)[^/]*\.(py|js|ts|json|md|html|csv)$",
+            r"(^|/)imsmanifest\.xml$",
         ],
     },
     {
