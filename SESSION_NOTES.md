@@ -1,11 +1,39 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 21
-**Date Range:** 2025-02-14 to 2026-10-25
-**Last Updated:** 2026-10-25 (Session 21)
+**Total Sessions Logged:** 22
+**Date Range:** 2025-02-14 to 2026-10-26
+**Last Updated:** 2026-10-26 (Session 22)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 22 — 2026-10-26 (Portfolio: themes, editable tags, infrastructure map)
+
+Chris asked for three things: run it on Netlify; a screen that summarizes all repos at a high level and puts like projects together (investing / personal finance, marketing / GTM, school, church, infrastructure) to help context switching, with tags he can change and add; and a set of functional infrastructure repos (marketing, video production, security, messaging, BI / data viz, courseware, others as found) to tie any new build to.
+
+### Decisions
+- **Netlify: "not now."** Asked with three options (read-only static snapshot, full rebuild as Netlify functions + Google sign-in + Firestore, or defer). Context: the hosted site was taken down 2026-07-23 because it kept the GitHub PAT online 24/7, the Node port is ~20 features behind, and Netlify's 10-26s function limit can't run 30-90s scans / AI calls. Recommendation for later: the static snapshot (no secrets leave the Mac).
+- **Tags = groups.** No second data model: a theme picked on Portfolio filters every screen, which is the context-switching payoff. Categories stay single-select.
+- **AI suggests, never applies.** Suggestions are reviewed and ticked first.
+- **Components folded under Portfolio** so the nav stays at ten tabs (an 11th wrapped Settings onto a second line at 1280px).
+
+### What We Built
+- `portfolio.py`: `build_view` (sections per tag, Untagged, open-branch / active counts, one-liner from blurb → summary → description), `infrastructure_view` (17 functional areas → Components capabilities → top sources + assigned home), Markdown export, suggestion prompt + `normalize_suggestions` (known repos only, case-folds onto existing tags, flags NEW tags, skips tags a repo already has).
+- Routes: `/portfolio` (`?tab=infra`), `/api/portfolio/tag`, `/portfolio/tags`, `/api/portfolio/suggest`, `/portfolio/suggestions`, `/portfolio/infra-home`, `/portfolio/export.md`. Logged to `data/logs/portfolio.log`.
+- `models.py`: `tag_repo`, `create_tag`, suggestion and infra-home storage.
+- `components.py`: Video Production, Audio & Transcription, Courseware, CRM & Contacts, Privacy & PII Redaction (+2 buckets: Media / Video, Courseware / Learning).
+- `templates/portfolio.html` + styles; `portfolio_subnav` macro shared with Components.
+- `COMPONENTIZATION_PLAN.md`: infrastructure area table with likely source repos from the real repo list (CRM and PII redaction surfaced from the list itself).
+
+### Tests
+**485 passing** (+15 in `tests/test_portfolio.py`: pure functions, seeding once, tag API incl. category single-select, tag manager, suggest → apply only ticked + forged pair ignored, AI failure saves nothing, infra home + export). Chromium: both tabs at 390 / 1280, no console errors, no horizontal scroll; real add-tag / new-tag / remove-tag round trip.
+
+### Next Steps
+1. Pull and launch, RE-SCAN, open **Portfolio** → SUGGEST TAGS → review and APPLY TICKED.
+2. Portfolio → Components scan → SCAN COMPONENTS, then Infrastructure: pick a home repo per area.
+3. Netlify later: read-only snapshot is the recommended path when you want it.
 
 ---
 

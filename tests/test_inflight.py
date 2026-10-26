@@ -587,12 +587,14 @@ class TestRoutes(unittest.TestCase):
 
     # --- Cross-cutting -------------------------------------------------------
 
-    def test_nav_has_components_and_subnav_on_next_up(self):
+    def test_nav_has_portfolio_and_subnav_on_next_up(self):
         self._login()
         self._scan()
         self.m._github_client = None  # not-connected state still shows nav + subnav
         resp = self.client.get("/yesterday")
-        self.assertIn(b'href="/components"', resp.data)
+        # Components now lives under the Portfolio tab's sub-nav.
+        self.assertIn(b'href="/portfolio"', resp.data)
+        self.assertIn(b'href="/components"', self.client.get("/portfolio").data)
         self.assertIn(b"Recent sessions", resp.data)
         self.assertIn(b"Resume a project", resp.data)
 

@@ -43,3 +43,14 @@
     <a href="{{ url_for('resume_index') }}" class="subnav-link {% if current == 'resume' %}active{% endif %}">Resume a project</a>
 </div>
 {%- endmacro %}
+
+
+{# Sub-navigation for the Portfolio tab: themes, the infrastructure map, and
+   the Components scan that feeds it. `current` is 'themes' | 'infra' | 'components'. #}
+{% macro portfolio_subnav(current) -%}
+<div class="subnav" role="tablist" aria-label="Portfolio views">
+    <a href="{{ url_for('portfolio_view') }}" class="subnav-link {% if current == 'themes' %}active{% endif %}">By theme</a>
+    <a href="{{ url_for('portfolio_view', tab='infra') }}" class="subnav-link {% if current == 'infra' %}active{% endif %}">Infrastructure</a>
+    <a href="{{ url_for('components_view') }}" class="subnav-link {% if current == 'components' %}active{% endif %}">Components scan</a>
+</div>
+{%- endmacro %}

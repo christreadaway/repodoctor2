@@ -46,6 +46,32 @@ Source candidates come from the RepoDoctor Components inventory. Run it, then fi
 | APIs & Integrations | Auth helper (Firebase/Google), Firestore access layer, API client base class with logging and backoff, AI SDK wrapper | Package | Rate-limit and cost logging by default |
 | Platform & Ops | Logging setup with rotation, deploy configs (Netlify, Firebase, Docker), launchers, Makefile, scheduled jobs pattern | Template + package | Nightly health check across all deployed apps |
 
+## Infrastructure areas (Portfolio → Infrastructure)
+
+The Portfolio screen turns the catalog above into one card per **functional area**, each with a **home repo** you assign (where that component lives or will live) and the best source repos from the last Components scan. The areas, your list first, then the ones the repo list shows recurring:
+
+| Area | What it holds | Likely sources today (by repo name; confirm with a Components scan) |
+|---|---|---|
+| Marketing / GTM | Landing pages, SEO, analytics, launch checklists | redmon, treadawaywebsite, st-theresasite |
+| Video production | Remotion / ffmpeg pipelines, captions | none obvious yet (likely a gap) |
+| Security | CSRF / headers / rate limits, secrets, credential encryption | repodoctor2 (`security.py`) |
+| Messaging (email, SMS) | Email + SMS senders, templates, webhooks | parentpoint, campusops |
+| BI / charts / data viz | Chart defaults, dashboards, stat tiles | personalfinance, thesharppoll, repodoctor2 (Stats) |
+| Courseware | Lessons, curricula, standards alignment, quizzes | lessonalign, standardscollector, teacherAIde, mathtracker |
+| Audio / transcription | Recording, Whisper transcription | audioscribe |
+| AI integration | Claude client wrapper, structured outputs, cost logging | repodoctor2 (`ai_analyzer.py`), teacherAIde, craft-agents |
+| Sign-in & data | Google sign-in, Firebase / Firestore layer | parentpoint, beacon |
+| CRM & contacts | People records, leads, follow-ups | personalcrm, shepherdCRM, birddogCRM |
+| Privacy & PII redaction | Anonymizing documents before AI or reports | docanonymizer |
+| Payments | Stripe checkout, subscriptions | (scan will tell) |
+| Logging & debugging | Rotating app log, copy-for-Claude error format | repodoctor2 |
+| Testing | Test scaffolds, smoke tests, browser checks | repodoctor2 |
+| Claude docs management | CLAUDE.md, spec/status/notes, /start and /end | claudesync2, claudecodearchiver, md_md, every repo |
+| Deploy, launchers & scheduling | Netlify / Firebase / Docker, start scripts, scheduled jobs | ops, edge-ops, rundeck, StTdevops |
+| Documents & PDF | PDF / DOCX generation, templates | worshipaidcreator, sacramentalrecords |
+
+The CRM and privacy rows are the two the repo list surfaced on its own: three separate CRM repos means a shared contacts component would pay off immediately, and PII redaction is the guardrail every school and parish app needs before sending anything to an AI.
+
 ## How RepoDoctor supports the process
 
 1. **Components inventory.** Scan once. The page shows each capability, the best-source repo with the evidence paths, and every other repo that has it. The "Suggested extraction order" ranks by how many repos share the capability.

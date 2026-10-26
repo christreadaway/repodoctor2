@@ -910,3 +910,73 @@ def log_components_event(event: str, **fields):
 
 def tail_components_log(n: int = 100) -> list[dict]:
     return _tail_log(COMPONENTS_LOG_PATH, n)
+
+
+# --- Portfolio (tags = groups, AI tag suggestions, infrastructure homes) ---
+# Tags live in groups.json (see get_groups); these helpers add/remove one repo
+# under the store lock so two quick chip clicks can't drop each other's edit.
+PORTFOLIO_SUGGESTIONS_PATH = os.path.join(DATA_DIR, "portfolio_suggestions.json")
+# Which repo is the designated home for each functional infrastructure area.
+# User dir so it survives re-cloning, like groups.
+INFRA_HOMES_PATH = os.path.join(USER_DATA_DIR, "infra_homes.json")
+PORTFOLIO_LOG_PATH = os.path.join(DATA_DIR, "logs", "portfolio.log")
+
+
+def tag_repo(repo_name: str, tag: str, add: bool = True) -> bool:
+    """Add or remove one repo under one tag (group). Adding creates the tag.
+    Returns False when removing from a tag that doesn't exist."""
+    with _STORE_LOCK:
+        groups = get_groups()
+        if not add and tag not in groups:
+            return False
+        members = set(groups.get(tag, []))
+        if add:
+            members.add(repo_name)
+        else:
+            members.discard(repo_name)
+        groups[tag] = sorted(members)
+        save_groups(groups)
+        return True
+
+
+def create_tag(tag: str) -> bool:
+    with _STORE_LOCK:
+        groups = get_groups()
+        if tag in groups:
+            return False
+        groups[tag] = []
+        save_groups(groups)
+        return True
+
+
+def get_portfolio_suggestions() -> dict:
+    data = _load_json(PORTFOLIO_SUGGESTIONS_PATH)
+    return data if isinstance(data, dict) else {}
+
+
+def save_portfolio_suggestions(data: dict):
+    _save_json(PORTFOLIO_SUGGESTIONS_PATH, data)
+
+
+def get_infra_homes() -> dict:
+    data = _load_json(INFRA_HOMES_PATH)
+    return data if isinstance(data, dict) else {}
+
+
+def set_infra_home(area_key: str, full_name: str):
+    with _STORE_LOCK:
+        homes = get_infra_homes()
+        if full_name:
+            homes[area_key] = full_name
+        else:
+            homes.pop(area_key, None)
+        os.makedirs(USER_DATA_DIR, exist_ok=True)
+        _save_json(INFRA_HOMES_PATH, homes)
+
+
+def log_portfolio_event(event: str, **fields):
+    _append_log_event(PORTFOLIO_LOG_PATH, event, fields)
+
+
+def tail_portfolio_log(n: int = 100) -> list[dict]:
+    return _tail_log(PORTFOLIO_LOG_PATH, n)

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import category_badge, group_filter_bar with context %}
+{% from "_macros.html" import category_badge, group_filter_bar, portfolio_subnav with context %}
 {% block title %}RepoDoctor — Components{% endblock %}
 {% block content %}
 <div class="page-header">
@@ -16,6 +16,8 @@
         {% endif %}
     </div>
 </div>
+
+{{ portfolio_subnav('components') }}
 
 {% if not scan_results %}
 <div class="onboarding">
@@ -40,7 +42,7 @@
             <div class="step-number">1</div>
             <div class="step-content">
                 <h3>Scan</h3>
-                <p>Fetches each repo's file list and matches it against ~20 capability patterns. Vendor folders are skipped.</p>
+                <p>Fetches each repo's file list and matches it against ~25 capability patterns. Vendor folders are skipped.</p>
             </div>
         </div>
         <div class="onboarding-step">
