@@ -270,10 +270,18 @@ def _local_only_guard():
         return Response("RepoDoctor only answers on 127.0.0.1.", status=403)
     if request.method == "POST":
         origin = request.headers.get("Origin")
-        if origin and origin != "null":
-            if urllib.parse.urlsplit(origin).netloc != request.host:
-                logger.warning("Rejected cross-origin POST from %s to %s", origin, request.path)
-                return Response("Cross-site request blocked.", status=403)
+        # "null" is what a browser sends after a cross-origin redirect (a page
+        # on another 127.0.0.1 port posting to itself, then 307-ing here). The
+        # app's own forms never send it (no no-referrer policy anywhere).
+        if origin == "null" or (origin and urllib.parse.urlsplit(origin).netloc != request.host):
+            logger.warning("Rejected cross-origin POST from %s to %s", origin, request.path)
+            return Response("Cross-site request blocked.", status=403)
+        # Fetch metadata, where the browser sends it: only same-origin forms
+        # (or a user-typed navigation, "none") may POST here.
+        site = request.headers.get("Sec-Fetch-Site")
+        if site and site not in ("same-origin", "none"):
+            logger.warning("Rejected %s POST (Sec-Fetch-Site) to %s", site, request.path)
+            return Response("Cross-site request blocked.", status=403)
     return None
 
 
@@ -570,6 +578,7 @@ def login_reset():
     _github_client = None
     _credentials = None
     security.delete_credentials()
+    _forget_snapshot_secrets("login reset")
     session.clear()
     flash(
         "Stored credentials deleted. Enter your new GitHub PAT and Anthropic key below.",
@@ -903,6 +912,7 @@ def settings():
             if rejected:
                 return rejected
             security.delete_credentials()
+            _forget_snapshot_secrets("settings reset")
             flash("Credentials deleted. You will need to re-enter them.", "success")
             return redirect(url_for("logout"))
 
@@ -2438,6 +2448,25 @@ def _lock_snapshot() -> None:
     _snapshot_secrets = None
 
 
+def _forget_snapshot_secrets(reason: str) -> None:
+    """A credential reset changes the app password, so the snapshot secrets
+    (encrypted with the old one) could never unlock again and the live site
+    couldn't be taken down. Drop them and mark the site as needing setup;
+    setup with the same Netlify account reuses or replaces the site."""
+    _lock_snapshot()
+    if security.snapshot_secrets_exist():
+        security.delete_snapshot_secrets()
+        state = models.get_snapshot_state()
+        if state:
+            models.save_snapshot_state({**state, "needs_setup": True})
+        models.log_snapshot_event("secrets_forgotten", reason=reason)
+
+
+# One snapshot operation at a time: a publish racing a takedown could write
+# the state back after the takedown cleared it.
+_snapshot_op_lock = threading.Lock()
+
+
 def _snapshot_data(scan: dict) -> dict:
     """Everything the snapshot shows, from the same caches the pages use.
     One Stats read (widened to cover YTD) serves all four ranges."""
@@ -2493,13 +2522,15 @@ def _snapshot_data(scan: dict) -> dict:
     }
 
 
-def _snapshot_build(scan: dict, passphrase: str) -> dict:
-    """Render -> encrypt -> shell -> files. Returns {"files", "zip", "bytes"}."""
+def _snapshot_build(scan: dict, passphrase: str, preview: bool = False) -> dict:
+    """Render -> encrypt -> shell -> files. Returns {"files", "zip", "bytes"}.
+    preview: the Mac's local preview never offers "Remember on this device"
+    (it would store the key on the app's own origin)."""
     import snapshot as snap
     data = _snapshot_data(scan)
     body = snap.render_body(data)
     payload = snap.encrypt(body, passphrase)
-    shell = snap.build_shell(payload, data["built_label"])
+    shell = snap.build_shell(payload, data["built_label"], allow_remember=not preview)
     files = snap.site_files(shell)
     blob = snap.build_zip(files)
     return {"files": files, "zip": blob, "bytes": len(blob), "body_chars": len(body)}
@@ -2513,6 +2544,22 @@ def _snapshot_csp(files: dict) -> str:
         if line.lower().startswith("content-security-policy:"):
             return line.split(":", 1)[1].strip()
     return ""
+
+
+def _snapshot_retire_site(nf, state: dict, old_token: str | None, new_token: str) -> str:
+    """Delete the previous snapshot site (old token first, then the new one).
+    Returns a sentence for the owner: replaced, or still online + where."""
+    for tok in [t for t in (old_token, new_token) if t]:
+        try:
+            nf.NetlifyClient(tok, log_event=models.log_snapshot_event).delete_site(state["site_id"])
+            models.log_snapshot_event("site_retired", site_id=state["site_id"])
+            return ("New phone link below: the old snapshot site was deleted, so copies under the "
+                    "previous passphrase are gone.")
+        except nf.NetlifyError as e:
+            models.log_snapshot_event("site_retire_failed", site_id=state["site_id"], status=e.status)
+            continue
+    return (f"Your previous snapshot ({state.get('url') or 'old site'}) is still online and this token "
+            "can't delete it. Delete it in Netlify (Sites) so old copies don't linger.")
 
 
 def _snapshot_back():
@@ -2564,6 +2611,11 @@ def _snapshot_publish_now(scan: dict) -> bool:
 @app.route("/snapshot/setup", methods=["POST"])
 @_require_auth
 def snapshot_setup():
+    with _snapshot_op_lock:
+        return _snapshot_setup_locked()
+
+
+def _snapshot_setup_locked():
     """Settings -> Phone snapshot: save the Netlify token + passphrase
     (encrypted with the app password), create the site if needed, publish."""
     global _snapshot_secrets
@@ -2586,17 +2638,31 @@ def snapshot_setup():
     if not password or security.decrypt_credentials(password) is None:
         flash("Wrong app password. Nothing was changed.", "error")
         return _snapshot_back()
+    if passphrase == password or security.decrypt_credentials(passphrase) is not None:
+        # The ciphertext is public: a passphrase equal to the app password
+        # would let anyone guess at the password protecting your keys.
+        flash("Use a passphrase that's different from your app password. Nothing was changed.", "error")
+        return _snapshot_back()
     client = nf.NetlifyClient(token, log_event=models.log_snapshot_event)
     state = models.get_snapshot_state()
+    # What was set up before (in memory, or unlockable with this password).
+    old = _snapshot_secrets or security.decrypt_snapshot_secrets(password) or {}
+    same = bool(old) and old.get("netlify_token") == token and old.get("passphrase") == passphrase
+    replaced_note = ""
     try:
         client.verify()
         site, created = None, False
-        if state.get("site_id"):
+        if state.get("site_id") and same:
             try:
                 site = client.get_site(state["site_id"])
             except nf.NetlifyError as e:
                 if e.status != 404:
                     raise
+        elif state.get("site_id"):
+            # New passphrase or another Netlify account: replace the site, so
+            # copies encrypted with the old passphrase (or left on the other
+            # account) don't stay online where TAKE DOWN can't reach them.
+            replaced_note = _snapshot_retire_site(nf, state, old.get("netlify_token"), token)
         if site is None:
             site, created = client.create_site(), True
     except nf.NetlifyError as e:
@@ -2610,10 +2676,14 @@ def snapshot_setup():
         flash(f"Couldn't save the snapshot settings ({type(e).__name__}).", "error")
         return _snapshot_back()
     _snapshot_secrets = {"netlify_token": token, "passphrase": passphrase}
+    state = {k: v for k, v in state.items() if k not in ("needs_setup", "last_published_at",
+                                                         "last_bytes", "last_deploy_id")} if created else state
     models.save_snapshot_state({**state, "site_id": site["site_id"], "name": site.get("name", ""),
                                 "url": site.get("url", ""), "admin_url": site.get("admin_url", ""),
                                 "set_up_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                                "last_error": ""})
+                                "last_error": "", "needs_setup": False})
+    if replaced_note:
+        flash(replaced_note, "warning" if "still online" in replaced_note else "success")
     models.log_snapshot_event("setup", site_id=site["site_id"], created=created)
     if _scan_results:
         _snapshot_publish_now(_scan_results)
@@ -2631,7 +2701,8 @@ def snapshot_publish():
     if _snapshot_secrets is None:
         flash("The app restarted, so publishing is locked. Log out and back in to unlock it.", "error")
         return redirect(_safe_next() or url_for("settings") + "#snapshot")
-    _snapshot_publish_now(_scan_results)
+    with _snapshot_op_lock:
+        _snapshot_publish_now(_scan_results)
     return redirect(_safe_next() or url_for("settings") + "#snapshot")
 
 
@@ -2641,13 +2712,15 @@ def snapshot_preview():
     """The exact page the phone gets (encrypted with the real passphrase),
     served locally under the same Content-Security-Policy, to try unlocking
     before publishing."""
+    if request.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+        return Response("Open PREVIEW from RepoDoctor's Settings page.", status=403)
     if not _scan_results:
         flash("No scan data yet — run a scan first.", "error")
         return _snapshot_back()
     if _snapshot_secrets is None:
         flash("Set up the phone snapshot first (or log in again to unlock it).", "error")
         return _snapshot_back()
-    built = _snapshot_build(_scan_results, _snapshot_secrets["passphrase"])
+    built = _snapshot_build(_scan_results, _snapshot_secrets["passphrase"], preview=True)
     models.log_snapshot_event("preview", bytes=built["bytes"])
     resp = Response(built["files"]["index.html"], mimetype="text/html; charset=utf-8")
     csp = _snapshot_csp(built["files"])
@@ -2660,13 +2733,27 @@ def snapshot_preview():
 @app.route("/snapshot/takedown", methods=["POST"])
 @_require_auth
 def snapshot_takedown():
-    """Delete the Netlify site and forget the snapshot settings."""
+    """Delete the Netlify site and forget the snapshot settings. Needs the
+    per-boot form token: it destroys the site and the stored secrets."""
+    rejected = _reject_bad_reset_token("Settings", "settings")
+    if rejected:
+        return rejected
+    with _snapshot_op_lock:
+        return _snapshot_takedown_locked()
+
+
+def _snapshot_takedown_locked():
     import netlify_publish as nf
     state = models.get_snapshot_state()
     if state.get("site_id"):
         if _snapshot_secrets is None:
-            flash("Log out and back in first: taking the site down needs the Netlify token, "
-                  "which is locked after a restart.", "error")
+            if not security.snapshot_secrets_exist():
+                flash("The Netlify token was cleared (credentials were reset), so the app can't delete "
+                      f"the site. Run setup again below, or delete it in Netlify: {state.get('admin_url') or 'app.netlify.com'}.",
+                      "error")
+            else:
+                flash("Log out and back in first: taking the site down needs the Netlify token, "
+                      "which is locked after a restart.", "error")
             return _snapshot_back()
         try:
             nf.NetlifyClient(_snapshot_secrets["netlify_token"],

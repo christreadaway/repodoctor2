@@ -153,7 +153,57 @@ def check_passphrase(passphrase) -> str | None:
         return f"Keep it under {MAX_PASSPHRASE_LEN:,} characters."
     if len(set(p.lower())) < MIN_DISTINCT_CHARS:
         return "Use more variety. That one repeats the same few characters."
+    # The encrypted file is public, so it can be guessed at offline: refuse
+    # the guesses that come first (common words, keyboard runs, sequences)
+    # and anything too short for its character mix.
+    weak = _guessable(p)
+    if weak:
+        return weak
+    if _estimated_bits(p) < MIN_PASSPHRASE_BITS:
+        return ("That's too easy to guess for a file anyone can download. Make it longer, or mix in "
+                "capitals, numbers or symbols. Four random words, or SUGGEST in Settings, works well.")
     return None
+
+
+# Rough strength floor: length x log2(character pool). 4 random words easily
+# clears it; 12 lowercase letters alone doesn't.
+MIN_PASSPHRASE_BITS = 60
+_COMMON = ("password", "passw0rd", "qwerty", "letmein", "welcome", "admin", "iloveyou",
+           "monkey", "dragon", "football", "baseball", "sunshine", "princess", "secret",
+           "repodoctor", "snapshot", "netlify", "github", "claude", "changeme", "trustno1")
+_RUNS = ("abcdefghijklmnopqrstuvwxyz", "01234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm",
+         "1qaz2wsx3edc", "qazwsxedc")
+_RUN_LEN = 6
+
+
+def _guessable(p: str) -> str | None:
+    low = p.lower()
+    squashed = re.sub(r"[^a-z0-9]", "", low)
+    for word in _COMMON:
+        if word in squashed and len(squashed.replace(word, "")) < 8:
+            return f"That's built on \"{word}\", one of the first things anyone guesses. Pick something else."
+    for run in _RUNS:
+        for seq in (run, run[::-1]):
+            for i in range(len(seq) - _RUN_LEN + 1):
+                if seq[i:i + _RUN_LEN] in squashed and len(squashed) - _RUN_LEN < 8:
+                    return "That's mostly a keyboard row or a sequence, which is guessed first. Pick something else."
+    return None
+
+
+def _estimated_bits(p: str) -> float:
+    import math
+    pool = 0
+    if re.search(r"[a-z]", p):
+        pool += 26
+    if re.search(r"[A-Z]", p):
+        pool += 26
+    if re.search(r"[0-9]", p):
+        pool += 10
+    if re.search(r"[^A-Za-z0-9 ]", p):
+        pool += 33
+    if " " in p:
+        pool += 1
+    return len(p) * math.log2(max(pool, 2))
 
 
 def _b64(raw: bytes) -> str:
@@ -198,6 +248,20 @@ def validate_payload(payload) -> tuple[int, bytes, bytes, bytes]:
     return it, salt, iv, ct
 
 
+# The ciphertext length would otherwise track how much is in the snapshot
+# (repos, items). Pad to fixed-size blocks with a trailing HTML comment: inert
+# when injected, stripped by decrypt().
+PAD_BLOCK = 32 * 1024
+_PAD_OPEN, _PAD_CLOSE = b"<!--", b"-->"
+_PAD_RE = re.compile(r"<!--[ ]*-->\Z")
+
+
+def _pad(raw: bytes) -> bytes:
+    overhead = len(_PAD_OPEN) + len(_PAD_CLOSE)
+    total = -(-(len(raw) + overhead) // PAD_BLOCK) * PAD_BLOCK
+    return raw + _PAD_OPEN + b" " * (total - len(raw) - overhead) + _PAD_CLOSE
+
+
 def encrypt(plaintext: str, passphrase: str) -> dict:
     """Encrypt `plaintext` for the phone. Raises ValueError (the plain-English
     check_passphrase problem) for an unusable passphrase."""
@@ -211,7 +275,7 @@ def encrypt(plaintext: str, passphrase: str) -> dict:
     key = _derive_key(passphrase, salt, KDF_ITERATIONS)
     # errors="replace": a lone surrogate from odd GitHub JSON becomes "?"
     # instead of failing the whole build.
-    ct = AESGCM(key).encrypt(iv, plaintext.encode("utf-8", errors="replace"), None)
+    ct = AESGCM(key).encrypt(iv, _pad(plaintext.encode("utf-8", errors="replace")), None)
     return {"v": FORMAT_VERSION, "kdf": KDF_NAME, "iter": KDF_ITERATIONS,
             "salt": _b64(salt), "iv": _b64(iv), "ct": _b64(ct)}
 
@@ -227,7 +291,7 @@ def decrypt(payload: dict, passphrase: str) -> str:
         raw = AESGCM(key).decrypt(iv, ct, None)
     except InvalidTag:
         raise ValueError(WRONG_PASSPHRASE) from None
-    return raw.decode("utf-8")
+    return _PAD_RE.sub("", raw.decode("utf-8"))
 
 
 # ----------------------------------------------------------------------
@@ -650,7 +714,8 @@ def render_body(data: dict) -> str:
 SHELL_SCRIPT = r"""
 (function () {
   "use strict";
-  var STORE_KEY = "repodoctor.snapshot.passphrase";
+  var LEGACY_KEY = "repodoctor.snapshot.passphrase";
+  var DB_NAME = "repodoctor-snapshot", DB_STORE = "keys", DB_ITEM = "passphrase-key";
   var WRONG = "That passphrase didn't unlock this snapshot.";
   function el(id) { return document.getElementById(id); }
   var lock = el("rd-lock"), app = el("rd-app"), content = el("rd-content");
@@ -665,14 +730,50 @@ SHELL_SCRIPT = r"""
 
   // Every storage access is wrapped: private mode, blocked site data or a
   // full quota must never stop the page from unlocking.
-  function saved(action, value) {
+  // Earlier versions remembered the passphrase itself in localStorage; it is
+  // only read once, to migrate it, and then removed.
+  function legacy(action) {
     try {
       var ls = window.localStorage;
-      if (action === "get") { return ls.getItem(STORE_KEY); }
-      if (action === "set") { ls.setItem(STORE_KEY, value); }
-      if (action === "clear") { ls.removeItem(STORE_KEY); }
-    } catch (e) { /* remembering just doesn't happen */ }
+      if (action === "get") { return ls.getItem(LEGACY_KEY); }
+      if (action === "clear") { ls.removeItem(LEGACY_KEY); }
+    } catch (e) { /* storage blocked */ }
     return null;
+  }
+
+  // "Remember on this device" keeps a NON-EXTRACTABLE key object in
+  // IndexedDB: this browser can reuse it to unlock, but no script and no one
+  // reading storage can turn it back into the passphrase. Always resolves.
+  function store(mode, work) {
+    return new Promise(function (resolve) {
+      var req;
+      try { req = window.indexedDB.open(DB_NAME, 1); } catch (e) { resolve(null); return; }
+      req.onupgradeneeded = function () {
+        try { req.result.createObjectStore(DB_STORE); } catch (e) { /* exists */ }
+      };
+      req.onerror = function () { resolve(null); };
+      req.onblocked = function () { resolve(null); };
+      req.onsuccess = function () {
+        var db = req.result, out = null;
+        try {
+          var tx = db.transaction(DB_STORE, mode), r = work(tx.objectStore(DB_STORE));
+          if (r) { r.onsuccess = function () { out = r.result; }; }
+          tx.oncomplete = function () { db.close(); resolve(out === undefined ? null : out); };
+          tx.onerror = function () { db.close(); resolve(null); };
+          tx.onabort = function () { db.close(); resolve(null); };
+        } catch (e) {
+          try { db.close(); } catch (e2) { /* ignore */ }
+          resolve(null);
+        }
+      };
+    });
+  }
+
+  function savedKey(action, key) {
+    if (!window.indexedDB) { return Promise.resolve(null); }
+    if (action === "get") { return store("readonly", function (st) { return st.get(DB_ITEM); }); }
+    if (action === "set") { return store("readwrite", function (st) { return st.put(key, DB_ITEM); }); }
+    return store("readwrite", function (st) { return st.delete(DB_ITEM); });
   }
 
   function bytes(b64) {
@@ -690,17 +791,24 @@ SHELL_SCRIPT = r"""
     return p;
   }
 
-  function decrypt(pass) {
+  // The passphrase becomes a non-extractable PBKDF2 base key; each publish's
+  // salt derives the AES-GCM key from it.
+  function baseKey(pass) {
     var subtle = window.crypto && window.crypto.subtle;
     if (!subtle || !window.TextEncoder || !window.TextDecoder) {
       return Promise.reject(new Error("nocrypto"));
     }
     var secret = new TextEncoder().encode(pass.normalize ? pass.normalize("NFC") : pass);
-    return subtle.importKey("raw", secret, "PBKDF2", false, ["deriveKey"]).then(function (base) {
-      return subtle.deriveKey(
-        { name: "PBKDF2", salt: bytes(payload.salt), iterations: payload.iter, hash: "SHA-256" },
-        base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
-    }).then(function (key) {
+    return subtle.importKey("raw", secret, "PBKDF2", false, ["deriveKey"]);
+  }
+
+  function decryptWith(base) {
+    var subtle = window.crypto && window.crypto.subtle;
+    if (!subtle || !window.TextDecoder) { return Promise.reject(new Error("nocrypto")); }
+    return subtle.deriveKey(
+      { name: "PBKDF2", salt: bytes(payload.salt), iterations: payload.iter, hash: "SHA-256" },
+      base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]
+    ).then(function (key) {
       return subtle.decrypt({ name: "AES-GCM", iv: bytes(payload.iv) }, key, bytes(payload.ct));
     }).then(function (buf) {
       return new TextDecoder("utf-8").decode(buf);
@@ -710,7 +818,7 @@ SHELL_SCRIPT = r"""
   function setBusy(on) {
     busy = on;
     unlockBtn.disabled = on;
-    remember.disabled = on;
+    if (remember) { remember.disabled = on; }
     input.readOnly = on;
     unlockBtn.textContent = on ? "UNLOCKING..." : "UNLOCK";
     lock.setAttribute("aria-busy", on ? "true" : "false");
@@ -736,29 +844,33 @@ SHELL_SCRIPT = r"""
     app.hidden = true;
     lock.hidden = false;
     input.value = "";
-    remember.checked = false;
+    if (remember) { remember.checked = false; }
     setBusy(false);
     setStatus(message || "", message ? "ok" : "");
     window.scrollTo(0, 0);
   }
 
-  function unlock(pass, fromSaved) {
+  // source: the typed passphrase, or the key object saved on this device.
+  function unlock(source, fromSaved) {
     if (busy) { return; }
     setBusy(true);
-    setStatus(fromSaved ? "Unlocking with the passphrase saved on this device..."
+    setStatus(fromSaved ? "Unlocking with the key saved on this device..."
                         : "Unlocking... this takes a second or two on a phone.", "busy");
-    decrypt(pass).then(function (html) {
-      if (!fromSaved) {
-        if (remember.checked) { saved("set", pass); } else { saved("clear"); }
-      }
+    var base = typeof source === "string" ? baseKey(source) : Promise.resolve(source);
+    base.then(function (key) {
+      return decryptWith(key).then(function (html) {
+        if (fromSaved || !remember) { return html; }
+        return savedKey(remember.checked ? "set" : "clear", key).then(function () { return html; });
+      });
+    }).then(function (html) {
       show(html);
     }, function (err) {
       setBusy(false);
       var name = err && err.name, msg = err && err.message;
       if (name === "OperationError") {
         if (fromSaved) {
-          saved("clear");
-          remember.checked = false;
+          savedKey("clear");
+          if (remember) { remember.checked = false; }
           setStatus("The passphrase saved on this device didn't unlock this snapshot. Type the current one.", "error");
         } else {
           setStatus(WRONG, "error");
@@ -831,15 +943,27 @@ SHELL_SCRIPT = r"""
     unlock(pass, false);
   });
   forgetBtn.addEventListener("click", function () {
-    saved("clear");
+    legacy("clear");
+    savedKey("clear");
     relock("Locked. This device no longer remembers the passphrase.");
   });
   document.addEventListener("click", onCopyClick);
 
-  var remembered = saved("get");
-  if (remembered) {
-    remember.checked = true;
-    unlock(remembered, true);
+  // Only pages that offer "Remember" (not the Mac's preview) read storage.
+  function savedOnLoad() {
+    var old = legacy("get");
+    if (old) {
+      legacy("clear");
+      return baseKey(old).then(function (key) {
+        return savedKey("set", key).then(function () { return key; });
+      }, function () { return null; });
+    }
+    return savedKey("get");
+  }
+  if (remember) {
+    savedOnLoad().then(function (key) {
+      if (key) { remember.checked = true; unlock(key, true); }
+    });
   }
 })();
 """
@@ -937,9 +1061,8 @@ _SHELL_TEMPLATE = """<!doctype html>
     <p class="rd-built">Built @@LABEL@@</p>
     <form id="rd-form" novalidate>
       <label class="rd-label" for="rd-pass">Passphrase</label>
-      <input id="rd-pass" class="rd-input" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="go" aria-describedby="rd-status">
-      <label class="rd-remember"><input id="rd-remember" type="checkbox"> Remember on this device</label>
-      <p class="rd-hint">Skips this screen next time. Only on your own phone.</p>
+      <input id="rd-pass" class="rd-input" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="go" aria-describedby="rd-status">
+      @@REMEMBER@@
       <button id="rd-unlock" class="rd-btn" type="submit">UNLOCK</button>
       <p id="rd-status" class="rd-status" role="status" aria-live="polite"></p>
     </form>
@@ -979,7 +1102,12 @@ def _csp(script_hashes: list[str], meta: bool = False) -> str:
     return "; ".join(parts)
 
 
-def build_shell(payload: dict, built_label: str) -> str:
+_REMEMBER_HTML = ('<label class="rd-remember"><input id="rd-remember" type="checkbox"> Remember on this device</label>\n'
+                  '      <p class="rd-hint">Skips this screen next time. Only on your own phone.</p>')
+_NO_REMEMBER_HTML = '<p class="rd-hint">Preview on your Mac: nothing is remembered here.</p>'
+
+
+def build_shell(payload: dict, built_label: str, allow_remember: bool = True) -> str:
     """The public index.html. Holds no plaintext data: only the generic title,
     the built label (a date/time string), the validated ciphertext payload, and
     SHELL_SCRIPT. The page carries its own <meta> CSP too, so it stays locked
@@ -999,6 +1127,7 @@ def build_shell(payload: dict, built_label: str) -> str:
         "LABEL": html.escape(label),
         "PAYLOAD": payload_json,
         "SCRIPT": SHELL_SCRIPT,
+        "REMEMBER": _REMEMBER_HTML if allow_remember else _NO_REMEMBER_HTML,
     }
     # One pass, so text inserted for one placeholder is never re-scanned.
     return re.sub(r"@@([A-Z]+)@@", lambda m: values[m.group(1)], _SHELL_TEMPLATE)

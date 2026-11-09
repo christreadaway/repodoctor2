@@ -6697,3 +6697,5 @@ main .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .snapshot-steps li { margin-bottom: 4px; }
 .snapshot-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: var(--space-sm); }
 .status-warn { color: var(--tk-amber-fg); }
+.snapshot-pass-row { display: flex; gap: 8px; align-items: stretch; }
+.snapshot-pass-row input { flex: 1 1 auto; min-width: 0; }

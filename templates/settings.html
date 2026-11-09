@@ -138,13 +138,19 @@
                title="Opens the exact encrypted page your phone gets, served from this Mac">PREVIEW</a>
             <form method="POST" action="{{ url_for('snapshot_takedown') }}" class="inline-form"
                   data-confirm="Delete the Netlify site and forget the token and passphrase? The phone link stops working.">
+                <input type="hidden" name="reset_token" value="{{ reset_token }}">
                 <button type="submit" class="btn btn-danger" data-loading-text="TAKING DOWN…">TAKE DOWN</button>
             </form>
         </div>
+        {% elif st.needs_setup or not snapshot_configured %}
+        <p class="text-secondary status-warn">Your app credentials were reset, so the Netlify token and passphrase were cleared.
+            Run setup again below (with the same Netlify account the old site is replaced), or delete the old site in
+            {% if st.admin_url %}<a href="{{ st.admin_url }}" target="_blank" rel="noopener">Netlify</a>{% else %}Netlify{% endif %}.</p>
         {% else %}
-        <p class="text-secondary">The app restarted, so publishing is locked. Log out and back in to unlock it.</p>
+        <p class="text-secondary">The app restarted, so publishing is locked. Log out and back in to unlock it.
+            If it stays locked after logging in, run setup again below.</p>
         {% endif %}
-        <details class="mt-sm">
+        <details class="mt-sm" {% if st.needs_setup or not snapshot_configured %}open{% endif %}>
             <summary class="text-secondary">Change the Netlify token or passphrase</summary>
         {% else %}
         <ol class="snapshot-steps">
@@ -165,14 +171,18 @@
                 </div>
                 <div class="form-group">
                     <label for="snapshot_passphrase">Snapshot passphrase</label>
-                    <input type="password" id="snapshot_passphrase" name="passphrase" required minlength="{{ snapshot_min_len }}"
-                           autocomplete="new-password" placeholder="{{ snapshot_min_len }}+ characters, not your app password">
-                    <span class="form-hint">You'll type this on your phone. It never leaves your devices; without it the snapshot is unreadable, even to Netlify.</span>
+                    <div class="snapshot-pass-row">
+                        <input type="password" id="snapshot_passphrase" name="passphrase" required minlength="{{ snapshot_min_len }}"
+                               autocomplete="off" placeholder="{{ snapshot_min_len }}+ characters, not your app password">
+                        <button type="button" class="btn btn-secondary btn-sm" id="snapshot-suggest"
+                                title="Fill in a strong random passphrase you can type on a phone">SUGGEST</button>
+                    </div>
+                    <span class="form-hint">You'll type this on your phone (once, if you tick Remember there). It never leaves your devices; without it the snapshot is unreadable, even to Netlify. Avoid common words and keyboard runs: the encrypted file is public, so weak passphrases are refused.</span>
                 </div>
                 <div class="form-group">
                     <label for="snapshot_passphrase_confirm">Passphrase again</label>
                     <input type="password" id="snapshot_passphrase_confirm" name="passphrase_confirm" required
-                           minlength="{{ snapshot_min_len }}" autocomplete="new-password">
+                           minlength="{{ snapshot_min_len }}" autocomplete="off">
                 </div>
                 <div class="form-group">
                     <label for="snapshot_password">App password</label>
@@ -247,6 +257,20 @@
     </div>
 </div>
 <script>
+(function () {
+  // SUGGEST: 4 groups of 4 from an unambiguous alphabet (~79 bits), shown so
+  // you can write it down or type it on the phone.
+  var sug = document.getElementById("snapshot-suggest");
+  if (sug) sug.addEventListener("click", function () {
+    var abc = "abcdefghjkmnpqrstuvwxyz23456789", out = [], buf = new Uint32Array(16);
+    window.crypto.getRandomValues(buf);
+    for (var i = 0; i < 16; i++) { out.push(abc[buf[i] % abc.length]); if (i % 4 === 3 && i < 15) out.push("-"); }
+    var pass = out.join(""), a = document.getElementById("snapshot_passphrase"),
+        b = document.getElementById("snapshot_passphrase_confirm");
+    a.value = pass; b.value = pass; a.type = "text"; b.type = "text";
+    a.focus(); a.select();
+  });
+})();
 (function () {
   var btn = document.getElementById("copy-app-log");
   var ta = document.getElementById("app-log-tail");

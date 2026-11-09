@@ -212,16 +212,52 @@ class TestSnapshotRoutes(unittest.TestCase):
         for secret in (b"SECRETREPO", b"SECRETCOMMIT", TOKEN.encode(), PASSPHRASE.encode()):
             self.assertNotIn(secret, blob)
 
-    def test_setup_reuses_an_existing_site_and_recreates_a_deleted_one(self):
-        models.save_snapshot_state({"site_id": "old-site"})
+    def test_rerun_with_same_token_and_passphrase_reuses_the_site(self):
         self.setup_ok()
-        self.assertIn(("get_site", "old-site"), FakeNetlify.calls)
+        models.save_snapshot_state({**models.get_snapshot_state(), "site_id": "kept-site"})
+        FakeNetlify.calls = []
+        self.m._snapshot_secrets = None  # after a restart: old secrets come from the file
+        self.setup_ok()
+        self.assertIn(("get_site", "kept-site"), FakeNetlify.calls)
         self.assertNotIn(("create_site",), FakeNetlify.calls)
+        self.assertNotIn(("delete_site", "kept-site"), FakeNetlify.calls)
+        # Deleted on Netlify meanwhile: a new one is created.
         FakeNetlify.calls = []
         FakeNetlify.get_site_error = nf.NetlifyError("gone", status=404)
         self.setup_ok()
         self.assertIn(("create_site",), FakeNetlify.calls)
-        self.assertEqual(models.get_snapshot_state()["site_id"], "site-123")
+
+    def test_new_passphrase_or_token_replaces_the_site(self):
+        # Session 25 review: copies under an old passphrase / on another
+        # account must not stay online where TAKE DOWN can't reach them.
+        self.setup_ok()
+        models.save_snapshot_state({**models.get_snapshot_state(), "site_id": "old-site"})
+        FakeNetlify.calls = []
+        new_pass = "violet harbor eleven candle"
+        self.setup_ok(passphrase=new_pass, passphrase_confirm=new_pass)
+        self.assertIn(("delete_site", "old-site"), FakeNetlify.calls)
+        self.assertIn(("create_site",), FakeNetlify.calls)
+        self.assertTrue(any("old snapshot site was deleted" in m for _, m in self.flashes()))
+
+    def test_old_site_that_cant_be_deleted_is_named(self):
+        self.setup_ok()
+        models.save_snapshot_state({**models.get_snapshot_state(), "site_id": "old-site",
+                                    "url": "https://old.netlify.app"})
+        self.flashes()
+        FakeNetlify.delete_error = nf.NetlifyError("no access", status=403)
+        self.setup_ok(netlify_token="nfp_OTHERaccountTOKEN1234567890")
+        msgs = [m for _, m in self.flashes()]
+        self.assertTrue(any("https://old.netlify.app" in m and "still online" in m for m in msgs), msgs)
+
+    def test_passphrase_equal_to_app_password_refused(self):
+        strong_password = "Harbor-Candle-11-Violet"
+        security.encrypt_credentials(strong_password, "ghp_x", "sk-ant-api03-" + "k" * 30)
+        r = self.setup_ok(password=strong_password, passphrase=strong_password,
+                          passphrase_confirm=strong_password)
+        self.assertEqual(r.status_code, 302)
+        (cat, msg), = self.flashes()
+        self.assertIn("different from your app password", msg)
+        self.assertFalse(security.snapshot_secrets_exist())
 
     # --- publish ----------------------------------------------------------
 
@@ -272,6 +308,47 @@ class TestSnapshotRoutes(unittest.TestCase):
 
     # --- preview ----------------------------------------------------------
 
+    def test_preview_offers_no_remember_and_refuses_cross_site(self):
+        self.setup_ok()
+        body = self.client.get("/snapshot/preview").data.decode()
+        self.assertNotIn('id="rd-remember"', body)
+        r = self.client.get("/snapshot/preview", headers={"Sec-Fetch-Site": "cross-site"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_credential_reset_clears_and_locks_snapshot_secrets(self):
+        # Session 25 review: a reset with a new app password used to leave
+        # snapshot.enc unopenable forever and the site un-takedownable.
+        self.setup_ok()
+        self.flashes()
+        self.client.post("/settings", data={"action": "reset_credentials", "reset_token": self.m._RESET_TOKEN})
+        self.assertFalse(security.snapshot_secrets_exist())
+        self.assertIsNone(self.m._snapshot_secrets)
+        self.assertTrue(models.get_snapshot_state()["needs_setup"])
+        with self.client.session_transaction() as s:
+            s["authenticated"] = True
+        page = self.client.get("/settings").data.decode()
+        self.assertIn("credentials were reset", page)
+        # /login/reset does the same.
+        security.encrypt_snapshot_secrets(PASSWORD, {"netlify_token": TOKEN, "passphrase": PASSPHRASE})
+        self.m._snapshot_secrets = {"netlify_token": TOKEN, "passphrase": PASSPHRASE}
+        self.client.post("/login/reset", data={"reset_token": self.m._RESET_TOKEN})
+        self.assertFalse(security.snapshot_secrets_exist())
+        self.assertIsNone(self.m._snapshot_secrets)
+
+    def test_post_guard_rejects_null_origin_and_cross_site_fetches(self):
+        # Session 25 review: a page on another 127.0.0.1 port posting to
+        # itself, then 307-redirecting here, arrives with Origin: null.
+        self.setup_ok()
+        for headers in ({"Origin": "null"}, {"Sec-Fetch-Site": "same-site"}, {"Sec-Fetch-Site": "cross-site"},
+                        {"Origin": "http://127.0.0.1:8777"}):
+            r = self.client.post("/snapshot/takedown", data={"reset_token": self.m._RESET_TOKEN},
+                                 headers=headers)
+            self.assertEqual(r.status_code, 403, headers)
+        self.assertTrue(security.snapshot_secrets_exist())
+        ok = self.client.post("/snapshot/publish", headers={"Sec-Fetch-Site": "same-origin",
+                                                            "Origin": "http://localhost"})
+        self.assertEqual(ok.status_code, 302)
+
     def test_preview_is_the_encrypted_page_with_its_csp(self):
         r = self.client.get("/snapshot/preview")
         self.assertEqual(r.status_code, 302)  # locked / not set up
@@ -285,9 +362,22 @@ class TestSnapshotRoutes(unittest.TestCase):
 
     # --- takedown ---------------------------------------------------------
 
+    def takedown(self, token=True):
+        return self.client.post("/snapshot/takedown",
+                                data={"reset_token": self.m._RESET_TOKEN} if token else {})
+
+    def test_takedown_needs_the_per_boot_token(self):
+        self.setup_ok()
+        self.flashes()
+        self.takedown(token=False)
+        (cat, msg), = self.flashes()
+        self.assertIn("Invalid reset request", msg)
+        self.assertNotIn(("delete_site", "site-123"), FakeNetlify.calls)
+        self.assertTrue(security.snapshot_secrets_exist())
+
     def test_takedown_deletes_site_and_forgets_everything(self):
         self.setup_ok()
-        self.client.post("/snapshot/takedown")
+        self.takedown()
         self.assertIn(("delete_site", "site-123"), FakeNetlify.calls)
         self.assertFalse(security.snapshot_secrets_exist())
         self.assertEqual(models.get_snapshot_state(), {})
@@ -297,15 +387,16 @@ class TestSnapshotRoutes(unittest.TestCase):
         self.setup_ok()
         self.flashes()
         FakeNetlify.delete_error = nf.NetlifyError("Netlify is down.", status=503)
-        self.client.post("/snapshot/takedown")
+        self.takedown()
         (cat, msg), = self.flashes()
         self.assertEqual(cat, "error")
         self.assertTrue(security.snapshot_secrets_exist())
         self.assertEqual(models.get_snapshot_state()["site_id"], "site-123")
 
     def test_takedown_locked_refuses(self):
+        security.encrypt_snapshot_secrets(PASSWORD, {"netlify_token": TOKEN, "passphrase": PASSPHRASE})
         models.save_snapshot_state({"site_id": "site-123"})
-        self.client.post("/snapshot/takedown")
+        self.takedown()
         (cat, msg), = self.flashes()
         self.assertIn("Log out and back in", msg)
         self.assertEqual(models.get_snapshot_state()["site_id"], "site-123")

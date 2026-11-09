@@ -261,8 +261,12 @@ class TestCrypto(unittest.TestCase):
         self.assertEqual((p["v"], p["kdf"], p["iter"]), (1, "PBKDF2-SHA256", 600000))
         self.assertEqual(len(base64.b64decode(p["salt"])), 16)
         self.assertEqual(len(base64.b64decode(p["iv"])), 12)
-        # Ciphertext = plaintext length + the 16-byte GCM tag at the end.
-        self.assertEqual(len(base64.b64decode(p["ct"])), len("hello world") + 16)
+        # Plaintext is padded to PAD_BLOCK (size doesn't reveal how much is in
+        # it), plus the 16-byte GCM tag at the end.
+        self.assertEqual(len(base64.b64decode(p["ct"])), snapshot.PAD_BLOCK + 16)
+        big = snapshot.encrypt("x" * (snapshot.PAD_BLOCK + 5), PASS)
+        self.assertEqual(len(base64.b64decode(big["ct"])), 2 * snapshot.PAD_BLOCK + 16)
+        self.assertEqual(snapshot.decrypt(big, PASS), "x" * (snapshot.PAD_BLOCK + 5))
 
     def test_layout_matches_webcrypto_independently(self):
         """Decrypt with raw primitives (no snapshot code): PBKDF2-SHA256 ->
@@ -270,8 +274,10 @@ class TestCrypto(unittest.TestCase):
         p = snapshot.encrypt("independent check", PASS)
         key = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=base64.b64decode(p["salt"]),
                          iterations=p["iter"]).derive(PASS.encode("utf-8"))
-        plain = AESGCM(key).decrypt(base64.b64decode(p["iv"]), base64.b64decode(p["ct"]), None)
-        self.assertEqual(plain.decode("utf-8"), "independent check")
+        plain = AESGCM(key).decrypt(base64.b64decode(p["iv"]), base64.b64decode(p["ct"]), None).decode("utf-8")
+        # The browser injects the padding comment as-is (inert HTML).
+        self.assertTrue(plain.startswith("independent check<!--"))
+        self.assertRegex(plain, r"^independent check<!--[ ]*-->$")
 
     def test_tampered_ciphertext_fails(self):
         p = snapshot.encrypt("tamper me", PASS)
@@ -339,8 +345,33 @@ class TestPassphrase(unittest.TestCase):
                 self.assertIn(expected, problem)
 
     def test_exactly_min_length_passes(self):
-        self.assertIsNone(snapshot.check_passphrase("abcdefghijkl"))
-        self.assertIsNotNone(snapshot.check_passphrase("abcdefghijk"))
+        # 12 characters with a mixed pool clears the strength floor; a
+        # 12-letter alphabet run (Session 25 review) is refused.
+        self.assertIsNone(snapshot.check_passphrase("Tq7v-Lm2x!Zp"))
+        self.assertIsNotNone(snapshot.check_passphrase("Tq7v-Lm2x!Z"))
+        self.assertIsNotNone(snapshot.check_passphrase("abcdefghijkl"))
+
+    def test_guessable_passphrases_refused(self):
+        for weak in ("password1234", "qwertyuiop12", "123456789012", "abcdefghijkl", "repodoctor12",
+                     "zyxwvutsrqpo", "letmein!2024", "aaaaaaaaaaaaaaa", "mysnapshot99"):
+            self.assertIsNotNone(snapshot.check_passphrase(weak), weak)
+        for ok in ("harbor candle eleven violet", "k7mp-x2qr-9tvz-h4wn", "blue tiger lamp river",
+                   "MyDog Has 2 Fleas!", "Tr0ub4dor&3xyz"):
+            self.assertIsNone(snapshot.check_passphrase(ok), ok)
+
+    def test_preview_shell_never_offers_remember(self):
+        p = snapshot.encrypt("<p>x</p>", PASS)
+        self.assertIn('id="rd-remember"', snapshot.build_shell(p, "now"))
+        preview = snapshot.build_shell(p, "now", allow_remember=False)
+        self.assertNotIn('id="rd-remember"', preview)
+        self.assertIn("nothing is remembered here", preview)
+
+    def test_remember_stores_a_key_object_not_the_passphrase(self):
+        script = snapshot.SHELL_SCRIPT
+        self.assertIn("indexedDB", script)
+        self.assertIn('importKey("raw", secret, "PBKDF2", false', script)  # non-extractable
+        self.assertNotIn("setItem", script)  # the passphrase is never written to localStorage
+        self.assertIn('autocomplete="off"', snapshot.build_shell(snapshot.encrypt("x", PASS), "now"))
 
 
 # ----------------------------------------------------------------------

@@ -37,7 +37,10 @@ from requests.auth import AuthBase
 
 NETLIFY_API = "https://api.netlify.com/api/v1"
 USER_AGENT = "RepoDoctor-snapshot"
-DEFAULT_SITE_PREFIX = "repodoctor-snapshot"
+# No label: a site named "repodoctor-snapshot-…" told anyone browsing DNS
+# records what it holds. The default name is 24 random characters.
+DEFAULT_SITE_PREFIX = ""
+_RANDOM_NAME_LEN = 24
 logger = logging.getLogger(__name__)
 
 # --- Owner-facing messages ----------------------------------------------------
@@ -137,13 +140,19 @@ def _random_suffix() -> str:
     return "".join(secrets.choice(_SUFFIX_ALPHABET) for _ in range(6))
 
 
+def _random_name() -> str:
+    """24 random lowercase letters/digits, starting with a letter."""
+    return (secrets.choice(string.ascii_lowercase)
+            + "".join(secrets.choice(_SUFFIX_ALPHABET) for _ in range(_RANDOM_NAME_LEN - 1)))
+
+
 def _site_name_prefix(prefix) -> str:
     """Netlify site names allow lowercase letters, digits and single hyphens
     ('--' is reserved for deploy permalinks), 63 characters max with the
     7-character '-xxxxxx' suffix."""
     p = re.sub(r"[^a-z0-9-]+", "-", str(prefix or "").lower())
     p = re.sub(r"-{2,}", "-", p).strip("-")[:56].rstrip("-")
-    return p or DEFAULT_SITE_PREFIX
+    return p
 
 
 def _text(value) -> str | None:
@@ -289,7 +298,7 @@ class NetlifyClient:
         detail = ""
         attempts = self.NAME_RETRIES + 1
         for attempt in range(1, attempts + 1):
-            name = f"{prefix}-{_random_suffix()}"
+            name = f"{prefix}-{_random_suffix()}" if prefix else _random_name()
             resp = self._call("POST", "/sites", action="create_site",
                               json={"name": name}, allow=(422,))
             if resp.status_code == 422:

@@ -379,7 +379,8 @@ class VerifyTests(NetlifyTestBase):
 # --- create_site ------------------------------------------------------------------
 
 class CreateSiteTests(NetlifyTestBase):
-    NAME_RE = r"^repodoctor-snapshot-[a-z0-9]{6}$"
+    # Session 25 review: no "repodoctor-snapshot" label in DNS; 24 random chars.
+    NAME_RE = r"^[a-z][a-z0-9]{23}$"
 
     def test_success(self):
         c = self.client(resp(201, SITE))
@@ -412,19 +413,17 @@ class CreateSiteTests(NetlifyTestBase):
     def test_gives_up_after_three_retries(self):
         taken = lambda: resp(422, {"errors": {"subdomain": ["must be unique"]}})  # noqa: E731
         c = self.client(taken(), taken(), taken(), taken(), resp(201, SITE))
-        with patch("netlify_publish._random_suffix",
-                   side_effect=["aaaaaa", "bbbbbb", "cccccc", "dddddd", "eeeeee"]):
+        with patch("netlify_publish._random_name",
+                   side_effect=["a" * 24, "b" * 24, "c" * 24, "d" * 24, "e" * 24]):
             e = self.raises(c.create_site)
         self.assertEqual((e.status, e.kind), (422, "name_taken"))
         self.assertIn("subdomain must be unique", e.message)
         self.assertEqual([x["json"]["name"] for x in self.session.calls],
-                         [f"repodoctor-snapshot-{s}" for s in
-                          ("aaaaaa", "bbbbbb", "cccccc", "dddddd")])
+                         [ch * 24 for ch in "abcd"])
         self.assertEqual(self.events_named("create_site")[-1]["outcome"], "failed")
 
     def test_prefix_is_made_site_name_safe(self):
-        cases = {"My Snapshot!!": "my-snapshot", "--a--b--": "a-b", "": "repodoctor-snapshot",
-                 None: "repodoctor-snapshot", "x" * 100: "x" * 56}
+        cases = {"My Snapshot!!": "my-snapshot", "--a--b--": "a-b", "x" * 100: "x" * 56}
         for prefix, expect in cases.items():
             with self.subTest(prefix=prefix):
                 c = self.client(resp(201, SITE))
@@ -432,6 +431,11 @@ class CreateSiteTests(NetlifyTestBase):
                 name = self.session.calls[0]["json"]["name"]
                 self.assertRegex(name, rf"^{expect}-[a-z0-9]{{6}}$")
                 self.assertLessEqual(len(name), 63)
+        for blank in ("", None, "!!!"):  # no usable prefix: a fully random, unlabeled name
+            with self.subTest(prefix=blank):
+                c = self.client(resp(201, SITE))
+                c.create_site(blank)
+                self.assertRegex(self.session.calls[0]["json"]["name"], self.NAME_RE)
 
     def test_url_falls_back_and_upgrades_netlify_http(self):
         c = self.client(resp(201, {"id": SITE_ID, "name": "n",
