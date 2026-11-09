@@ -1058,6 +1058,19 @@ def tail_portfolio_log(n: int = 100) -> list[dict]:
 # ======================================================================
 
 # --- START [S24-C] Health grade ---
+# One event per dashboard render with the grade distribution (A..F +
+# not_graded), plus a grade_error event for any repo whose data broke grading,
+# so a surprising grade can be traced back. Same one-JSON-per-line format as
+# the other feature logs.
+HEALTH_LOG_PATH = os.path.join(DATA_DIR, "logs", "health.log")
+
+
+def log_health_event(event: str, **fields):
+    _append_log_event(HEALTH_LOG_PATH, event, fields)
+
+
+def tail_health_log(n: int = 100) -> list[dict]:
+    return _tail_log(HEALTH_LOG_PATH, n)
 # --- END [S24-C] ---
 
 # (spacer)

@@ -1,12 +1,16 @@
 {% extends "base.html" %}
-{% from "_macros.html" import portfolio_subnav with context %}
+{% from "_macros.html" import portfolio_subnav, health_breakdown with context %}
 {% block title %}RepoDoctor — Portfolio{% endblock %}
+{# Health grade breakdown (health.grade_repo result). My Repos has a twin. #}
 {% macro repo_row(r) -%}
 <div class="pf-row" data-repo="{{ r.name }}">
     <div class="pf-row-main">
         <div class="pf-row-head">
             <a href="{{ url_for('resume_view', owner=r.owner, name=r.name) }}" class="pf-name" title="Open the Resume packet for {{ r.name }}">{{ r.name }}</a>
             {% if r.private %}<span class="badge badge-dim">PRIVATE</span>{% else %}<span class="badge badge-public">PUBLIC</span>{% endif %}
+            {% if r.health %}<button type="button" class="health-chip health-tone-{{ r.health.tone }} pf-health-toggle"
+                    aria-expanded="false" aria-label="Health {{ r.health.grade if r.health.graded else 'not graded' }}. {{ r.health.summary }}"
+                    title="{{ r.health.title }}">{{ r.health.grade }}</button>{% endif %}
             {% if r.open_branches %}<a href="{{ url_for('resume_view', owner=r.owner, name=r.name) }}" class="chip next-merge" title="unmerged branches (from In flight)">{{ r.open_branches }} open</a>{% endif %}
         </div>
         <p class="pf-one-liner">{% if r.one_liner %}{{ r.one_liner }}{% else %}<span class="pf-muted">No summary yet.</span>{% endif %}</p>
@@ -14,6 +18,7 @@
             {% if r.pushed_at %}<span>pushed {{ r.pushed_at|central_time }}</span>{% endif %}
             {% if r.how_finished %}<span>· {{ r.how_finished }}</span>{% endif %}
         </div>
+        {% if r.health %}<div class="health-breakdown pf-health" hidden>{{ health_breakdown(r.health) }}</div>{% endif %}
     </div>
     <div class="pf-tags">
         {% for t in r.tags %}
@@ -242,6 +247,19 @@
       .then(function () { window.location.reload(); })
       .catch(function (e) { if (control) control.disabled = false; alert(e.message); });
   }
+
+  // Health grade chip: a button, so click, tap and the keyboard all open the
+  // breakdown under the row (a repo can appear in several theme sections, so
+  // it's found by position, not id).
+  document.querySelectorAll(".pf-health-toggle").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var panel = btn.closest(".pf-row-main").querySelector(".pf-health");
+      if (!panel) return;
+      var open = panel.hasAttribute("hidden");
+      if (open) panel.removeAttribute("hidden"); else panel.setAttribute("hidden", "");
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+  });
 
   document.querySelectorAll(".pf-chip-x").forEach(function (b) {
     b.addEventListener("click", function () { setTag(b.dataset.repo, b.dataset.tag, false, b); });

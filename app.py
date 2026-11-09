@@ -563,6 +563,40 @@ def _filter_by_group(repos: list, active_group: str, groups: dict) -> list:
     return [r for r in repos if r.get("name") in members]
 
 
+# --- Health grade (Session 24 [S24-C]) ---
+# One letter per repo (A-F, or "—" with a reason) from data the app already
+# caches: the scan, the In Flight cache and the tags. No GitHub calls on page
+# view. My Repos and Portfolio share it; events go to data/logs/health.log.
+import health  # noqa: E402  (kept beside its only callers so parallel Session 24 work merges cleanly)
+
+
+def _health_report(repos: list, groups: dict, log_as: str | None = None,
+                   inflight_cache: dict | None = None) -> dict:
+    """Grade every repo. Never raises: a grading bug shows "—", not a 500.
+    log_as names the distribution event to log (None = don't log).
+    inflight_cache: pass it when already loaded; None reads it."""
+    if inflight_cache is None:
+        inflight_cache = models.get_inflight()
+    try:
+        report = health.grade_scan(repos, inflight_cache, groups=groups)
+    except Exception as e:  # noqa: BLE001 - the dashboard must render regardless
+        logger.exception("health: grading the scan failed")
+        models.log_health_event("grade_failed", repos=len(repos), error=f"{type(e).__name__}: {e}")
+        return {"grades": {}, "distribution": health.distribution([]), "reasons": {},
+                "errors": [], "inflight_used": False, "inflight_at": "", "attention": 0}
+    for err in report["errors"]:
+        models.log_health_event("grade_error", **err)
+    report["inflight_at"] = (inflight_cache or {}).get("gathered_at", "") if report["inflight_used"] else ""
+    report["attention"] = report["distribution"]["D"] + report["distribution"]["F"]
+    if log_as and repos:
+        models.log_health_event(
+            log_as, repos=len(repos), distribution=report["distribution"],
+            reasons=report["reasons"], inflight=report["inflight_used"],
+            scanned_at=(_scan_results or {}).get("scanned_at", ""),
+        )
+    return report
+
+
 @app.route("/")
 @_require_auth
 def dashboard():
@@ -572,6 +606,9 @@ def dashboard():
     active_group = _resolve_active_group(groups)
     all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
     repos = _filter_by_group(all_repos, active_group, groups)
+    # Graded over the whole scan (one distribution in the log per render);
+    # the table shows the group-scoped rows.
+    health_report = _health_report(all_repos, groups, log_as="dashboard")
     return render_template(
         "dashboard.html",
         scan_results=_scan_results,
@@ -581,6 +618,9 @@ def dashboard():
         active_group=active_group,
         preferences=prefs,
         session_cost=_session_cost.to_dict(),
+        health_for=lambda r: health_report["grades"].get(health.repo_key(r)),
+        health_attention=health_report["attention"],
+        health_inflight_at=health_report["inflight_at"],
     )
 
 
@@ -598,6 +638,8 @@ def _scan_error_entry(repo: dict, e: Exception) -> dict:
         "full_name": repo["full_name"],
         "default_branch": repo.get("default_branch", "main"),
         "private": repo.get("private", False),
+        "archived": bool(repo.get("archived", False)),
+        "fork": bool(repo.get("fork", False)),
         "html_url": repo.get("html_url", ""),
         "description": repo.get("description", ""),
         "created_at": repo.get("created_at", ""),
@@ -2708,12 +2750,15 @@ def _portfolio_view_data():
     groups = models.get_groups()
     cutoff = (datetime.datetime.now(datetime.timezone.utc)
               - datetime.timedelta(days=_PORTFOLIO_ACTIVE_DAYS)).isoformat()
+    repos = _yesterday_repos()
+    inflight_cache = models.get_inflight()
     view = portfolio.build_view(
-        _yesterday_repos(), groups, models.get_selector_blurbs(),
-        models.get_project_summaries(), (models.get_inflight() or {}).get("items") or [],
+        repos, groups, models.get_selector_blurbs(),
+        models.get_project_summaries(), (inflight_cache or {}).get("items") or [],
         activity_cutoff=cutoff.replace("+00:00", "Z"),
+        grades=_health_report(repos, groups, inflight_cache=inflight_cache)["grades"],
     )
-    infra = portfolio.infrastructure_view(models.get_components(), _yesterday_repos(),
+    infra = portfolio.infrastructure_view(models.get_components(), repos,
                                           models.get_infra_homes(), components)
     return groups, view, infra
 

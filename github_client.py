@@ -799,6 +799,10 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
         "full_name": repo["full_name"],
         "default_branch": default_branch,
         "private": repo.get("private", False),
+        # Carried from the repo list (no extra API call) so the health grade
+        # can exempt archived repos and forks instead of nagging forever.
+        "archived": bool(repo.get("archived", False)),
+        "fork": bool(repo.get("fork", False)),
         "html_url": repo.get("html_url", ""),
         "description": repo.get("description", ""),
         "created_at": repo.get("created_at", ""),

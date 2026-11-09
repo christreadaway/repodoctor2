@@ -159,6 +159,9 @@ def legacy_sequential_scan(client, repos, excluded):
                 "full_name": repo["full_name"],
                 "default_branch": repo.get("default_branch", "main"),
                 "private": repo.get("private", False),
+                # Session 24: the scan now carries GitHub's archived / fork flags.
+                "archived": bool(repo.get("archived", False)),
+                "fork": bool(repo.get("fork", False)),
                 "html_url": repo.get("html_url", ""),
                 "description": repo.get("description", ""),
                 "created_at": repo.get("created_at", ""),

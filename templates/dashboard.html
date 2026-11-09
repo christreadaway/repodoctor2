@@ -1,6 +1,7 @@
 {% extends "base.html" %}
-{% from "_macros.html" import category_badge, group_filter_bar with context %}
+{% from "_macros.html" import category_badge, group_filter_bar, health_breakdown with context %}
 {% block title %}RepoDoctor — My Repos{% endblock %}
+{# Health grade breakdown (health.grade_repo result). Portfolio has a twin. #}
 {% block content %}
 <div class="page-header">
     <div class="page-header-title">
@@ -45,12 +46,16 @@
     <div class="summary-stat">
         {% set counter = namespace(n=0) %}
         {% for r in scan_results.repos %}
-            {% if r.files_total and r.files_present < r.files_total %}
+            {% if r.files_total is number and r.files_total and (r.files_present if r.files_present is number else 0) < r.files_total %}
                 {% set counter.n = counter.n + 1 %}
             {% endif %}
         {% endfor %}
         <span class="stat-value {% if counter.n > 0 %}stat-warning{% endif %}">{{ counter.n }}</span>
         <span class="stat-label">Missing Required Files</span>
+    </div>
+    <div class="summary-stat" title="Repos graded D or F. Sort by Health to see them first.">
+        <span class="stat-value {% if health_attention %}stat-warning{% endif %}">{{ health_attention or 0 }}</span>
+        <span class="stat-label">Health D or F</span>
     </div>
 </div>
 
@@ -72,27 +77,43 @@
         <thead>
             <tr>
                 <th class="col-repo sortable" data-sort="text" data-col="0">Repository</th>
-                <th class="col-vis sortable" data-sort="text" data-col="1">Visibility</th>
-                <th class="col-date sortable" data-sort="text" data-col="2">Created</th>
-                <th class="col-date sortable" data-sort="text" data-col="3">Updated</th>
-                <th class="col-file sortable" data-sort="text" data-col="4" title="Are SESSION_NOTES.md and PRODUCT_SPEC.md up to date with the latest changes?">Current?</th>
-                <th class="col-branches sortable" data-sort="num" data-col="5">Branches</th>
-                <th class="col-file sortable" data-sort="text" data-col="6">CLAUDE</th>
-                <th class="col-file sortable" data-sort="text" data-col="7">LICENSE</th>
-                <th class="col-file sortable" data-sort="text" data-col="8">SPEC</th>
-                <th class="col-file sortable" data-sort="text" data-col="9">STATUS</th>
-                <th class="col-file sortable" data-sort="text" data-col="10">NOTES</th>
-                <th class="col-score sortable" data-sort="text" data-col="11">Score</th>
-                <th class="col-size sortable" data-sort="num" data-col="12" title="Total bytes across all languages, per GitHub /languages">Size</th>
+                <th class="col-health sortable" data-sort="num" data-col="1" title="Health grade A-F from docs, doc freshness, branch tidiness and recent activity. Click a grade for the breakdown. Sorting puts the lowest first; ungraded repos always sort last.">Health</th>
+                <th class="col-vis sortable" data-sort="text" data-col="2">Visibility</th>
+                <th class="col-date sortable" data-sort="text" data-col="3">Created</th>
+                <th class="col-date sortable" data-sort="text" data-col="4">Updated</th>
+                <th class="col-file sortable" data-sort="text" data-col="5" title="Are SESSION_NOTES.md and PRODUCT_SPEC.md up to date with the latest changes?">Current?</th>
+                <th class="col-branches sortable" data-sort="num" data-col="6">Branches</th>
+                <th class="col-file sortable" data-sort="text" data-col="7">CLAUDE</th>
+                <th class="col-file sortable" data-sort="text" data-col="8">LICENSE</th>
+                <th class="col-file sortable" data-sort="text" data-col="9">SPEC</th>
+                <th class="col-file sortable" data-sort="text" data-col="10">STATUS</th>
+                <th class="col-file sortable" data-sort="text" data-col="11">NOTES</th>
+                <th class="col-score sortable" data-sort="text" data-col="12">Score</th>
+                <th class="col-size sortable" data-sort="num" data-col="13" title="Total bytes across all languages, per GitHub /languages">Size</th>
             </tr>
         </thead>
         <tbody>
             {% for repo in repos %}
-            <tr class="repo-row {% if repo.files_present == repo.files_total %}row-complete{% endif %}">
+            {# Defaults so a sparse repo dict (older scan, failed read) renders instead of 500ing. #}
+            {% set fp = repo.files_present if repo.files_present is number else 0 %}
+            {% set ft = repo.files_total if repo.files_total is number else 0 %}
+            {% set tbc = repo.total_branch_count if repo.total_branch_count is number else 0 %}
+            <tr class="repo-row {% if ft and fp == ft %}row-complete{% endif %}">
                 <td class="col-repo">
                     <a href="{{ url_for('repo_detail', owner=repo.owner, name=repo.name) }}" class="repo-link">{{ repo.name }}</a>
                     {% if repo.description %}
                     <span class="repo-desc" title="{{ repo.description }}">{{ repo.description | truncate(50) }}</span>
+                    {% endif %}
+                </td>
+                {% set h = health_for(repo) if health_for else none %}
+                <td class="col-health" data-sort-value="{{ h.score if h and h.score is not none else '' }}">
+                    {% if h %}
+                    <button type="button" class="health-chip health-tone-{{ h.tone }} health-toggle"
+                            aria-expanded="false" aria-controls="health-row-{{ loop.index }}"
+                            aria-label="Health {{ h.grade if h.graded else 'not graded' }}. {{ h.summary }}"
+                            title="{{ h.title }}">{{ h.grade }}</button>
+                    {% else %}
+                    <span class="health-chip health-tone-none" title="Not graded">—</span>
                     {% endif %}
                 </td>
                 <td class="col-vis">
@@ -110,7 +131,7 @@
                     <span class="date-value">{{ repo.updated_at[:10] if repo.updated_at else '—' }}</span>
                 </td>
                 <td class="col-file">
-                    {% if repo.docs_updated is none %}
+                    {% if repo.docs_updated is not defined or repo.docs_updated is none %}
                     <span class="file-missing" title="Doc files not present">—</span>
                     {% elif repo.docs_updated %}
                     <span class="file-ok" title="Docs are up to date">Yes</span>
@@ -121,14 +142,14 @@
                 <td class="col-branches">
                     {# Henry branches are excluded from the count. The expandable
                        list below still shows them so they're not invisible. #}
-                    {% set displayed_count = repo.non_henry_branch_count if repo.non_henry_branch_count is defined else repo.total_branch_count %}
-                    {% if repo.total_branch_count > 1 %}
+                    {% set displayed_count = repo.non_henry_branch_count if repo.non_henry_branch_count is number else tbc %}
+                    {% if tbc > 1 %}
                     <span class="branch-count branch-toggle {% if displayed_count > 3 %}count-warn{% elif displayed_count > 1 %}count-note{% endif %}" onclick="event.preventDefault(); this.closest('tr').nextElementSibling.classList.toggle('branch-hidden')" title="Click to show branches{% if repo.henry_branch_count %} ({{ repo.henry_branch_count }} henry branch{{ 'es' if repo.henry_branch_count != 1 else '' }} hidden from count){% endif %}">{{ displayed_count }}</span>
                     {% else %}
                     <span class="branch-count">{{ displayed_count }}</span>
                     {% endif %}
                 </td>
-                {% set files = repo.required_files %}
+                {% set files = repo.required_files if repo.required_files is mapping else {} %}
                 <td class="col-file">
                     {% if files.get('CLAUDE.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
                 </td>
@@ -145,7 +166,7 @@
                     {% if files.get('SESSION_NOTES.md') %}<span class="file-ok">Y</span>{% else %}<span class="file-missing">-</span>{% endif %}
                 </td>
                 <td class="col-score">
-                    <span class="file-score {% if repo.files_present == repo.files_total %}score-perfect{% elif repo.files_present >= repo.files_total - 1 %}score-good{% elif repo.files_present >= 2 %}score-fair{% else %}score-poor{% endif %}">{{ repo.files_present }}/{{ repo.files_total }}</span>
+                    <span class="file-score {% if ft and fp == ft %}score-perfect{% elif fp >= ft - 1 %}score-good{% elif fp >= 2 %}score-fair{% else %}score-poor{% endif %}">{{ fp }}/{{ ft }}</span>
                 </td>
                 <td class="col-size" data-sort-value="{{ repo.code_size_bytes or 0 }}">
                     {% set bytes = repo.code_size_bytes or 0 %}
@@ -160,11 +181,11 @@
                     {% endif %}
                 </td>
             </tr>
-            {% if repo.total_branch_count > 1 %}
+            {% if tbc > 1 %}
             <tr class="branch-detail-row branch-hidden">
-                <td colspan="13">
+                <td colspan="14">
                     <div class="branch-names">
-                        {% for bname in repo.branch_names %}
+                        {% for bname in (repo.branch_names or []) if bname is string %}
                         {% set is_henry = 'henry' in bname.lower() and bname != repo.default_branch %}
                         <span class="branch-tag {% if bname == repo.default_branch %}branch-default{% endif %} {% if is_henry %}branch-henry{% endif %}" {% if is_henry %}title="Excluded from branch count (henry branch)"{% endif %}>{{ bname }}{% if bname == repo.default_branch %} *{% elif is_henry %} (henry){% endif %}</span>
                         {% endfor %}
@@ -174,8 +195,16 @@
             {% endif %}
             {% if repo.error is defined and repo.error %}
             <tr class="error-row">
-                <td colspan="13">
+                <td colspan="14">
                     <span class="repo-error">Error scanning: {{ repo.error }}</span>
+                </td>
+            </tr>
+            {% endif %}
+            {% if h %}
+            {# After the branch row: the branch toggle opens nextElementSibling. #}
+            <tr class="health-detail-row" id="health-row-{{ loop.index }}" hidden>
+                <td colspan="14">
+                    <div class="health-breakdown">{{ health_breakdown(h, health_inflight_at) }}</div>
                 </td>
             </tr>
             {% endif %}
@@ -225,6 +254,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     : (cellB ? cellB.textContent : '');
                 var valA = (rawA || '').trim();
                 var valB = (rawB || '').trim();
+                // An empty data-sort-value means "no value" (an ungraded repo
+                // in Health): always last, whichever direction.
+                var noneA = !!cellA && cellA.dataset.sortValue === '';
+                var noneB = !!cellB && cellB.dataset.sortValue === '';
+                if (noneA || noneB) {
+                    return noneA === noneB ? 0 : (noneA ? 1 : -1);
+                }
                 if (sortType === 'num') {
                     valA = parseFloat(valA) || 0;
                     valB = parseFloat(valB) || 0;
@@ -238,6 +274,19 @@ document.addEventListener('DOMContentLoaded', function() {
                     tbody.appendChild(row);
                 });
             });
+        });
+    });
+
+    // Health grade: a button, so click, tap, Enter and Space all open the
+    // breakdown row (no hover on phones). The title attribute adds a hover
+    // preview on desktop.
+    document.querySelectorAll('.health-toggle').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var row = document.getElementById(btn.getAttribute('aria-controls'));
+            if (!row) return;
+            var open = row.hasAttribute('hidden');
+            if (open) { row.removeAttribute('hidden'); } else { row.setAttribute('hidden', ''); }
+            btn.setAttribute('aria-expanded', open ? 'true' : 'false');
         });
     });
 });

@@ -103,3 +103,24 @@
    title="{% if count and count > 1 %}Opens the newest of the {{ count }} Claude Code sessions {{ scope }} (new tab){% else %}Open this Claude Code session in a new tab{% endif %}">OPEN SESSION <span aria-hidden="true">↗</span></a>
 {%- endif -%}
 {%- endmacro %}
+
+
+{# Health grade breakdown (health.grade_repo result) for My Repos and
+   Portfolio. `inflight_at` (optional) dates the In Flight read behind the
+   branch check. #}
+{% macro health_breakdown(h, inflight_at='') -%}
+<p class="health-summary"><strong class="health-word health-tone-{{ h.tone }}">Health {{ h.grade }}</strong> {{ h.summary }}</p>
+{% if h.checks %}
+<ul class="health-checks">
+    {% for c in h.checks %}
+    <li class="health-check">
+        <span class="health-mark health-mark-{{ c.status if c.counted else 'na' }}">{{ c.mark }}</span>
+        <span class="health-check-label">{{ c.label }}</span>
+        <span class="health-pts">{% if c.counted %}{{ c.points }}/{{ c.max }}{% else %}not scored{% endif %}</span>
+        <span class="health-detail">{{ c.detail }}{% if c.key == 'branches' and (c.source == 'inflight' or c.status != 'ok') %} <a href="{{ url_for('inflight_view') }}">Open In flight</a>{% if c.source == 'inflight' and inflight_at %} <span class="health-note">(read {{ inflight_at[:10] }})</span>{% endif %}{% endif %}</span>
+    </li>
+    {% endfor %}
+</ul>
+<p class="health-note">A 90+ · B 80+ · C 70+ · D 60+ · F below 60. Archived, forked and empty repos aren't graded.</p>
+{% endif %}
+{%- endmacro %}

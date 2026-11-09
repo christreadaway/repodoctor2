@@ -6368,6 +6368,76 @@ a.session-branch:hover { border-color: var(--tk-cyan-fg); }
 /* (spacer) */
 
 /* --- START [S24-C] Health grade --- */
+/* Letter chip (My Repos Health column, Portfolio rows). The letter is the
+   text; color only reinforces it. Sized in px (the root font shrinks to 14px
+   on phones) so the tap target stays 32px+ everywhere. */
+.health-chip {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 34px; min-height: 32px; padding: 0 8px;
+  font-family: var(--font-mono); font-size: 0.9rem; font-weight: 700; line-height: 1;
+  border: 1px solid var(--tk-slate-bd); border-radius: var(--radius-md);
+  background: var(--tk-slate-bg); color: var(--tk-slate-fg);
+}
+.pf-row-head .health-chip { min-width: 32px; font-size: 0.8rem; }
+/* No blue tap flash on phones (the open state has its own underline), and
+   the hover lift only where there is a real hover. */
+button.health-chip { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+@media (hover: hover) { button.health-chip:hover { filter: brightness(1.2); } }
+button.health-chip:focus-visible { outline: 2px solid var(--green-100); outline-offset: 2px; }
+button.health-chip[aria-expanded="true"] { box-shadow: inset 0 -2px 0 currentColor; }
+.health-tone-ok   { background: var(--tk-green-bg); color: var(--tk-green-fg); border-color: var(--tk-green-bd); }
+.health-tone-warn { background: var(--tk-amber-bg); color: var(--tk-amber-fg); border-color: var(--tk-amber-bd); }
+.health-tone-bad  { background: var(--tk-red-bg);   color: var(--tk-red-fg);   border-color: var(--tk-red-bd); }
+.health-tone-none { background: var(--tk-slate-bg); color: var(--tk-slate-fg); border-color: var(--tk-slate-bd); }
+
+.repo-table th.col-health, .repo-table td.col-health { width: 1%; padding-left: 0.4rem; padding-right: 0.4rem; }
+/* The Health column costs ~70px; the one-line description preview (which
+   sets the Repository column's width) gives back 30px so the table still
+   fits a 1280px screen without scrolling sideways in its box. */
+.repo-table td.col-repo .repo-desc { max-width: 220px; }
+
+/* Breakdown: a full-width row under the repo on My Repos, a panel under the
+   row on Portfolio. On My Repos the panel sticks to the left edge of the
+   table's own scroll box and stays narrower than the screen, so a phone
+   never has to scroll sideways to read it. */
+.health-detail-row td {
+  padding: 0.5rem 0.75rem 0.75rem; text-align: left;
+  background: rgba(8, 10, 8, 0.4); border-bottom: 1px solid var(--border);
+}
+.health-detail-row .health-breakdown {
+  position: sticky; left: 0.75rem;
+  max-width: min(48rem, calc(100vw - 4.5rem));
+}
+.health-breakdown { font-size: 0.8rem; line-height: 1.45; color: var(--text-primary); }
+.health-summary { margin: 0 0 0.4rem; }
+.health-summary .health-word { background: none; border: 0; padding: 0; margin-right: 0.35rem; font-family: var(--font-mono); }
+.health-checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
+.health-check {
+  display: grid; grid-template-columns: 3.1rem 8.5rem 5.5rem minmax(0, 1fr);
+  gap: 0.15rem 0.6rem; align-items: baseline;
+}
+.health-mark {
+  font-family: var(--font-mono); font-size: 0.68rem; font-weight: 700; text-align: center;
+  padding: 0.05rem 0.25rem; border: 1px solid; border-radius: var(--radius-sm);
+}
+.health-mark-ok   { background: var(--tk-green-bg); color: var(--tk-green-fg); border-color: var(--tk-green-bd); }
+.health-mark-warn { background: var(--tk-amber-bg); color: var(--tk-amber-fg); border-color: var(--tk-amber-bd); }
+.health-mark-bad  { background: var(--tk-red-bg);   color: var(--tk-red-fg);   border-color: var(--tk-red-bd); }
+.health-mark-na   { background: var(--tk-slate-bg); color: var(--tk-slate-fg); border-color: var(--tk-slate-bd); }
+.health-check-label { font-weight: 600; }
+.health-pts { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; }
+.health-detail { overflow-wrap: anywhere; }
+.health-note { margin: 0.45rem 0 0; font-size: 0.72rem; color: var(--text-secondary); }
+.pf-health {
+  margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: var(--radius-md); background: rgba(8, 10, 8, 0.4);
+}
+
+@media (max-width: 700px) {
+  /* Mark + label + points on one line, the plain-English detail below. */
+  .health-check { grid-template-columns: 3.1rem minmax(0, 1fr) auto; }
+  .health-detail { grid-column: 2 / -1; }
+}
 /* --- END [S24-C] --- */
 
 /* (spacer) */
