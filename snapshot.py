@@ -21,7 +21,8 @@ UTF-8 HTML. The ciphertext ends with GCM's 16-byte tag, exactly the layout
 WebCrypto's AES-GCM decrypt expects. Salt and nonce are fresh on every call,
 so two snapshots of the same data never share bytes. The passphrase is
 Unicode-normalized (NFC) on both sides, so an accented character typed on a
-phone matches the one typed on the Mac.
+phone matches the one typed on the Mac, and the phone trims what's typed
+(Settings refuses a passphrase that starts or ends with a space).
 
 Flow for the integrator:
     files = build_site(data, passphrase)        # render + encrypt + shell
@@ -43,6 +44,7 @@ import html
 import io
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -152,58 +154,183 @@ def check_passphrase(passphrase) -> str | None:
     if len(p) > MAX_PASSPHRASE_LEN:
         return f"Keep it under {MAX_PASSPHRASE_LEN:,} characters."
     if len(set(p.lower())) < MIN_DISTINCT_CHARS:
-        return "Use more variety. That one repeats the same few characters."
-    # The encrypted file is public, so it can be guessed at offline: refuse
-    # the guesses that come first (common words, keyboard runs, sequences)
-    # and anything too short for its character mix.
-    weak = _guessable(p)
-    if weak:
-        return weak
-    if _estimated_bits(p) < MIN_PASSPHRASE_BITS:
-        return ("That's too easy to guess for a file anyone can download. Make it longer, or mix in "
-                "capitals, numbers or symbols. Four random words, or SUGGEST in Settings, works well.")
-    return None
+        return _REPEAT_MSG
+    # The encrypted file is public, so it can be guessed at offline. Score
+    # only what's left after the guesses that come first (repeats, common
+    # words, keyboard / alphabet / digit runs, recent years) are taken out.
+    strength = _strength(p)
+    if strength["bits"] >= MIN_PASSPHRASE_BITS:
+        return None
+    main = strength["main"]
+    if main == "word":
+        return _WORD_MSG.format(strength["word"])
+    if main == "run":
+        return _RUN_MSG
+    if main == "repeat":
+        return _REPEAT_MSG
+    return _WEAK_MSG
 
 
-# Rough strength floor: length x log2(character pool). 4 random words easily
-# clears it; 12 lowercase letters alone doesn't.
+# Strength floor, in estimated bits of what's left once the guessable pieces
+# are stripped. Four random words or SUGGEST's 4x4 groups clear it with room
+# to spare; 12 lowercase letters alone (56 bits) don't.
 MIN_PASSPHRASE_BITS = 60
+_WORD_MSG = "That's built on \"{}\", one of the first things anyone guesses. Pick something else."
+_RUN_MSG = "That's mostly a keyboard row or a sequence, which is guessed first. Pick something else."
+_REPEAT_MSG = "Use more variety. That one repeats the same few characters."
+_WEAK_MSG = ("That's too easy to guess for a file anyone can download. Make it longer, or mix in "
+             "capitals, numbers or symbols. Four random words, or SUGGEST in Settings, works well.")
 _COMMON = ("password", "passw0rd", "qwerty", "letmein", "welcome", "admin", "iloveyou",
            "monkey", "dragon", "football", "baseball", "sunshine", "princess", "secret",
-           "repodoctor", "snapshot", "netlify", "github", "claude", "changeme", "trustno1")
+           "repodoctor", "snapshot", "netlify", "github", "claude", "changeme", "trustno1",
+           "abc123", "111111", "superman", "batman", "master", "hello", "freedom", "whatever",
+           "qazwsx")
+_COMMON_LONGEST_FIRST = tuple(sorted(set(_COMMON), key=lambda w: (-len(w), w)))
+# Keyboard rows / columns, the alphabet and the digits. A run is 4+ characters
+# in a row along one of these, forward or backward ("7890123" wraps).
 _RUNS = ("abcdefghijklmnopqrstuvwxyz", "01234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm",
-         "1qaz2wsx3edc", "qazwsxedc")
-_RUN_LEN = 6
+         "1qaz2wsx3edc4rfv5tgb", "qazwsxedcrfvtgb", "!@#$%^&*()")
+_RUN_LEN = 4
+_RUN_PAIRS = tuple(pairs for seq in _RUNS
+                   for pairs in (frozenset(zip(seq, seq[1:])), frozenset(zip(seq[1:], seq))))
+# Skipped while matching, so "pass word" and "1234-5678" are still found. A
+# separator inside a stripped piece goes with it; the others still count.
+_SEPARATORS = frozenset(" -_.")
+_REPEAT_CHAR_RE = re.compile(r"(.)\1{2,}", re.DOTALL)        # "aaa", "!!!!"
+_REPEAT_CHUNK_RE = re.compile(r"(.{2,64}?)\1+", re.DOTALL)   # "abab", "abc123abc123"
+_YEAR_RE = re.compile(r"19[5-9][0-9]|20[0-3][0-9]")           # "Summer2024!" is an early guess
+# Common letter-for-symbol swaps ("p@ssw0rd"). "1" reads as either "i" or "l".
+_LEET_MAPS = (str.maketrans("@4031!$5+7", "aaoeiisstt"), str.maketrans("@4031!$5+7", "aaoelisstt"))
+# What a stripped piece is still worth: it's one entry on a short list of
+# early guesses, so a few bits (zxcvbn scores dictionary hits by rank the same
+# way). Counted once per distinct piece.
+_TOKEN_BITS = 4
+_STRIP_PASSES = 64
 
 
-def _guessable(p: str) -> str | None:
-    low = p.lower()
-    squashed = re.sub(r"[^a-z0-9]", "", low)
-    for word in _COMMON:
-        if word in squashed and len(squashed.replace(word, "")) < 8:
-            return f"That's built on \"{word}\", one of the first things anyone guesses. Pick something else."
-    for run in _RUNS:
-        for seq in (run, run[::-1]):
-            for i in range(len(seq) - _RUN_LEN + 1):
-                if seq[i:i + _RUN_LEN] in squashed and len(squashed) - _RUN_LEN < 8:
-                    return "That's mostly a keyboard row or a sequence, which is guessed first. Pick something else."
-    return None
+def _pool_bits(text: str) -> float:
+    """Brute-force estimate: length x log2(character pool)."""
+    if not text:
+        return 0.0
+    pool = 0
+    if re.search(r"[a-z]", text):
+        pool += 26
+    if re.search(r"[A-Z]", text):
+        pool += 26
+    if re.search(r"[0-9]", text):
+        pool += 10
+    if re.search(r"[^A-Za-z0-9 ]", text):
+        pool += 33
+    if " " in text:
+        pool += 1
+    return len(text) * math.log2(max(pool, 2))
+
+
+def _runs_in(view: str) -> list[tuple[int, int]]:
+    """(start, end) of every maximal run of _RUN_LEN+ characters in `view`."""
+    out = []
+    n = len(view)
+    for pairs in _RUN_PAIRS:
+        start = 0
+        for k in range(1, n + 1):
+            if k < n and (view[k - 1], view[k]) in pairs:
+                continue
+            if k - start >= _RUN_LEN:
+                out.append((start, k))
+            start = k
+    return out
+
+
+def _guessable_pieces(views: list[str]) -> list[tuple[int, int, int, str, str]]:
+    """Non-overlapping guessable pieces as (start, end, keep, kind, token):
+    repeats first ("password" x 3 is "password" plus a count), then common
+    words (found in any of `views`, the same text with symbol swaps undone),
+    runs and years (in views[0], as typed). `keep` characters at the start
+    stay in play: a repeat keeps one copy, which the next pass scores."""
+    view = views[0]
+    taken = bytearray(len(view))
+    found = []
+
+    def add(start, end, keep, kind, token):
+        if any(taken[start:end]):
+            return
+        taken[start:end] = b"\x01" * (end - start)
+        found.append((start, end, keep, kind, token))
+
+    for m in _REPEAT_CHAR_RE.finditer(view):
+        add(m.start(), m.end(), 1, "repeat", m.group(1))
+    for m in _REPEAT_CHUNK_RE.finditer(view):
+        add(m.start(), m.end(), len(m.group(1)), "repeat", m.group(1))
+    for word in _COMMON_LONGEST_FIRST:
+        for v in views:
+            i = v.find(word)
+            while i != -1:
+                add(i, i + len(word), 0, "word", word)
+                i = v.find(word, i + 1)
+    for start, end in sorted(_runs_in(view), key=lambda r: (r[0] - r[1], r[0])):
+        add(start, end, 0, "run", view[start:end])
+    for m in _YEAR_RE.finditer(view):
+        add(m.start(), m.end(), 0, "year", m.group(0))
+    return found
+
+
+def _strip_guessable(p: str) -> tuple[str, list[tuple[str, str, int]]]:
+    """Strip guessable pieces from `p` until none are left (taking one out can
+    join two halves into a new one: "12password34" -> "1234"). Matching is on
+    lowercased readings of `p` with separators ignored; what's stripped is
+    removed from `p` itself, so the remainder keeps its capitals.
+    Returns (remainder, [(kind, token, characters stripped)])."""
+    # One character in, one character out (the few characters whose lowercase
+    # is two characters stay as typed), so every reading lines up index for
+    # index with `p`.
+    plain = "".join(c.lower() if len(c.lower()) == 1 else c for c in p)
+    readings = [plain] + [r for r in dict.fromkeys(plain.translate(m) for m in _LEET_MAPS) if r != plain]
+    alive = list(range(len(p)))
+    hits: list[tuple[str, str, int]] = []
+    for _ in range(_STRIP_PASSES):
+        view_idx = [i for i in alive if p[i] not in _SEPARATORS]
+        pieces = _guessable_pieces(["".join(low[i] for i in view_idx) for low in readings])
+        if not pieces:
+            break
+        dead = bytearray(len(p))
+        for start, end, keep, kind, token in pieces:
+            # The span in `p` runs from the piece's first to last character,
+            # separators between them included; a repeat keeps its first copy.
+            lo, hi = view_idx[start], view_idx[end - 1]
+            dead[lo:hi + 1] = b"\x01" * (hi + 1 - lo)
+            for i in view_idx[start:start + keep]:
+                dead[i] = 0
+            hits.append((kind, token, end - start - keep))
+        alive = [i for i in alive if not dead[i]]
+    return "".join(p[i] for i in alive), hits
+
+
+def _strength(p: str) -> dict:
+    """Estimated bits of `p` once its guessable pieces are stripped, plus
+    _TOKEN_BITS per distinct piece (the same word ten times is one guess, not
+    ten), and which kind of piece made up most of it ("main": "word" / "run"
+    / "repeat" / "year", or "" when the guessable pieces are under half of
+    it)."""
+    rest, hits = _strip_guessable(p)
+    bits = _pool_bits(rest) + _TOKEN_BITS * len({(kind, token) for kind, token, _ in hits})
+    matched = {"word": 0, "run": 0, "repeat": 0, "year": 0}
+    later = {token: kind for kind, token, _ in hits if kind != "repeat"}
+    for kind, token, size in hits:
+        # "passwordpassword" is mostly the word, "12341234" mostly the run:
+        # a repeat counts as what its kept copy turned out to be.
+        matched[later.get(token, kind) if kind == "repeat" else kind] += size
+    significant = sum(1 for ch in p if ch not in _SEPARATORS)
+    main = ""
+    if sum(matched.values()) and 2 * sum(matched.values()) >= significant:
+        main = max(matched, key=lambda k: matched[k])  # ties: word, run, repeat, year
+    words = sorted((t for k, t, _ in hits if k == "word"), key=len, reverse=True)
+    return {"bits": bits, "rest": rest, "main": main,
+            "word": words[0] if words else "", "hits": [k for k, _, _ in hits]}
 
 
 def _estimated_bits(p: str) -> float:
-    import math
-    pool = 0
-    if re.search(r"[a-z]", p):
-        pool += 26
-    if re.search(r"[A-Z]", p):
-        pool += 26
-    if re.search(r"[0-9]", p):
-        pool += 10
-    if re.search(r"[^A-Za-z0-9 ]", p):
-        pool += 33
-    if " " in p:
-        pool += 1
-    return len(p) * math.log2(max(pool, 2))
+    """The strength check's estimate for `p` (see _strength)."""
+    return _strength(p)["bits"]
 
 
 def _b64(raw: bytes) -> str:
@@ -313,13 +440,15 @@ def _parse_ts(value) -> datetime.datetime | None:
     return dt.astimezone(_LOCAL_TZ) if _LOCAL_TZ else dt
 
 
-def central_time(iso_ts) -> str:
-    """'Nov 09, 2026 2:47 PM CST'. Empty string on bad input."""
+def central_time(iso_ts, seconds: bool = False) -> str:
+    """'Nov 09, 2026 2:47 PM CST' ('Nov 09, 2026 2:47:05 PM CST' with
+    seconds). Empty string on bad input."""
     dt = _parse_ts(iso_ts)
     if dt is None:
         return ""
     hour = dt.strftime("%I").lstrip("0") or "12"
-    return f"{dt.strftime('%b %d, %Y')} {hour}:{dt.strftime('%M %p')} {dt.tzname() or 'CT'}"
+    clock = dt.strftime("%M:%S %p" if seconds else "%M %p")
+    return f"{dt.strftime('%b %d, %Y')} {hour}:{clock} {dt.tzname() or 'CT'}"
 
 
 def central_date(iso_ts) -> str:
@@ -333,8 +462,12 @@ def _now() -> datetime.datetime:
 
 
 def make_built_label(now: datetime.datetime | None = None) -> str:
-    """The build time as the snapshot shows it, in Central time."""
-    return central_time(now or _now())
+    """The build time as the phone shows it (the lock screen's "Built ..."
+    line and the page's "Snapshot built ..."), in Central time and to the
+    second, so two publishes in the same minute are told apart:
+    'Nov 09, 2026 2:16:05 PM CST'. `now` is an aware datetime (UTC from the
+    app; a naive one is read as UTC) or an ISO string; None means now."""
+    return central_time(now or _now(), seconds=True) or central_time(_now(), seconds=True)
 
 
 # ----------------------------------------------------------------------
@@ -672,7 +805,7 @@ def render_body(data: dict) -> str:
     """The read-only snapshot HTML: a fragment the shell injects after it
     decrypts. `data` keys (all optional; a missing one shows an empty state):
 
-      built_label           str, e.g. "Nov 09, 2026 2:47 PM CST" (make_built_label())
+      built_label           str, e.g. "Nov 09, 2026 2:47:05 PM CST" (make_built_label())
       inflight_gathered_at  ISO timestamp of the In Flight read, or ""
       activity_fetched_at   ISO timestamp of the activity (commits) read, or ""
       do_next               nextup.build_do_next(...) result
@@ -791,6 +924,16 @@ SHELL_SCRIPT = r"""
     return p;
   }
 
+  // The Mac derives the key from the NFC form of the passphrase, and Settings
+  // refuses one that starts or ends with a space. So the typed text is
+  // NFC-normalized and trimmed: a stray space from the phone's keyboard or
+  // autocorrect never costs an unlock.
+  function clean(pass) {
+    var s = String(pass || "");
+    if (s.normalize) { s = s.normalize("NFC"); }
+    return s.trim();
+  }
+
   // The passphrase becomes a non-extractable PBKDF2 base key; each publish's
   // salt derives the AES-GCM key from it.
   function baseKey(pass) {
@@ -798,7 +941,7 @@ SHELL_SCRIPT = r"""
     if (!subtle || !window.TextEncoder || !window.TextDecoder) {
       return Promise.reject(new Error("nocrypto"));
     }
-    var secret = new TextEncoder().encode(pass.normalize ? pass.normalize("NFC") : pass);
+    var secret = new TextEncoder().encode(clean(pass));
     return subtle.importKey("raw", secret, "PBKDF2", false, ["deriveKey"]);
   }
 
@@ -934,7 +1077,7 @@ SHELL_SCRIPT = r"""
 
   form.addEventListener("submit", function (e) {
     e.preventDefault();
-    var pass = input.value;
+    var pass = clean(input.value);
     if (!pass) {
       setStatus("Type your passphrase first.", "error");
       input.focus();
@@ -1004,6 +1147,7 @@ body::after {
 .rd-remember { display: flex; align-items: center; gap: 10px; min-height: 44px; margin: 12px 0 2px; font-size: 14px; cursor: pointer; }
 .rd-remember input { width: 20px; height: 20px; margin: 0; accent-color: #33ff33; flex: 0 0 auto; }
 .rd-hint { margin: 0 0 16px 30px; color: #6a8a6a; font-size: 12px; line-height: 1.45; }
+.rd-hint-solo { margin: 10px 0 16px; }
 .rd-btn {
   display: block; width: 100%; min-height: 48px; padding: 10px 14px;
   font: inherit; font-size: 15px; font-weight: 700; letter-spacing: 0.1em;
@@ -1027,7 +1171,7 @@ body::after {
   max-width: 860px; margin: 0 auto; padding: 12px 16px 2px;
 }
 .rd-forget {
-  min-height: 40px; padding: 0 14px; font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 0.08em;
+  min-height: 44px; padding: 0 14px; font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 0.08em;
   color: #b8d8b8; background: transparent; border: 1px solid #2a3f2a; border-radius: 5px; cursor: pointer;
 }
 .rd-forget:hover { border-color: #22cc22; color: #33ff33; }
@@ -1104,7 +1248,8 @@ def _csp(script_hashes: list[str], meta: bool = False) -> str:
 
 _REMEMBER_HTML = ('<label class="rd-remember"><input id="rd-remember" type="checkbox"> Remember on this device</label>\n'
                   '      <p class="rd-hint">Skips this screen next time. Only on your own phone.</p>')
-_NO_REMEMBER_HTML = '<p class="rd-hint">Preview on your Mac: nothing is remembered here.</p>'
+# No checkbox to sit beside, so this hint lines up with the input instead.
+_NO_REMEMBER_HTML = '<p class="rd-hint rd-hint-solo">Preview on your Mac: nothing is remembered here.</p>'
 
 
 def build_shell(payload: dict, built_label: str, allow_remember: bool = True) -> str:
