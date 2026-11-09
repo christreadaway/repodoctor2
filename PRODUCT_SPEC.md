@@ -438,6 +438,22 @@ A 90+, B 80+, C 70+, D 60+, F below. Checks the scan can't answer are left out a
 
 Commits made by Claude Code carry a `Claude-Session: https://claude.ai/code/session_…` trailer. Every In Flight item and Recent-sessions card gets `session_url` (newest commit with a link wins, across all commits before truncation; falls back to the PR body) and `session_count`; the Resume packet picks the most relevant one and shows it at the top, and finish / needs-PR first prompts mention it. A cyan OPEN SESSION ↗ chip (new tab, `rel=noopener`) appears wherever a link is known, and Markdown exports include it. The parser only ever returns `^https://claude\.ai/code/session_[A-Za-z0-9_-]{1,128}$`; values read back from caches are re-checked with `safe_session_url` before reaching an href. Link counts are logged in the existing In Flight / sessions / resume events.
 
+### 4.7o Phone snapshot (Settings → Phone snapshot; Netlify)
+
+**Files:** `snapshot.py` (render, encrypt, shell, site files, zip), `templates/snapshot/` (body, parts, styles), `netlify_publish.py` (Netlify API client), `app.py` (`# --- Phone snapshot (Netlify)`: `_snapshot_data`, `/snapshot/setup`, `/snapshot/publish`, `/snapshot/preview`, `/snapshot/takedown`), `security.py` (`encrypt_snapshot_secrets` / `decrypt_snapshot_secrets`), `models.py` (snapshot state + log), `templates/settings.html`, `templates/review.html` (PUBLISH TO PHONE)
+
+**Job:** read the dashboard on a phone without putting the app, its tokens, or readable data online (Session 25; option 1 of the Netlify choices).
+
+**What's in it (read-only):** Do next (first 40 items, COPY PROMPT, OPEN SESSION and PR links), Weekly review, What changed for Week / Month / Quarter / YTD (KPIs, overview paragraph, per repo counts + AI paragraph or top titles, 25 repos per range), Portfolio by theme with health grades. Links back into the app (Tracker, In Flight) are dropped; they can't work from a phone. Built from the same caches as the pages, with one Stats read widened to cover YTD.
+
+**Privacy model:** the Mac renders the HTML, then encrypts it with AES-256-GCM using a key from PBKDF2-HMAC-SHA256 (600,000 iterations, 16-byte random salt, 12-byte random nonce, fresh every publish) and the owner's snapshot passphrase (12+ characters, normalized identically in Python and the browser). The published files are `index.html` (a lock screen + the ciphertext envelope + one inline script that decrypts with WebCrypto), `_headers` and `robots.txt`; none contains readable data; the only plaintext is the build time. A hash-pinned Content-Security-Policy (in `_headers` and a meta tag) lets only that one script run; the decrypted HTML is injected without scripts, images or inline handlers, outbound links use `rel="noopener noreferrer"`, and pages send `noindex`, `no-referrer`, `no-store`. "Remember on this device" (opt-in, labeled for your own phone) keeps the passphrase in that browser's localStorage; FORGET clears it.
+
+**Netlify flow:** a personal access token is verified, a site named `repodoctor-snapshot-<random>` is created (or the existing one reused), and each publish uploads the zip (`POST /sites/{id}/deploys`, `application/zip`) and waits until the deploy is ready (90 s cap). Errors become plain-English messages (bad token, no access, site deleted on Netlify → run setup again, rate limit, Netlify down, deploy failed / still processing); the token is scrubbed from every message and log line. Site creation never retries after a gateway error (it may already exist). TAKE DOWN deletes the site and forgets the token and passphrase.
+
+**Secrets:** the Netlify token and the passphrase are stored only on the Mac, encrypted with the app password in `config/snapshot.enc` (gitignored, atomic writes), unlocked into memory at login and cleared at logout; after an app restart publishing is locked until you log in again. Non-secret state (site id, URL, last publish, last error) is in `~/.repodoctor/snapshot.json`. Everything (setup, publish, preview, takedown, Netlify calls) is logged to `data/logs/snapshot.log`, never a secret or any data text.
+
+**PREVIEW** serves the exact encrypted page from the Mac under the same CSP, to try unlocking before publishing.
+
 ### 4.8 Settings & Preferences
 
 **Files:** `app.py` (settings route), `models.py`, `templates/settings.html`
@@ -474,6 +490,9 @@ All data stored as local JSON files — no database dependency.
 | Stats activity cache (commits + merged PRs per repo) | In-memory only (keyed by scan identity) | 1 hour, next scan, or REFRESH |
 | Stats activity log | `data/logs/activity.log` | Append-only; one JSON event per line |
 | What we shipped paragraphs | `data/activity_summaries.json` | Newest 500 per section; keyed by content fingerprint |
+| Phone snapshot secrets (Netlify token + passphrase) | `config/snapshot.enc` (encrypted with the app password) | Until TAKE DOWN or a new setup |
+| Phone snapshot state | `~/.repodoctor/snapshot.json` | Site id / URL / last publish / last error |
+| Phone snapshot log | `data/logs/snapshot.log` | Append-only; one JSON event per line |
 | Health log / Do next + Review log | `data/logs/health.log`, `data/logs/nextup.log` | Append-only; one JSON event per line |
 
 ### 4.10 Session Cost Tracking
@@ -593,6 +612,10 @@ Flask Application (app.py)
 | GET | `/next/export.md` | Active | Do next as Markdown |
 | GET | `/review` | Active | Weekly review — shipped / waiting / gone quiet / next up (`?group=`) |
 | GET | `/review/export.md` | Active | Weekly review as Markdown |
+| POST | `/snapshot/setup` | Active | Phone snapshot: verify the Netlify token, reuse or create the site, save token + passphrase encrypted, publish |
+| POST | `/snapshot/publish` | Active | Re-render, re-encrypt and upload the phone snapshot (`next` returns to the page it was pressed on) |
+| GET | `/snapshot/preview` | Active | The exact encrypted phone page, served locally under its CSP |
+| POST | `/snapshot/takedown` | Active | Delete the Netlify site and forget the snapshot secrets |
 | POST | `/api/stats/summarize/<owner>/<name>` | Active | Write / refresh one repo's "What we shipped" paragraph for a range (JSON) |
 | POST | `/api/stats/summarize-portfolio` | Active | Write / refresh the range's overview paragraph (JSON) |
 | POST | `/inflight/refresh` | Active | Regather In Flight from GitHub and cache it |
@@ -704,7 +727,8 @@ Coverage areas:
 | Settings | Working |
 | Cost tracking | Working |
 | Tests (223 total via `pytest`, incl. Session 17 regression suite) | Passing |
-| Netlify deployment (Node.js) | Hosted site decommissioned 2026-07-23; code retained in `netlify/`, behind Flask version. Local Flask is the supported way to run. |
+| Netlify deployment (Node.js) | Hosted site decommissioned 2026-07-23; code retained in `netlify/` for reference only (not used by the phone snapshot). Local Flask is the supported way to run. |
+| Phone snapshot (encrypted, read-only, on Netlify) | Working (Session 25) |
 | AI project summaries via Claude Haiku | Working |
 | AI branch analysis | Built, inactive |
 | Archive management | Built, inactive |

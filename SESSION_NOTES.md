@@ -1,11 +1,41 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 24
+**Total Sessions Logged:** 25
 **Date Range:** 2025-02-14 to 2026-11-09
-**Last Updated:** 2026-11-09 (Session 24)
+**Last Updated:** 2026-11-09 (Session 25)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 25 — 2026-11-09 (Phone snapshot: encrypted read-only copy on Netlify)
+
+Branch: `claude/sweet-fermi-yt1v9m`. Asked "is this set up to run on Netlify?" — no: the `netlify/` folder is an old Node.js port of the first few screens, decommissioned 2026-07-23, and the real app can't run on Netlify as-is (10–26 s function limit vs 30–90 s scans / reads, local files + in-memory caches, and it kept the GitHub token online). Offered three options; chose **1, the read-only snapshot**: "use multiple agents, fix low→critical bugs, then update .md files."
+
+### Decisions
+- **Encrypt on the Mac, decrypt in the phone's browser.** Netlify password protection is a paid feature and still leaves plaintext on Netlify; client-side encryption keeps Netlify ciphertext-only on the free plan. AES-256-GCM, PBKDF2-SHA256 600k iterations, fresh salt + nonce every publish.
+- **Netlify zip deploy through its API** (no Netlify CLI, no Node, no git link): the app creates the site, uploads, waits until ready.
+- **Secrets on the Mac only,** encrypted with the app password in `config/snapshot.enc`, same scheme as the GitHub / Anthropic keys, unlocked at login.
+- **Read-only and self-contained:** in-app links (Tracker, In Flight) dropped; OPEN SESSION and GitHub links kept; COPY PROMPT works on the phone.
+- "Remember on this device" is opt-in (localStorage, your own phone only).
+- Asked before touching `main` this time (the request didn't mention it).
+
+### How it was built
+- Two builder agents in worktrees, new files only: the renderer (`snapshot.py`, `templates/snapshot/`, 46 tests + a 112-check browser run proving WebCrypto decrypts what Python encrypts under the hash-pinned CSP) and the Netlify client (`netlify_publish.py`, 68 tests, checked against Netlify's published OpenAPI spec).
+- This session: encrypted secrets storage, Settings card with step-by-step token instructions, setup / publish / preview / takedown routes, `_snapshot_data` (one Stats read widened to YTD serves all four ranges), PUBLISH TO PHONE on Weekly review, 18 route tests; merged both branches.
+- Fixed while integrating: the Netlify client retried a POST /sites after a 502/504, which could leave a stray empty site → POSTs retry only on 429/503; one snapshot log path for app + renderer.
+
+REVIEW25_PLACEHOLDER
+
+### Tests
+TESTS25_PLACEHOLDER
+
+### Next Steps
+1. Pull the branch (or `main` once merged) and launch as usual — no new dependencies.
+2. Netlify → User settings → Applications → Personal access tokens → New access token; Settings → Phone snapshot → paste it, pick a passphrase (12+), app password → SET UP & PUBLISH.
+3. Open the link on your phone, enter the passphrase, tick Remember on this device. Bookmark it / add to home screen.
+4. Mondays: Weekly review → PUBLISH TO PHONE.
 
 ---
 
