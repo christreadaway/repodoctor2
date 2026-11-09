@@ -373,6 +373,46 @@ Every project at a glance, grouped by theme, built for context switching.
 - **Components** moved under this tab's sub-nav (nav stays at ten tabs); it gained Video Production, Audio & Transcription, Courseware, CRM & Contacts and Privacy & PII Redaction capabilities (25 total).
 - COPY FOR CLAUDE / DOWNLOAD .MD export the grouped portfolio plus the infrastructure map. Every tag change, suggestion run and home assignment logs to `data/logs/portfolio.log`.
 
+### 4.7k Do next (Next Up → "Do next", the Next Up landing page)
+
+**Files:** `nextup.py` (`build_do_next`, `compose_do_next_markdown`), `app.py` (`/next`, `/next/export.md`), `templates/next.html`, `_macros.html` (`do_next_item`)
+
+**Job:** one ranked answer to "what should I work on?" across every repo (Session 24). Before, it was split across In Flight, Tracker, Projects and Recent sessions.
+
+**Sources (no GitHub or AI call on page view):** the In Flight cache (`data/inflight.json`), saved trackers (P0/P1 next actions), and Projects summaries (planned steps). The page shows when branches were last read and has REFRESH FROM GITHUB, which re-reads In Flight and returns to this page.
+
+**Ranking (deterministic):**
+
+| # | Tier | Source | Order within tier |
+|---|---|---|---|
+| 1 | MERGE | In Flight: PR open and ready | Oldest waiting first (PRs rot) |
+| 2 | FINISH | In Flight: draft PR or WIP commits | Most recent first (context is warm) |
+| 3 | CONFIRM LIVE | Tracker action `awaiting_deploy` | By repo |
+| 4 | P0 | Tracker P0 (todo / in progress) | By repo |
+| 5 | OPEN A PR | In Flight: commits, no PR | Most recent first |
+| 6 | P1 | Tracker P1 (todo / in progress) | By repo |
+| 7 | DECIDE | In Flight: stale or couldn't compare | Most recent first |
+| 8 | PLANNED | First planned step, only for repos with nothing above; max 12 | Most recently pushed repo first |
+| 9 | CLEAN UP | Merged branches not deleted: ONE row for all repos → In Flight | — |
+| 10 | BLOCKED | Tracker P0/P1 `blocked`, with its note | By repo |
+
+P2/P3 tracker actions are counted, not listed. Each row: tier chip, repo (links to its Resume packet), title, one-line reason, links (PR / branch, OPEN SESSION when the Claude Code session is known, Tracker), and COPY PROMPT (the tracker's own prompt when it has one, otherwise a generated opening line for a fresh Claude Code session). Group filter, tier chips that jump to each section, a Monday banner pointing to the Weekly review, COPY FOR CLAUDE / DOWNLOAD .MD. Views and exports log to `data/logs/nextup.log`.
+
+### 4.7l Weekly review (Next Up → "Weekly review")
+
+**Files:** `nextup.py` (`build_review`, `gone_quiet`, `compose_review_markdown`), `app.py` (`/review`, `/review/export.md`), `templates/review.html`
+
+**Job:** the Monday look back + look ahead, one screen, group-scoped.
+
+| Section | What it shows | Source |
+|---|---|---|
+| Shipped this week | KPI tiles + per repo: commits / PRs merged and up to 3 titles | Stats activity report, last 7 days (same 90-day cached read as Stats) |
+| Waiting on you | MERGE, FINISH, CONFIRM LIVE rows | Do next |
+| Gone quiet | Repos active in the last 90 days with nothing for 21+ days; stale branches | Stats activity report (quarter) + In Flight cache |
+| Next up | Top 6 of P0 / OPEN A PR / P1 / PLANNED, with prompts | Do next |
+
+Works offline: if the app lost its GitHub connection and there's no cached read, Shipped and Gone quiet say so and the rest still renders. COPY FOR CLAUDE / DOWNLOAD .MD (`weekly-review-<date>.md`). Logged to `data/logs/nextup.log`.
+
 ### 4.8 Settings & Preferences
 
 **Files:** `app.py` (settings route), `models.py`, `templates/settings.html`
@@ -520,6 +560,10 @@ Flask Application (app.py)
 | GET | `/selector` | Active | Repo Selector — pick any repos (org repos included), tagged public/private |
 | POST | `/api/selector/blurb/<owner>/<name>` | Active | Generate one repo's three-sentence blurb (`{force:true}` to regenerate) |
 | GET | `/inflight` | Active | In Flight — every unmerged branch / open PR across repos (`?kind=`, `?group=`) |
+| GET | `/next` | Active | Do next — one ranked list across repos (`?group=`); the Next Up landing page |
+| GET | `/next/export.md` | Active | Do next as Markdown |
+| GET | `/review` | Active | Weekly review — shipped / waiting / gone quiet / next up (`?group=`) |
+| GET | `/review/export.md` | Active | Weekly review as Markdown |
 | POST | `/inflight/refresh` | Active | Regather In Flight from GitHub and cache it |
 | GET | `/inflight/export.md` | Active | In Flight as a Markdown download |
 | GET | `/portfolio` | Active | Portfolio — projects by theme tag (`?tab=infra` for the infrastructure map) |
