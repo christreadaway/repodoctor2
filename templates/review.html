@@ -75,7 +75,7 @@
         {% endfor %}
     </ul>
     {% else %}
-    <p class="rv-empty">Nothing landed on a default branch this week{% if active_group %} in {{ active_group }}{% endif %}.</p>
+    <p class="rv-empty">{% if review.failed %}No activity found in the repos GitHub could read; {{ review.failed|length }} couldn't be read, so this isn't a claim that nothing shipped there.{% else %}Nothing landed on a default branch this week{% if active_group %} in {{ active_group }}{% endif %}.{% endif %}</p>
     {% endif %}
     {% endif %}
 </section>
@@ -126,6 +126,8 @@
     </ul>
     {% elif review.week is none %}
     <p class="rv-empty">Needs a GitHub read (see above).</p>
+    {% elif review.failed %}
+    <p class="rv-empty">Nothing went quiet among the repos GitHub could read ({{ review.failed|length }} couldn't be read).</p>
     {% else %}
     <p class="rv-empty">Nothing went quiet.</p>
     {% endif %}

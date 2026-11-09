@@ -54,7 +54,7 @@ import anthropic
 import github_client as gh
 from ai_analyzer import DEFAULT_MODEL, request_json
 from briefing import _parse_ts
-from sessions import _LOCAL_TZ, _normalize_commit
+from sessions import _LOCAL_TZ, _normalize_commit, strip_bidi
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +242,7 @@ def default_floor(today: datetime.date) -> datetime.date:
 def _normalize_pr(raw: dict) -> dict:
     return {
         "number": raw.get("number"),
-        "title": (raw.get("title") or "").strip() or f"PR #{raw.get('number')}",
+        "title": strip_bidi((raw.get("title") or "").strip()) or f"PR #{raw.get('number')}",
         "merged_at": raw.get("merged_at") or "",
         "html_url": raw.get("html_url") or "",
         "author": ((raw.get("user") or {}).get("login") or ""),

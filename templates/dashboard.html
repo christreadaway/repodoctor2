@@ -217,6 +217,12 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('.sortable').forEach(function(th) {
+        // Keyboard: headers are focusable and sort on Enter / Space.
+        th.tabIndex = 0;
+        th.setAttribute('role', 'button');
+        th.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); th.click(); }
+        });
         th.addEventListener('click', function() {
             var table = th.closest('table');
             var tbody = table.querySelector('tbody');

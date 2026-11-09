@@ -243,7 +243,11 @@ def gather_repo_inflight(client, repo: dict, now: datetime.datetime | None = Non
 
 
 def _scan_shows_tidy(repo: dict) -> bool:
-    """The cached scan says this repo has only its default branch."""
+    """The cached scan says this repo has only its default branch. A repo
+    whose scan failed (error row: zero branches because nothing was read) is
+    never "tidy" — skipping it hid its open PRs from In Flight / Do next."""
+    if repo.get("error"):
+        return False
     if repo.get("non_default_branch_count", 1) != 0:
         return False
     names = repo.get("branch_names")

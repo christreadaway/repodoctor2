@@ -274,9 +274,19 @@ def _commit_date(raw: dict) -> str:
     return committer.get("date") or author.get("date") or ""
 
 
+_BIDI_CONTROLS = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def strip_bidi(text):
+    """Remove Unicode direction-override characters from GitHub text. A U+202E
+    in a PR title made "gnp.exe" display as "exe.png", and COPY PROMPT copied
+    the raw control character."""
+    return _BIDI_CONTROLS.sub("", text) if isinstance(text, str) else text
+
+
 def _normalize_commit(raw: dict) -> dict:
     commit = raw.get("commit") or {}
-    message = (commit.get("message") or "").strip()
+    message = strip_bidi((commit.get("message") or "").strip())
     summary = message.split("\n", 1)[0].strip()
     author = (commit.get("author") or {}).get("name") or "Unknown"
     sha = raw.get("sha") or ""
@@ -315,8 +325,12 @@ def _commits_in_window(raw_commits: list[dict], window: Window,
 def branch_topic(branch: str) -> str:
     """Human topic from a branch name: 'claude/yesterday-work-summary-zqlr51'
     -> 'yesterday work summary'."""
-    name = branch.split("/", 1)[1] if branch.startswith(("claude/", "henry/")) else branch
-    name = _CLAUDE_SUFFIX_RE.sub("", name)
+    session_branch = branch.startswith(("claude/", "henry/"))
+    name = branch.split("/", 1)[1] if session_branch else branch
+    if session_branch:
+        # Only session branches carry the random id ("-zqlr51"); stripping it
+        # from "fix-mobile-layout" turned the topic into "fix mobile".
+        name = _CLAUDE_SUFFIX_RE.sub("", name)
     return name.replace("-", " ").replace("_", " ").strip() or branch
 
 
@@ -489,7 +503,7 @@ def _pr_view(pr: dict) -> dict:
     """Compact, JSON-safe PR facts for a session card + prompt."""
     return {
         "number": pr.get("number"),
-        "title": (pr.get("title") or "").strip(),
+        "title": strip_bidi((pr.get("title") or "").strip()),
         "state": pr.get("state"),
         "merged": bool(pr.get("merged_at")),
         "merged_at": pr.get("merged_at") or "",
@@ -653,7 +667,8 @@ def _gather_repo_sessions(client, repo: dict, window: Window) -> list[dict]:
 
 
 def gather_sessions(client, repos: list[dict], window: Window,
-                    scanned_at: str | datetime.datetime | None = None) -> list[dict]:
+                    scanned_at: str | datetime.datetime | None = None,
+                    failures: list | None = None) -> list[dict]:
     """All sessions across all repos in the window, newest activity first.
 
     A repo-level failure (a single bad branch/PR fetch) is logged and skipped
@@ -677,6 +692,10 @@ def gather_sessions(client, repos: list[dict], window: Window,
         except Exception as e:  # noqa: BLE001 - never let one repo blank the page
             logger.warning("session gather failed for %s/%s: %s",
                            repo.get("owner"), repo.get("name"), e)
+            # Callers pass a list to learn which repos weren't read, so an
+            # empty result never reads as "no activity" for them.
+            if failures is not None:
+                failures.append(f"{repo.get('owner')}/{repo.get('name')}")
     if pruned:
         logger.info("session gather pruned %d/%d repos not pushed in window %s",
                     pruned, len(repos), window.key)

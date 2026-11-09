@@ -87,7 +87,7 @@
                 {% endfor %}
             </div>
             {% else %}
-            <p class="text-secondary">Nothing unmerged. Every branch is in {{ packet.repo.default_branch }}.</p>
+            <p class="text-secondary">{% if packet.inflight_failed %}Couldn't read this repo's branches from GitHub (see the note above), so there may be unmerged work this doesn't show.{% else %}Nothing unmerged. Every branch is in {{ packet.repo.default_branch }}.{% endif %}</p>
             {% endif %}
         </div>
 
@@ -110,7 +110,7 @@
                 {% endfor %}
             </ul>
             {% else %}
-            <p class="text-secondary">No Claude Code activity in this window.</p>
+            <p class="text-secondary">{% if packet.sessions_failed %}Couldn't read recent sessions from GitHub, so this isn't a claim that nothing happened.{% else %}No Claude Code activity in this window.{% endif %}</p>
             {% endif %}
         </div>
 
@@ -141,7 +141,7 @@
             <pre class="resume-doc">{{ packet.status_excerpt }}</pre>
             <p class="resume-link"><a href="{{ url_for('docs_index', owner=packet.repo.owner, repo=packet.repo.name) }}">Read it rendered in Docs &rarr;</a></p>
             {% else %}
-            <p class="text-secondary">This repo has no PROJECT_STATUS.md (or README). Adding one is the single biggest help for future context switches.</p>
+            <p class="text-secondary">{% if packet.docs_failed %}Couldn't read this repo's docs from GitHub right now. Reload in a minute.{% else %}This repo has no PROJECT_STATUS.md (or README). Adding one is the single biggest help for future context switches.{% endif %}</p>
             {% endif %}
         </div>
         <div class="settings-card resume-card">
@@ -149,7 +149,7 @@
             {% if packet.notes_excerpt %}
             <pre class="resume-doc">{{ packet.notes_excerpt }}</pre>
             {% else %}
-            <p class="text-secondary">No SESSION_NOTES.md found in this repo.</p>
+            <p class="text-secondary">{% if packet.docs_failed %}Couldn't read this repo's docs from GitHub right now.{% else %}No SESSION_NOTES.md found in this repo.{% endif %}</p>
             {% endif %}
         </div>
     </div>

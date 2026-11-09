@@ -49,6 +49,10 @@
 
 {{ group_filter_bar('do_next', all_repos_count) }}
 
+{% if failed_scoped %}
+<div class="flash flash-error stats-notice">The last branch read couldn't reach {{ failed_scoped|length }} repo{{ 's' if failed_scoped|length != 1 }} ({{ failed_scoped|join(', ') }}), so their PRs and branches are missing below. REFRESH FROM GITHUB to retry.</div>
+{% endif %}
+
 {% if result.total %}
 <div class="dn-tierbar" aria-label="Items by kind">
     {% for key, label, n in result.tiers %}
@@ -76,7 +80,7 @@
 <div class="onboarding">
     <div class="onboarding-welcome">
         <h2>Nothing waiting{% if active_group %} in {{ active_group }}{% endif %}.</h2>
-        <p>{% if cached %}Every branch is merged and no P0/P1 tracker actions are open.{% else %}Read branches from GitHub above to see PRs and work in flight.{% endif %}
+        <p>{% if failed_scoped %}Nothing waiting in the repos GitHub could read; see the warning above.{% elif cached %}Every branch is merged and no P0/P1 tracker actions are open.{% else %}Read branches from GitHub above to see PRs and work in flight.{% endif %}
         Generate <a href="{{ url_for('projects') }}">Projects</a> summaries or <a href="{{ url_for('tracker_index') }}">Tracker</a> next actions to queue planned work here.</p>
     </div>
 </div>

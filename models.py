@@ -918,11 +918,14 @@ def _clean_inflight_item(i: dict) -> dict:
         if not isinstance(i.get(k), str):
             i[k] = ""
     for k in ("pr", "merged_pr"):
-        if i.get(k) is not None and not isinstance(i[k], dict):
+        if not isinstance(i.get(k), dict):
             i[k] = None
     for k in ("ahead_by", "behind_by", "age_days", "session_count"):
-        if k in i and (not isinstance(i[k], int) or isinstance(i[k], bool)):
+        if not isinstance(i.get(k), int) or isinstance(i.get(k), bool):
             i[k] = None if k != "session_count" else 0
+    for k in ("compare_failed", "is_claude"):
+        if not isinstance(i.get(k), bool):
+            i[k] = False
     if not isinstance(i.get("commits", []), list):
         i["commits"] = []
     else:

@@ -19,6 +19,7 @@
     <div class="page-actions">
         {% if scan_results %}
         <form method="POST" action="{{ url_for('inflight_refresh') }}" class="inline-form">
+            <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
             <button type="submit" class="btn {% if cached %}btn-secondary{% else %}btn-primary{% endif %}" data-loading-text="READING GITHUB…"
                     {% if not github_connected %}disabled title="Reconnect to GitHub first (see the banner above)."{% endif %}>
                 {% if cached %}REFRESH{% else %}READ FROM GITHUB{% endif %}
@@ -168,7 +169,7 @@
 <div class="onboarding">
     <div class="onboarding-welcome">
         <h2>{% if kind %}Nothing in this bucket.{% else %}Nothing in flight.{% endif %}</h2>
-        <p>{% if kind %}Try another filter above.{% else %}Every branch in {% if active_group %}{{ active_group }}{% else %}your repos{% endif %} is merged. Clean slate.{% endif %}</p>
+        <p>{% if kind %}Try another filter above.{% elif failed_scoped %}Nothing unmerged in the repos GitHub could read. {{ failed_scoped|length }} couldn't be read ({{ failed_scoped|join(', ') }}), so this isn't a clean bill of health. REFRESH to retry.{% else %}Every branch in {% if active_group %}{{ active_group }}{% else %}your repos{% endif %} is merged. Clean slate.{% endif %}</p>
     </div>
 </div>
 {% endif %}

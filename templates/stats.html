@@ -184,6 +184,10 @@
             Written only from the merged PR titles and commit messages below.</p>
         {% endif %}
         {% if github_connected %}
+        {% if anthropic_key_invalid %}
+        <p class="shipped-empty shipped-warn">Your Anthropic key was rejected the last time it was checked, so SUMMARIZE will fail.
+            Fix it in <a href="{{ url_for('settings') }}#credentials">Settings → Credentials → Update Anthropic key</a>.</p>
+        {% endif %}
         {% set n_needs = aiq.needs|length %}
         <div class="shipped-actions">
             <button type="button" class="btn btn-secondary btn-sm" id="shipped-summarize-btn"

@@ -297,7 +297,7 @@
   var sumBtn = document.getElementById("pf-summarize-btn");
   if (sumBtn) sumBtn.addEventListener("click", function () {
     window.runGenerationQueue({
-      targets: {{ view.missing_one_liners|tojson }},
+      targets: {{ (view.missing_one_liners if view else [])|tojson }},
       urlFor: function (fullName) {
         var parts = fullName.split("/");
         return "/api/selector/blurb/" + encodeURIComponent(parts[0]) + "/" + encodeURIComponent(parts.slice(1).join("/"));

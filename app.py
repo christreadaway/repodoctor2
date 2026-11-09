@@ -154,6 +154,20 @@ def _reject_bad_reset_token(page_name: str, target: str):
     return redirect(url_for(target))
 
 
+@app.context_processor
+def inject_anthropic_key_flag():
+    """Lets AI buttons warn up front when the key was rejected at the last
+    check (login, Settings), instead of failing per repo."""
+    return {"anthropic_key_invalid": _anthropic_key_status.get("status") == "invalid"}
+
+
+@app.template_filter("safe_session_url")
+def _safe_session_url_filter(value):
+    """Templates re-check any session URL with the same strict rule as the
+    parser, so a corrupted cache value can never become a link."""
+    return sessions.safe_session_url(value)
+
+
 @app.template_filter("central_time")
 def _central_time(iso_ts):
     """Format an ISO 8601 UTC timestamp as US Central Time (Chicago).
@@ -1699,8 +1713,8 @@ def _stats_model_label(model: str) -> str:
 def _stats_ai_error(e: Exception) -> str:
     """A sentence the SUMMARIZE overlay can show for an AI failure."""
     if isinstance(e, anthropic.AuthenticationError):
-        return ("Anthropic rejected the API key (401). Log out, then use Reset Credentials "
-                "on the login page to enter a working key.")
+        return ("Anthropic rejected the API key (401). Fix it in Settings → Credentials → "
+                "Update Anthropic key (your GitHub token stays as it is).")
     if isinstance(e, anthropic.PermissionDeniedError):
         return ("Anthropic refused the request (403); the key may not have access to this "
                 "model. Pick another model in Settings and retry.")
@@ -2080,8 +2094,10 @@ def yesterday_view():
                                all_repos_count=len(all_repos))
 
     t0 = time.monotonic()
+    failed_repos: list[str] = []
     session_list = sessions.gather_sessions(client, scoped_repos, window,
-                                            scanned_at=_scan_results.get("scanned_at"))
+                                            scanned_at=_scan_results.get("scanned_at"),
+                                            failures=failed_repos)
     sessions.attach_recaps(session_list, models.get_session_recaps())
     counts = sessions.summarize_counts(session_list)
     markdown = sessions.compose_markdown(
@@ -2102,6 +2118,7 @@ def yesterday_view():
         active_group=active_group,
         all_repos_count=len(all_repos),
         sessions=session_list,
+        failed_repos=failed_repos,
         counts=counts,
         markdown=markdown,
         next_up_items=_next_up_items(active_group, groups),
@@ -2270,8 +2287,10 @@ def do_next():
     if not scan:
         return render_template("next.html", all_repos_count=0, **ctx)
     t0 = time.monotonic()
-    cached, _items, _scoped, all_repos, result = _do_next_data(scan, active_group, groups)
+    cached, _items, scoped, all_repos, result = _do_next_data(scan, active_group, groups)
     gathered_at = (cached or {}).get("gathered_at", "")
+    scoped_names = {f"{r.get('owner')}/{r['name']}" for r in scoped}
+    failed_scoped = [f for f in (cached or {}).get("failed_repos") or [] if f in scoped_names]
     markdown = nextup.compose_do_next_markdown(result, session.get("github_user", ""),
                                                gathered_at, active_group)
     models.log_nextup_event(
@@ -2279,7 +2298,7 @@ def do_next():
         inflight_cached=bool(cached), inflight_age_days=_inflight_age(cached),
         elapsed_ms=int((time.monotonic() - t0) * 1000))
     return render_template(
-        "next.html", result=result, cached=cached, markdown=markdown,
+        "next.html", result=result, cached=cached, markdown=markdown, failed_scoped=failed_scoped,
         gathered_age_days=_inflight_age(cached), all_repos_count=len(all_repos), **ctx)
 
 
@@ -2406,6 +2425,7 @@ def inflight_view():
     items_scoped = inflight.filter_items(items_all, repos=scoped_names)
     items = inflight.filter_items(items_scoped, kind=kind or None)
     counts = inflight.summarize_counts(items_scoped)
+    failed_scoped = [f for f in (cached or {}).get("failed_repos") or [] if f in scoped_names]
     markdown = inflight.compose_markdown(items, session.get("github_user", ""),
                                          (cached or {}).get("gathered_at", "")) if cached else ""
     return render_template(
@@ -2418,6 +2438,7 @@ def inflight_view():
         markdown=markdown,
         kinds=_INFLIGHT_KINDS,
         kind=kind,
+        failed_scoped=failed_scoped,
         groups=groups,
         active_group=active_group,
         all_repos_count=len(all_repos),

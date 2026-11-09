@@ -35,7 +35,7 @@ import datetime
 import logging
 
 from briefing import _parse_ts, open_tracker_actions
-from sessions import safe_session_url
+from sessions import safe_session_url, strip_bidi
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +149,11 @@ def build_do_next(inflight_items: list[dict] | None, trackers: dict | None,
     now = now or _now()
     trackers = trackers or {}
     summaries = summaries or {}
+    # Archived repos are read-only on GitHub: nothing to do there. Forks keep
+    # their real branch / PR / tracker work but no planned steps (the
+    # project's roadmap belongs upstream). Matches the health grade.
+    repos = [r for r in repos if r.get("archived") is not True]
+    no_plan = {_full(r.get("owner", ""), r["name"]) for r in repos if r.get("fork") is True}
     in_scope = {_full(r.get("owner", ""), r["name"]): r for r in repos}
     by_name = {r["name"]: r for r in repos}
     items: list[dict] = []
@@ -211,7 +216,7 @@ def build_do_next(inflight_items: list[dict] | None, trackers: dict | None,
             items.append({
                 "tier": tier, "label": TIER_LABELS[tier], "source": "tracker",
                 "repo": repo["name"], "owner": repo.get("owner", ""), "full_name": full,
-                "title": f"{a.get('id')} {a.get('title')}".strip(),
+                "title": strip_bidi(f"{a.get('id')} {a.get('title')}".strip()),
                 "branch": "", "why": why, "when": "", "age_days": None,
                 "links": [{"label": "TRACKER", "url": f"/tracker/{repo.get('owner', '')}/{repo['name']}",
                            "external": False}],
@@ -227,12 +232,12 @@ def build_do_next(inflight_items: list[dict] | None, trackers: dict | None,
             continue
         full = _full(repo.get("owner", ""), name)
         steps = [x for x in (s.get("next_steps") or []) if isinstance(x, str) and x.strip()]
-        if full in busy or not steps:
+        if full in busy or full in no_plan or not steps:
             continue
         planned.append({
             "tier": "planned", "label": TIER_LABELS["planned"], "source": "summary",
             "repo": name, "owner": repo.get("owner", ""), "full_name": full,
-            "title": steps[0].strip(), "branch": "",
+            "title": strip_bidi(steps[0].strip()), "branch": "",
             "why": "First planned step from the Projects summary"
                    + (f" ({len(steps) - 1} more)" if len(steps) > 1 else "") + ".",
             "when": repo.get("pushed_at") or repo.get("updated_at") or "",
@@ -402,7 +407,12 @@ def compose_review_markdown(review: dict, owner_login: str = "", group: str = ""
     lines = [f"# Weekly review{(': ' + week_label) if week_label else ''}", "",
              f"> Built by RepoDoctor{(' for ' + owner_login) if owner_login else ''} across {scope}.", ""]
     lines += ["## Shipped this week", ""]
-    if t:
+    if t and t.get("errors"):
+        lines += [f"**{t.get('repos_updated', 0)} of {t.get('read', 0)} repos read were updated** "
+                  f"({t.get('errors')} couldn't be read) · "
+                  f"{t.get('commits', 0)} commits · {t.get('prs_merged', 0)} PRs merged · "
+                  f"active on {t.get('active_days', 0)} of {t.get('days', 7)} days", ""]
+    elif t:
         lines += [f"**{t.get('repos_updated', 0)} of {t.get('repos_total', 0)} repos updated** · "
                   f"{t.get('commits', 0)} commits · {t.get('prs_merged', 0)} PRs merged · "
                   f"active on {t.get('active_days', 0)} of {t.get('days', 7)} days", ""]
@@ -424,6 +434,8 @@ def compose_review_markdown(review: dict, owner_login: str = "", group: str = ""
             else:
                 lines.append(f"- **{s['repo']}** ({', '.join(bits)}): " + "; ".join(s["titles"]))
         lines.append("")
+    elif review.get("week") is not None and review["failed"]:
+        lines += ["No activity found in the repos GitHub could read.", ""]
     elif review.get("week") is not None:
         lines += ["Nothing landed on a default branch this week.", ""]
     else:
@@ -446,6 +458,8 @@ def compose_review_markdown(review: dict, owner_login: str = "", group: str = ""
             lines.append(f"- **{i.get('repo')}** `{i.get('branch')}`: stale branch, "
                          f"{i.get('age_days')} days without activity")
         lines.append("")
+    elif review["failed"]:
+        lines += ["Nothing went quiet among the repos GitHub could read.", ""]
     else:
         lines += ["Nothing went quiet.", ""]
 

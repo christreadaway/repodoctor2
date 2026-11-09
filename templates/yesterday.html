@@ -86,6 +86,9 @@
 </div>
 {% endif %}
 
+{% if failed_repos %}
+<div class="flash flash-error stats-notice">GitHub couldn't be read for {{ failed_repos|length }} repo{{ 's' if failed_repos|length != 1 }} ({{ failed_repos|join(', ') }}); they're left out below. Reload in a minute to retry.</div>
+{% endif %}
 {% if sessions %}
 <div class="briefing-stats yesterday-stats">
     <span class="briefing-stat"><strong>{{ counts.sessions }}</strong> session{% if counts.sessions != 1 %}s{% endif %}</span>
@@ -166,7 +169,8 @@
 <div class="onboarding">
     <div class="onboarding-welcome">
         <h2>Nothing here for {{ window.label }}.</h2>
-        <p>No branches had commits in this window. Try a wider range above, or
+        <p>{% if failed_repos %}No sessions found in the repos GitHub could read; {{ failed_repos|length }} couldn't be read ({{ failed_repos|join(', ') }}), so this isn't a claim that nothing happened there.
+        {% else %}No branches had commits in this window.{% endif %} Try a wider range above, or
         <a href="{{ url_for('yesterday_view', range='last7') }}">look back 7 days</a>.</p>
     </div>
 </div>

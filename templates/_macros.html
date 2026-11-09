@@ -98,7 +98,8 @@
    (e.g. session-open-lg); `scope` words the tooltip ("on this branch" /
    "in this card"). #}
 {% macro open_session(url, count=0, extra='', scope='on this branch') -%}
-{%- if url is string and url.startswith('https://claude.ai/code/session_') -%}
+{%- set url = url|safe_session_url -%}
+{%- if url -%}
 <a href="{{ url }}" target="_blank" rel="noopener" class="session-open{% if extra %} {{ extra }}{% endif %}"
    title="{% if count and count > 1 %}Opens the newest of the {{ count }} Claude Code sessions {{ scope }} (new tab){% else %}Open this Claude Code session in a new tab{% endif %}">OPEN SESSION <span aria-hidden="true">↗</span></a>
 {%- endif -%}

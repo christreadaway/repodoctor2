@@ -6615,3 +6615,79 @@ button.health-chip[aria-expanded="true"] { box-shadow: inset 0 -2px 0 currentCol
   .subnav-link { padding: 8px 10px; }
 }
 /* --- END [S24-E] --- */
+
+
+/* ================================================================
+   Session 24 browser-review fixes
+   ================================================================ */
+/* H3: one long unbroken word (a test name, a file path) in a commit message
+   or PR title pushed Recent sessions, In Flight and Portfolio past a phone
+   screen. Let those texts break anywhere and let their flex rows shrink. */
+.session-topic,
+.session-commit-msg,
+.pf-one-liner,
+.session-section-text,
+.change-item-text,
+.rv-titles li,
+.dn-title,
+.dn-why { overflow-wrap: anywhere; min-width: 0; }
+.session-commit-list li { min-width: 0; }
+/* The message shrinks and wraps; the timestamp (nowrap) keeps its width.
+   Letting every child shrink squeezed the time to 30px and its text spilled
+   past the screen. On phones the two stack. */
+.session-commit-msg { flex: 1 1 auto; }
+.session-commit-time { flex-shrink: 0; }
+@media (max-width: 640px) {
+  .session-commit-list li { flex-direction: column; gap: 2px; }
+}
+.session-title { min-width: 0; }
+/* Any list text (planned steps, resume commit lists, ...) may break inside
+   a long word rather than widen the page. */
+main li { overflow-wrap: anywhere; }
+.whatsnext-repo, .breadcrumb-current, .page-subtitle { overflow-wrap: anywhere; min-width: 0; }
+
+/* L8: very long repo / branch / group names. */
+.group-tab { max-width: 100%; overflow-wrap: anywhere; }
+.session-branch { overflow-wrap: anywhere; max-width: 100%; }
+.page-header h1 { overflow-wrap: anywhere; min-width: 0; }
+.page-header { min-width: 0; }
+.btn { overflow-wrap: anywhere; }
+
+/* L6: titles are text from GitHub; isolate their direction so a stray
+   right-to-left mark can't reorder the text around them. */
+.dn-title, .session-topic, .session-commit-msg, .change-item-text, .rv-titles li { unicode-bidi: isolate; }
+
+/* L4: a fade on the right edge says "more tabs this way" on phones. */
+@media (max-width: 900px) {
+  .nav-links { position: relative; }
+  .nav-links.has-more {
+    -webkit-mask-image: linear-gradient(to right, #000 85%, transparent);
+            mask-image: linear-gradient(to right, #000 85%, transparent);
+  }
+}
+
+/* L3: thumb-sized tap targets on phones (were 21-27px tall). */
+@media (max-width: 640px) {
+  .dn-actions .btn,
+  .rv-quiet .btn,
+  .session-open,
+  .js-copy-prompt { min-height: 40px; display: inline-flex; align-items: center; }
+  .dn-tierbar .dn-chip { min-height: 36px; display: inline-flex; align-items: center; padding: 0 10px; }
+  .group-tab { min-height: 36px; }
+  .subnav-link { min-height: 36px; display: inline-flex; align-items: center; }
+}
+
+.shipped-warn { color: var(--tk-amber-fg); }
+
+/* L8: no button or tag-manager row is ever wider than its container
+   (a 100-character repo name made "RESUME <name>" 686px wide). */
+/* Wrap, never clip: an ellipsis cut "COPY FOR CLAUDE" to "COPY FOR CLA…" in
+   the phone header grid. A long label goes to a second line instead. */
+main .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.pf-manage-body { min-width: 0; max-width: 100%; }
+.pf-inline-form { max-width: 100%; }
+.pf-inline-form input[type=text], .pf-inline-form select { min-width: 0; max-width: 100%; }
+.pf-tag-name { min-width: 0; flex: 1 1 12rem; }
+
+.pf-chip { max-width: 100%; overflow-wrap: anywhere; min-width: 0; }
+.pf-tags { min-width: 0; max-width: 100%; }

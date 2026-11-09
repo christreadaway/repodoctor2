@@ -280,6 +280,13 @@
         window.location.reload();
         return;
       }
+      // Done with failures: stop the "working" signals so it doesn't look stuck.
+      var spin = overlay.querySelector(".tracker-overlay-spinner");
+      if (spin) spin.hidden = true;
+      var titleEl = overlay.querySelector(".tracker-overlay-title");
+      if (titleEl) titleEl.textContent = "FINISHED WITH ERRORS";
+      var foot = overlay.querySelector(".tracker-overlay-foot");
+      if (foot) foot.hidden = true;
       progressEl.textContent =
         generated + " generated, " + skipped + " already current, " +
         errors.length + " failed:";
@@ -1128,5 +1135,24 @@
         list.appendChild(toggle);
       }
     }
+  });
+
+  // Phone nav: ten tabs scroll sideways. Bring the active tab into view (on
+  // Briefing / Docs / Tracker / Settings it started off-screen) and mark the
+  // row as scrollable so a fade hints that more tabs exist.
+  document.addEventListener("DOMContentLoaded", function () {
+    var links = document.querySelector(".nav-links");
+    if (!links) return;
+    var active = links.querySelector(".nav-link.active");
+    if (active && links.scrollWidth > links.clientWidth) {
+      links.scrollLeft = Math.max(0, active.offsetLeft - (links.clientWidth - active.offsetWidth) / 2);
+    }
+    function mark() {
+      var more = links.scrollWidth - links.clientWidth - links.scrollLeft > 4;
+      links.classList.toggle("has-more", more);
+    }
+    mark();
+    links.addEventListener("scroll", mark, { passive: true });
+    window.addEventListener("resize", mark);
   });
 })();

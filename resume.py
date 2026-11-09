@@ -115,6 +115,9 @@ def build_packet(client, repo: dict, *, summary: dict | None, brief: dict | None
         "status_excerpt": "",
         "notes_excerpt": "",
         "errors": [],
+        "inflight_failed": False,
+        "sessions_failed": False,
+        "docs_failed": False,
         "history": (history or {}).get(full_name) or {},
         "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
@@ -126,16 +129,23 @@ def build_packet(client, repo: dict, *, summary: dict | None, brief: dict | None
     except Exception as e:  # noqa: BLE001
         logger.warning("resume: inflight failed for %s: %s", full_name, e)
         packet["errors"].append(f"Open branches unavailable: {e}")
+        packet["inflight_failed"] = True
 
     try:
         window = recent_window()
-        packet["recent_sessions"] = sessions.gather_sessions(client, [repo], window)[:8]
+        failed: list[str] = []
+        packet["recent_sessions"] = sessions.gather_sessions(client, [repo], window,
+                                                             failures=failed)[:8]
         packet["recent_label"] = window.label
+        if failed:
+            packet["sessions_failed"] = True
+            packet["errors"].append("Recent sessions unavailable: GitHub couldn't be read for this repo.")
     except gh.GitHubAuthError:
         raise
     except Exception as e:  # noqa: BLE001
         logger.warning("resume: sessions failed for %s: %s", full_name, e)
         packet["errors"].append(f"Recent sessions unavailable: {e}")
+        packet["sessions_failed"] = True
 
     try:
         # README whenever there's no status AND no notes to show — a repo
@@ -155,6 +165,7 @@ def build_packet(client, repo: dict, *, summary: dict | None, brief: dict | None
     except Exception as e:  # noqa: BLE001
         logger.warning("resume: docs failed for %s: %s", full_name, e)
         packet["errors"].append(f"Docs unavailable: {e}")
+        packet["docs_failed"] = True
 
     packet.update(primary_session(packet))
     packet["first_prompt"] = suggest_first_prompt(packet)
@@ -264,7 +275,9 @@ def compose_markdown(packet: dict, owner_login: str = "") -> str:
             sess = f" Session: {url}" if url else ""
             lines.append(f"- **{i['label']}** `{i['branch']}` — {i['topic']}{pr_bit}{age}. {i['text']}{sess}")
     else:
-        lines.append("- Nothing unmerged — every branch is in the default branch.")
+        lines.append("- Couldn't read this repo's branches from GitHub (see Gaps)."
+                     if packet.get("inflight_failed") else
+                     "- Nothing unmerged — every branch is in the default branch.")
     lines.append("")
 
     lines += [f"## Recent sessions ({packet.get('recent_label', f'last {RECENT_DAYS} days')})", ""]
@@ -278,7 +291,9 @@ def compose_markdown(packet: dict, owner_login: str = "") -> str:
             for c in s.get("commits", [])[:3]:
                 lines.append(f"    - {c['summary']}")
     else:
-        lines.append("- No Claude Code activity in this window.")
+        lines.append("- Couldn't read recent sessions from GitHub (see Gaps)."
+                     if packet.get("sessions_failed") else
+                     "- No Claude Code activity in this window.")
     lines.append("")
 
     if packet["tracker_actions"]:
