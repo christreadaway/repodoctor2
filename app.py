@@ -13,6 +13,7 @@ import secrets
 import time
 import urllib.parse
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
@@ -414,6 +415,7 @@ def login():
 
             _init_session(creds, user_info)
             session["authenticated"] = True
+            _check_anthropic_key_at_login(creds)
             return redirect(_safe_next() or url_for("dashboard"))
         else:
             github_pat = request.form.get("github_pat", "").strip()
@@ -450,6 +452,7 @@ def login():
             session["authenticated"] = True
             session["github_user"] = user_info.get("login", "")
             flash(f"Welcome, {user_info.get('login', '')}! Credentials saved.", "success")
+            _check_anthropic_key_at_login(creds, source="setup")
             return redirect(url_for("dashboard"))
 
     return render_template("login.html", has_credentials=has_creds)
@@ -478,6 +481,53 @@ def _init_session(creds: dict, user_info: dict | None = None):
         user_info = _github_client.verify_token()
     if user_info:
         session["github_user"] = user_info.get("login", "")
+
+
+# Result of the last Anthropic key check for the key currently loaded in
+# _credentials: {"status": "ok"|"invalid"|"unverified"|"", "message",
+# "checked_at", "source": "login"|"setup"|"settings"}. Replaced whole (never
+# mutated) so a reader on another thread always sees one consistent result.
+_anthropic_key_status: dict = {"status": "", "message": "", "checked_at": "", "source": ""}
+
+ANTHROPIC_KEY_FIX = (
+    "AI features (project summaries, chat briefs, session recaps) will fail "
+    "until this is fixed. To fix it: Settings → Credentials → Update "
+    "Anthropic key, and paste a working key from console.anthropic.com."
+)
+
+
+def get_anthropic_key_status() -> dict:
+    """Last key-check result (a copy). Status "" means not checked yet."""
+    return dict(_anthropic_key_status)
+
+
+def _record_anthropic_key_status(status: str, message: str, source: str) -> None:
+    """Remember (and log) the check result for the key now loaded."""
+    global _anthropic_key_status
+    _anthropic_key_status = {
+        "status": status,
+        "message": message,
+        "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "source": source,
+    }
+    log = logger.info if status == ai.KEY_OK else logger.warning
+    log("Anthropic key %s at %s: %s", status, source, message)
+
+
+def _check_anthropic_key(api_key: str | None, source: str) -> tuple[str, str]:
+    """Verify the loaded key and remember the result. Never logs the key."""
+    status, message = ai.verify_anthropic_key(api_key)
+    _record_anthropic_key_status(status, message, source)
+    return status, message
+
+
+def _check_anthropic_key_at_login(creds: dict, source: str = "login") -> None:
+    """GitHub is the login gate; the Anthropic key is not. A rejected key
+    warns now (instead of when the user first clicks GENERATE) but never
+    blocks; a check that couldn't run (network) only logs."""
+    status, message = _check_anthropic_key(creds.get("anthropic_key"), source)
+    if status == ai.KEY_INVALID:
+        flash(f"Anthropic API key problem: {message} {ANTHROPIC_KEY_FIX}", "warning")
 
 
 @app.route("/login/reset", methods=["POST"])
@@ -534,6 +584,77 @@ def dashboard():
     )
 
 
+# Same width as the Stats page (activity.MAX_WORKERS) and below requests'
+# default 10-connection pool per host, so workers never fight over sockets.
+SCAN_MAX_WORKERS = 8
+
+
+def _scan_error_entry(repo: dict, e: Exception) -> dict:
+    """The row a repo gets when its scan fails: listed with zeros and the
+    error, so one bad repo never sinks the whole scan."""
+    return {
+        "owner": repo["owner"]["login"],
+        "name": repo["name"],
+        "full_name": repo["full_name"],
+        "default_branch": repo.get("default_branch", "main"),
+        "private": repo.get("private", False),
+        "html_url": repo.get("html_url", ""),
+        "description": repo.get("description", ""),
+        "created_at": repo.get("created_at", ""),
+        "updated_at": repo.get("updated_at", ""),
+        "pushed_at": repo.get("pushed_at", ""),
+        # None = unknown, so the dashboard shows "—" instead of
+        # falsely claiming the docs are stale for a failed repo.
+        "docs_updated": None,
+        "total_branch_count": 0,
+        "non_default_branch_count": 0,
+        "henry_branch_count": 0,
+        "non_henry_branch_count": 0,
+        "branch_names": [],
+        "required_files": {},
+        "files_present": 0,
+        "files_total": 5,
+        "code_size_bytes": 0,
+        "languages": {},
+        "error": str(e),
+    }
+
+
+def _scan_repos_parallel(client, repos: list[dict]) -> list[dict]:
+    """scan_repo_lite for every repo on SCAN_MAX_WORKERS threads. Returns one
+    row per repo in the SAME order as `repos` (the later sort is stable, so
+    order decides ties — the result is identical to a one-at-a-time loop).
+
+    Thread-safe because scan_repo_lite only reads: each call uses its own
+    locals and the client's GET helpers, which share one requests.Session
+    (connection pool is thread-safe; headers are set once at construction and
+    never mutated). A GitHubAuthError cancels every queued repo and
+    propagates — one dead PAT means every repo would fail the same way."""
+    if not repos:
+        return []
+    rows: list[dict | None] = [None] * len(repos)
+    pool = ThreadPoolExecutor(max_workers=min(SCAN_MAX_WORKERS, len(repos)),
+                              thread_name_prefix="scan")
+    try:
+        futures = {pool.submit(gh.scan_repo_lite, client, repo): i
+                   for i, repo in enumerate(repos)}
+        for fut in as_completed(futures):
+            i = futures[fut]
+            try:
+                rows[i] = fut.result()
+            except gh.GitHubAuthError:
+                raise
+            except Exception as e:  # noqa: BLE001 - one repo must not sink the scan
+                logger.warning("Scan: %s failed: %s: %s", repos[i].get("full_name", "?"),
+                               type(e).__name__, str(e)[:200])
+                rows[i] = _scan_error_entry(repos[i], e)
+    finally:
+        # On an auth error, drop the queued repos instead of letting each one
+        # 401 in turn before the redirect can happen.
+        pool.shutdown(wait=True, cancel_futures=True)
+    return rows  # type: ignore[return-value] - every slot is filled above
+
+
 @app.route("/scan", methods=["POST"])
 @_require_auth
 def scan():
@@ -550,43 +671,16 @@ def scan():
 
     # NOTE: GitHubAuthError (401 anywhere in the scan) propagates to the
     # global handler, which flashes GITHUB_AUTH_REMEDY and redirects.
+    t0 = time.monotonic()
     repos = client.get_repos()
-    results = []
-    for repo in repos:
-        if repo["full_name"] in excluded or repo["name"] in excluded:
-            continue
-        try:
-            repo_data = gh.scan_repo_lite(client, repo)
-            results.append(repo_data)
-        except gh.GitHubAuthError:
-            raise
-        except Exception as e:
-            results.append({
-                "owner": repo["owner"]["login"],
-                "name": repo["name"],
-                "full_name": repo["full_name"],
-                "default_branch": repo.get("default_branch", "main"),
-                "private": repo.get("private", False),
-                "html_url": repo.get("html_url", ""),
-                "description": repo.get("description", ""),
-                "created_at": repo.get("created_at", ""),
-                "updated_at": repo.get("updated_at", ""),
-                "pushed_at": repo.get("pushed_at", ""),
-                # None = unknown, so the dashboard shows "—" instead of
-                # falsely claiming the docs are stale for a failed repo.
-                "docs_updated": None,
-                "total_branch_count": 0,
-                "non_default_branch_count": 0,
-                "henry_branch_count": 0,
-                "non_henry_branch_count": 0,
-                "branch_names": [],
-                "required_files": {},
-                "files_present": 0,
-                "files_total": 5,
-                "code_size_bytes": 0,
-                "languages": {},
-                "error": str(e),
-            })
+    to_scan = [r for r in repos
+               if not (r["full_name"] in excluded or r["name"] in excluded)]
+    results = _scan_repos_parallel(client, to_scan)
+    elapsed = time.monotonic() - t0
+    error_count = sum(1 for r in results if r.get("error"))
+    logger.info("Scan finished: %d repos in %.1fs, %d errors (%d excluded, %d workers)",
+                len(results), elapsed, error_count, len(repos) - len(to_scan),
+                min(SCAN_MAX_WORKERS, len(to_scan)))
 
     # Sort by non-henry branch count descending (henry branches are hidden
     # from the dashboard count, so they shouldn't drive sort order either).
@@ -601,7 +695,9 @@ def scan():
         "scanned_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
     models.save_scan(_scan_results)
-    models.log_action("scan", "all", "all", f"Scanned {len(results)} repos, {_scan_results['total_branches']} total branches")
+    models.log_action("scan", "all", "all",
+                      f"Scanned {len(results)} repos, {_scan_results['total_branches']} total branches "
+                      f"in {elapsed:.1f}s ({error_count} errors)")
 
     flash(f"Scan complete: {len(results)} repos, {_scan_results['total_branches']} total branches found.", "success")
     return redirect(url_for("dashboard"))
@@ -717,6 +813,23 @@ def settings():
                         "error",
                     )
 
+        elif action == "update_anthropic_key":
+            _settings_update_anthropic_key()
+
+        elif action == "check_anthropic_key":
+            creds = _get_credentials()
+            if not creds:
+                flash(NOT_CONNECTED_REMEDY, "error")
+            else:
+                status, message = _check_anthropic_key(creds.get("anthropic_key"), "settings")
+                if status == ai.KEY_OK:
+                    flash("Anthropic key verified: AI features are ready.", "success")
+                elif status == ai.KEY_INVALID:
+                    flash(f"Anthropic API key problem: {message} {ANTHROPIC_KEY_FIX}", "error")
+                else:
+                    flash(f"Couldn't verify the Anthropic key right now: {message} "
+                          "Try again in a minute.", "warning")
+
         elif action == "reset_credentials":
             rejected = _reject_bad_reset_token("Settings", "settings")
             if rejected:
@@ -735,7 +848,53 @@ def settings():
         session_cost=_session_cost.to_dict(),
         app_log_tail=models.tail_app_log(150),
         app_log_path=models.APP_LOG_PATH,
+        anthropic_key_status=get_anthropic_key_status(),
     )
+
+
+def _settings_update_anthropic_key() -> None:
+    """Settings → Update Anthropic key. Needs the app password (the key is
+    stored encrypted with it). The new key is checked BEFORE it is saved: a
+    key Anthropic rejects (401) is not saved, so a typo can't replace a
+    working key; a key that couldn't be checked (network) is saved with a
+    warning. Flashes the outcome; never logs or flashes the key."""
+    global _credentials
+    new_key = request.form.get("anthropic_key", "").strip()
+    password = request.form.get("password", "")
+    if not new_key:
+        flash("No Anthropic key entered. Paste the new key, then click SAVE KEY.", "error")
+        return
+    creds = security.decrypt_credentials(password) if password else None
+    if creds is None:
+        logger.warning("Anthropic key update rejected: wrong or missing app password")
+        flash("Wrong password. Your Anthropic key was not changed.", "error")
+        return
+
+    status, message = ai.verify_anthropic_key(new_key)
+    if status == ai.KEY_INVALID:
+        logger.warning("Anthropic key update rejected: %s", message)
+        models.log_action("anthropic_key", "all", "all", f"Settings update rejected: {message}")
+        flash(f"Not saved: {message} Your previous key is unchanged. "
+              "Copy a fresh key from console.anthropic.com and try again.", "error")
+        return
+
+    try:
+        security.encrypt_credentials(password, creds["github_pat"], new_key)
+    except OSError as e:  # the write is atomic: on failure the old file is intact
+        logger.error("Anthropic key update: could not save credentials: %s: %s", type(e).__name__, e)
+        flash(f"Couldn't save the new key ({type(e).__name__}: {e}). "
+              "Your previous key is unchanged.", "error")
+        return
+    if _credentials is not None:
+        _credentials = {**_credentials, "anthropic_key": new_key}
+    _record_anthropic_key_status(status, message, "settings")
+    logger.info("Anthropic key updated in Settings (check: %s)", status)
+    models.log_action("anthropic_key", "all", "all", f"Settings update saved (check: {status})")
+    if status == ai.KEY_OK:
+        flash("Anthropic key saved and verified: AI features are ready.", "success")
+    else:
+        flash(f"Anthropic key saved, but it couldn't be verified right now: {message} "
+              "Use CHECK KEY in a minute, or it will be checked at your next login.", "warning")
 
 
 # --- API: Session Cost ---

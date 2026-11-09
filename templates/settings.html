@@ -120,11 +120,44 @@
                 <span class="status-ok">&#10003;</span>
                 <span>GitHub PAT: Encrypted &amp; loaded</span>
             </div>
+            {% set ks = anthropic_key_status or {} %}
             <div class="cred-item">
+                {% if ks.status == 'ok' %}
+                <span class="status-ok">&#10003;</span>
+                <span>Anthropic Key: Encrypted &amp; verified{% if ks.checked_at %} ({{ ks.checked_at|central_time }}){% endif %}</span>
+                {% elif ks.status == 'invalid' %}
+                <span class="status-warn">&#9888;</span>
+                <span>Anthropic Key: Not working. {{ ks.message }} AI features will fail until you update it below.</span>
+                {% elif ks.status == 'unverified' %}
+                <span class="status-warn">&#9888;</span>
+                <span>Anthropic Key: Encrypted &amp; loaded, not verified ({{ ks.message }})</span>
+                {% else %}
                 <span class="status-ok">&#10003;</span>
                 <span>Anthropic Key: Encrypted &amp; loaded</span>
+                {% endif %}
             </div>
         </div>
+        <form method="POST" action="{{ url_for('settings') }}" class="mt-sm">
+            <input type="hidden" name="action" value="check_anthropic_key">
+            <button type="submit" class="btn btn-secondary btn-sm">CHECK KEY</button>
+        </form>
+        <h3 class="mt-lg mb-sm">Update Anthropic key</h3>
+        <form method="POST" action="{{ url_for('settings') }}" autocomplete="off" class="mb-lg">
+            <input type="hidden" name="action" value="update_anthropic_key">
+            <div class="form-group">
+                <label for="new_anthropic_key">New Anthropic API key</label>
+                <input type="password" id="new_anthropic_key" name="anthropic_key" required
+                       placeholder="sk-ant-xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+                <span class="form-hint">Checked with Anthropic before it's saved. A key Anthropic rejects is not saved.</span>
+            </div>
+            <div class="form-group">
+                <label for="key_password">App password</label>
+                <input type="password" id="key_password" name="password" required
+                       placeholder="The password you unlock RepoDoctor with" autocomplete="current-password">
+                <span class="form-hint">Needed to re-encrypt your keys. Your GitHub token stays as it is.</span>
+            </div>
+            <button type="submit" class="btn btn-primary">SAVE KEY</button>
+        </form>
         <form method="POST" action="{{ url_for('settings') }}" onsubmit="return confirm('This will delete your encrypted credentials. You will need to re-enter both API keys. Continue?')">
             <input type="hidden" name="action" value="reset_credentials">
             <input type="hidden" name="reset_token" value="{{ reset_token }}">

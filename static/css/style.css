@@ -6319,11 +6319,6 @@ a.session-branch:hover { border-color: var(--tk-cyan-fg); }
    its own START and END markers, so parallel work merges cleanly.
    ================================================================ */
 
-/* --- START [S24-A] Scan + Anthropic key check --- */
-/* --- END [S24-A] --- */
-
-/* (spacer) */
-
 /* --- START [S24-B] Claude Code session links --- */
 /* A link, not a status: cyan (the app's "go somewhere" accent) so it never
    reads like the green/purple/red PR state chip sitting next to it. */

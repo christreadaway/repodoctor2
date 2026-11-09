@@ -6,6 +6,13 @@ through.
 """
 
 import json
+import logging
+import re
+import threading
+
+import anthropic
+
+logger = logging.getLogger(__name__)
 
 # Single source of truth for selectable models. Everything that needs a
 # model id, a Settings/tracker dropdown, or validation reads from here —
@@ -188,3 +195,102 @@ def estimate_cost(input_tokens: int, output_tokens: int = 1000, model: str = DEF
     input_cost = input_tokens * in_rate / 1_000_000
     output_cost = output_tokens * out_rate / 1_000_000
     return round(input_cost + output_cost, 4)
+
+
+# --- API key check -----------------------------------------------------------
+# Login waits on this, so it must never hang: one attempt (the SDK's default
+# two retries with backoff would multiply the wait), short per-phase HTTP
+# timeouts, and a hard wall-clock cap on top for the cases per-phase timeouts
+# don't cover (a stuck DNS lookup, a server that drips bytes).
+KEY_OK = "ok"
+KEY_INVALID = "invalid"
+KEY_UNVERIFIED = "unverified"
+VERIFY_CONNECT_SECONDS = 2.0
+VERIFY_READ_SECONDS = 2.5
+VERIFY_DEADLINE_SECONDS = 5.0
+
+# Anything shaped like an Anthropic key, so a key that some library echoes
+# into an error string can never reach a log line.
+_KEY_SHAPE = re.compile(r"sk-ant-[A-Za-z0-9_\-]+")
+
+
+def _redact(text: str, api_key: str) -> str:
+    if api_key:
+        text = text.replace(api_key, "[redacted]")
+    return _KEY_SHAPE.sub("[redacted]", text)
+
+
+def verify_anthropic_key(api_key: str | None) -> tuple[str, str]:
+    """Check an Anthropic API key with the cheapest call that proves it works:
+    GET /v1/models?limit=1, which spends no tokens.
+
+    Returns (status, message):
+      "ok"          Anthropic accepted the key.
+      "invalid"     no key is set, or Anthropic answered 401 (wrong, revoked,
+                    or disabled key).
+      "unverified"  anything else: timeout, network error, 5xx, 429, 403, an
+                    unexpected SDK error. The key may well be fine.
+
+    Never raises and never takes more than VERIFY_DEADLINE_SECONDS. The
+    message is safe to show and log: it never contains the key. "ok" proves
+    the key authenticates, not that the account has credit left; a zero
+    balance still only shows up when a generation is attempted.
+    """
+    key = api_key.strip() if isinstance(api_key, str) else ""
+    if not key:
+        logger.warning("Anthropic key check: invalid (no key set)")
+        return KEY_INVALID, "No Anthropic API key is set."
+
+    outcome: dict[str, tuple[str, str]] = {}
+
+    def _probe():
+        try:
+            client = anthropic.Anthropic(
+                api_key=key,
+                max_retries=0,
+                timeout=anthropic.Timeout(VERIFY_READ_SECONDS, connect=VERIFY_CONNECT_SECONDS),
+            )
+            client.models.list(limit=1)
+            outcome["result"] = (KEY_OK, "Anthropic accepted the API key.")
+        except anthropic.AuthenticationError:
+            outcome["result"] = (
+                KEY_INVALID,
+                "Anthropic rejected the API key (HTTP 401): it's wrong, revoked, or disabled.",
+            )
+        except anthropic.APITimeoutError:  # subclass of APIConnectionError: catch first
+            outcome["result"] = (KEY_UNVERIFIED, "Timed out reaching Anthropic.")
+        except anthropic.APIConnectionError as e:
+            logger.warning("Anthropic key check: connection error: %s",
+                           _redact(str(e), key)[:200])
+            outcome["result"] = (KEY_UNVERIFIED, "Couldn't connect to Anthropic (network error).")
+        except anthropic.APIStatusError as e:
+            code = getattr(e, "status_code", "?")
+            if isinstance(code, int) and code >= 500:
+                kind = "server error"
+            else:
+                kind = {403: "permission denied", 429: "rate limited"}.get(code, "unexpected response")
+            outcome["result"] = (KEY_UNVERIFIED, f"Anthropic returned HTTP {code} ({kind}).")
+        except Exception as e:  # noqa: BLE001 - a key check must never take login down
+            logger.warning("Anthropic key check: unexpected %s: %s",
+                           type(e).__name__, _redact(str(e), key)[:200])
+            outcome["result"] = (
+                KEY_UNVERIFIED, f"Unexpected error while checking the key ({type(e).__name__}).")
+
+    # Daemon thread + join(timeout) is the hard cap: if the call is still
+    # stuck at the deadline we answer "unverified" and let the thread finish
+    # (bounded by its own HTTP timeouts) in the background.
+    worker = threading.Thread(target=_probe, name="anthropic-key-check", daemon=True)
+    try:
+        worker.start()
+    except RuntimeError as e:  # "can't start new thread": never let that 500 a login
+        logger.warning("Anthropic key check: could not start: %s", e)
+        return KEY_UNVERIFIED, "Couldn't run the key check (out of threads)."
+    worker.join(VERIFY_DEADLINE_SECONDS)
+    status, message = outcome.get("result") or (
+        KEY_UNVERIFIED, f"Anthropic didn't answer within {VERIFY_DEADLINE_SECONDS:g} seconds.")
+
+    if status == KEY_OK:
+        logger.info("Anthropic key check: ok")
+    else:
+        logger.warning("Anthropic key check: %s (%s)", status, message)
+    return status, message
