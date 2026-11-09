@@ -1,0 +1,244 @@
+{# The phone snapshot: a read-only fragment the encrypted shell injects after
+   it unlocks. Rendered by snapshot.render_body() with its own Jinja
+   environment (autoescape on, no Flask context). `v` is snapshot.build_view().
+   No scripts here: they would never run (innerHTML + the CSP). COPY PROMPT
+   buttons work through the shell's delegated .js-copy handler. #}
+{% import "_parts.html" as p %}
+{% include "_styles.html" %}
+<div class="sn" data-{{ v.marker }}="1">
+
+<header class="sn-top">
+  <h1 class="sn-h1">Snapshot built {{ v.built_label }}</h1>
+  <ul class="sn-fresh">
+    {% if v.inflight.label %}
+    <li class="{{ 'is-stale' if v.inflight.days }}">Branches and PRs read {{ v.inflight.label }}{% if v.inflight.days %} ({{ v.inflight.days|plural('day') }} before this snapshot){% endif %}.</li>
+    {% else %}
+    <li class="is-stale">Branches and PRs weren't read from GitHub for this snapshot, so MERGE, FINISH and OPEN A PR items are missing.</li>
+    {% endif %}
+    {% if v.activity.label %}
+    <li class="{{ 'is-stale' if v.activity.days }}">Commits read {{ v.activity.label }}{% if v.activity.days %} ({{ v.activity.days|plural('day') }} before this snapshot){% endif %}.</li>
+    {% else %}
+    <li class="is-stale">Commits weren't read from GitHub for this snapshot, so the Weekly review and What changed have no commit data.</li>
+    {% endif %}
+  </ul>
+</header>
+
+<nav class="sn-nav" aria-label="Snapshot sections">
+  <a href="#sn-next">Do next</a>
+  <a href="#sn-review">Review</a>
+  <a href="#sn-changed">Changed</a>
+  <a href="#sn-portfolio">Portfolio</a>
+</nav>
+
+{# 1. Do next -------------------------------------------------------------- #}
+{% set dn = v.do_next %}
+<section class="sn-section" id="sn-next" aria-labelledby="sn-next-h">
+  <div class="sn-head">
+    <h2 id="sn-next-h">Do next</h2>
+    {% if dn.total %}<span class="sn-n">{{ dn.total|plural('item') }}</span>{% endif %}
+  </div>
+  {% if not dn.present %}
+  <p class="sn-empty">Do next wasn't included in this snapshot.</p>
+  {% elif not dn.total %}
+  <p class="sn-empty">Nothing waiting. Every branch is merged and no P0/P1 tracker actions are open.{% if not v.inflight.label %} Branches weren't read for this snapshot, so open PRs may be missing.{% endif %}</p>
+  {% else %}
+  <p class="sn-tally" aria-label="Items by kind">
+    {% for c in dn.counts %}
+    {% if c.linked %}<a class="sn-chip sn-chip-{{ c.tier }}" href="#sn-tier-{{ c.tier }}">{{ c.label }}<strong>{{ c.n }}</strong></a>{% else %}<span class="sn-chip sn-chip-{{ c.tier }}">{{ c.label }}<strong>{{ c.n }}</strong></span>{% endif %}
+    {% endfor %}
+  </p>
+  {% for g in dn.groups %}
+  <h3 class="sn-h3{{ ' sn-tier-anchor' if g.anchor }}"{% if g.anchor %} id="sn-tier-{{ g.tier }}"{% endif %}><span class="sn-chip sn-chip-{{ g.tier }}">{{ g.label }}</span><span class="sn-n">{{ g['items']|length }}</span></h3>
+  <ol class="sn-list">
+    {% for x in g['items'] %}{{ p.item(x) }}{% endfor %}
+  </ol>
+  {% endfor %}
+  {% if dn.more %}<p class="sn-more">+{{ dn.more }} more on your Mac.</p>{% endif %}
+  {% endif %}
+  {% if dn.hidden_low or dn.planned_more %}
+  <p class="sn-foot-note">
+    {% if dn.planned_more %}{{ dn.planned_more|plural('more planned step') }} on Projects.{% endif %}
+    {% if dn.hidden_low %}{{ dn.hidden_low|plural('lower-priority (P2/P3) tracker action') }} in Tracker.{% endif %}
+  </p>
+  {% endif %}
+</section>
+
+{# 2. Weekly review --------------------------------------------------------- #}
+{% set rv = v.review %}
+<section class="sn-section" id="sn-review" aria-labelledby="sn-review-h">
+  <div class="sn-head">
+    <h2 id="sn-review-h">Weekly review</h2>
+    {% if v.review_week_label %}<span class="sn-sub">{{ v.review_week_label }}</span>{% endif %}
+  </div>
+  {% if not rv.present %}
+  <p class="sn-empty">The Weekly review wasn't included in this snapshot.</p>
+  {% else %}
+
+  <h3 class="sn-h3">Shipped this week</h3>
+  {% if not rv.read %}
+  <p class="sn-empty">Commits weren't read from GitHub for this snapshot, so what shipped isn't known here.</p>
+  {% else %}
+  {% set t = rv.totals or {} %}
+  <div class="sn-kpis">
+    <div class="sn-kpi"><div class="sn-kpi-label">Repos updated</div>
+      <div class="sn-kpi-value">{{ t.repos_updated|commas }}<span class="sn-kpi-of"> of {{ (t.read if t.errors else t.repos_total)|commas }}{% if t.errors %} read{% endif %}</span></div></div>
+    <div class="sn-kpi"><div class="sn-kpi-label">Commits</div><div class="sn-kpi-value">{{ t.commits|commas }}</div></div>
+    <div class="sn-kpi"><div class="sn-kpi-label">PRs merged</div><div class="sn-kpi-value">{{ t.prs_merged|commas }}</div></div>
+    <div class="sn-kpi"><div class="sn-kpi-label">Active days</div><div class="sn-kpi-value">{{ t.active_days|commas }}<span class="sn-kpi-of"> of {{ t.days|commas }}</span></div></div>
+  </div>
+  {% if rv.failed %}{{ p.failed_note(rv.failed) }}{% endif %}
+  {% if rv.overview %}{{ p.ai_text(rv.overview, 'sn-overview') }}{% endif %}
+  {% if rv.shipped %}
+  <ul class="sn-cards">
+    {% for s in rv.shipped %}
+    <li class="sn-card">
+      <div class="sn-card-head"><strong class="sn-repo">{{ s.repo }}</strong><span class="sn-count">{{ p.counts(s) }}</span></div>
+      {% if s.ai %}{{ p.ai_text(s.ai) }}{% endif %}
+      {% if s.titles or s.more %}
+      <ul class="sn-titles">
+        {% for title in s.titles %}<li>{{ title }}</li>{% endfor %}
+        {% if s.more %}<li class="sn-more-items">+{{ s.more }} more</li>{% endif %}
+      </ul>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% if rv.shipped_more %}<p class="sn-more">+{{ rv.shipped_more|plural('more repo') }} on your Mac.</p>{% endif %}
+  {% elif rv.failed %}
+  <p class="sn-empty">No activity found in the repos GitHub could read. {{ rv.failed|length }} couldn't be read, so this isn't a claim that nothing shipped there.</p>
+  {% else %}
+  <p class="sn-empty">Nothing landed on a default branch this week.</p>
+  {% endif %}
+  {% endif %}
+
+  <h3 class="sn-h3">Waiting on you <span class="sn-n">{{ rv.waiting|length }}</span></h3>
+  {% if rv.waiting %}
+  <ol class="sn-list">{% for x in rv.waiting %}{{ p.item(x, chip=True, why=False) }}{% endfor %}</ol>
+  {% elif v.inflight.label %}
+  <p class="sn-empty">Nothing to merge, finish, or confirm.</p>
+  {% else %}
+  <p class="sn-empty">Branches and PRs weren't read for this snapshot, so this can't say what's waiting.</p>
+  {% endif %}
+
+  <h3 class="sn-h3">Gone quiet <span class="sn-n">{{ rv.quiet|length + rv.stale|length }}</span></h3>
+  {% if rv.quiet or rv.stale %}
+  <ul class="sn-cards">
+    {% for q in rv.quiet %}
+    <li class="sn-card">
+      <div class="sn-card-head"><strong class="sn-repo">{{ q.repo }}</strong>{% if q.days is not none %}<span class="sn-count">no activity for {{ q.days|plural('day') }}</span>{% endif %}</div>
+      <p class="sn-sub">{{ q.commits|plural('commit') }}, {{ q.prs|plural('PR') }} in the last 90 days</p>
+    </li>
+    {% endfor %}
+    {% for i in rv.stale %}
+    <li class="sn-card">
+      <div class="sn-card-head"><strong class="sn-repo">{{ i.repo }}</strong>{% if i.branch %}<span class="sn-branch">{{ i.branch }}</span>{% endif %}</div>
+      <p class="sn-sub">Stale branch{% if i.age_days is not none %}, {{ i.age_days|plural('day') }} without activity{% endif %}</p>
+      {% if i.session_url|safe_session_url %}<div class="sn-actions">{{ p.session_link(i.session_url) }}</div>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% elif not rv.read %}
+  <p class="sn-empty">Needs a GitHub read (see above).</p>
+  {% elif rv.failed %}
+  <p class="sn-empty">Nothing went quiet among the repos GitHub could read ({{ rv.failed|length }} couldn't be read).</p>
+  {% else %}
+  <p class="sn-empty">Nothing went quiet.</p>
+  {% endif %}
+
+  <h3 class="sn-h3">Next up <span class="sn-n">{{ rv.next_total }}</span></h3>
+  {% if rv.next %}
+  <ol class="sn-list">{% for x in rv.next %}{{ p.item(x, chip=True, why=False) }}{% endfor %}</ol>
+  {% if rv.next_total > rv.next|length %}<p class="sn-more">+{{ rv.next_total - rv.next|length }} more in <a href="#sn-next">Do next</a>.</p>{% endif %}
+  {% else %}
+  <p class="sn-empty">Nothing queued. Projects summaries or Tracker next actions fill this.</p>
+  {% endif %}
+  {% endif %}
+</section>
+
+{# 3. What changed --------------------------------------------------------- #}
+<section class="sn-section" id="sn-changed" aria-labelledby="sn-changed-h">
+  <div class="sn-head"><h2 id="sn-changed-h">What changed</h2></div>
+  {% if not v.ranges %}
+  <p class="sn-empty">What changed wasn't included in this snapshot.</p>
+  {% endif %}
+  {% for r in v.ranges %}
+  {% set t = r.totals %}
+  <details class="sn-range"{% if r.open %} open{% endif %}>
+    <summary>
+      <span class="sn-range-name">{{ r.name }}</span>
+      {% if r.dates %}<span class="sn-sub">{{ r.dates }}</span>{% endif %}
+      {% if r.read %}<span class="sn-range-quick">{{ t.repos_updated|commas }} updated · {{ t.commits|plural('commit') }}</span>{% endif %}
+    </summary>
+    <div class="sn-range-body">
+      {% if not r.read %}
+      <p class="sn-empty">Not read from GitHub for this snapshot.</p>
+      {% else %}
+      <p class="sn-kpi-line">{% if t.errors %}<strong>{{ t.repos_updated|commas }} of {{ t.read|plural('repo') }} read were updated</strong> ({{ t.errors|commas }} couldn't be read){% else %}<strong>{{ t.repos_updated|commas }} of {{ t.repos_total|plural('repo') }} updated</strong>{% endif %} · {{ t.commits|plural('commit') }} · {{ t.prs_merged|plural('PR') }} merged · active on {{ t.active_days|commas }} of {{ t.days|plural('day') }}</p>
+      {% if r.failed %}{{ p.failed_note(r.failed) }}{% endif %}
+      {% if r.overview %}{{ p.ai_text(r.overview, 'sn-overview') }}{% endif %}
+      {% if r.repos %}
+      <ul class="sn-cards">
+        {% for x in r.repos %}
+        <li class="sn-card">
+          <div class="sn-card-head"><strong class="sn-repo">{{ x.name }}</strong><span class="sn-count">{{ p.counts(x) }}{% if x.last_at|central_date %} · last {{ x.last_at|central_date }}{% endif %}</span></div>
+          {% if x.ai %}
+          {{ p.ai_text(x.ai) }}
+          {% elif x.titles or x.more %}
+          <ul class="sn-titles">
+            {% for title in x.titles %}<li>{{ title }}</li>{% endfor %}
+            {% if x.more %}<li class="sn-more-items">+{{ x.more }} more</li>{% endif %}
+          </ul>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% if r.more %}<p class="sn-more">+{{ r.more|plural('more repo') }} on your Mac.</p>{% endif %}
+      {% elif r.failed %}
+      <p class="sn-empty">No activity found in the repos GitHub could read.</p>
+      {% else %}
+      <p class="sn-empty">Nothing landed on any default branch in this range.</p>
+      {% endif %}
+      {% endif %}
+    </div>
+  </details>
+  {% endfor %}
+</section>
+
+{# 4. Portfolio ------------------------------------------------------------- #}
+{% set pf = v.portfolio %}
+<section class="sn-section" id="sn-portfolio" aria-labelledby="sn-portfolio-h">
+  <div class="sn-head">
+    <h2 id="sn-portfolio-h">Portfolio</h2>
+    {% if pf.repos %}<span class="sn-n">{{ pf.repos|plural('repo') }} · tap one for its health</span>{% endif %}
+  </div>
+  {% if not pf.present %}
+  <p class="sn-empty">The Portfolio wasn't included in this snapshot.</p>
+  {% elif not pf.repos %}
+  <p class="sn-empty">No repos in the Portfolio yet. Run a scan on your Mac.</p>
+  {% endif %}
+  {% for theme in pf.themes if theme.rows %}
+  <h3 class="sn-theme">{{ theme.tag }} <span class="sn-n">{{ theme.rows|length }}</span></h3>
+  <ul class="sn-pf">
+    {% for r in theme.rows %}
+    <li>
+      <details class="sn-pf-row">
+        <summary>
+          <span class="sn-grade sn-grade-{{ r.tone }}" aria-label="Health {{ r.grade }}">{{ r.grade }}</span>
+          <span class="sn-pf-text"><strong class="sn-repo">{{ r.name }}</strong>{% if r.one_liner %}<span class="sn-pf-one">{{ r.one_liner }}</span>{% endif %}</span>
+        </summary>
+        <div class="sn-pf-detail">
+          <p><span class="sn-health-word">Health {{ r.grade }}</span>{{ r.summary or 'No health details in this snapshot.' }}</p>
+          {% if r.pushed_at|central_date or r.open_branches %}
+          <p class="sn-sub">{% if r.pushed_at|central_date %}Last push {{ r.pushed_at|central_date }}{% endif %}{% if r.pushed_at|central_date and r.open_branches %} · {% endif %}{% if r.open_branches %}{{ r.open_branches|plural('open branch', 'open branches') }}{% endif %}</p>
+          {% endif %}
+          {% if r.html_url %}<div class="sn-actions"><a class="sn-btn" href="{{ r.html_url }}" target="_blank" rel="noopener noreferrer">GITHUB <span aria-hidden="true">&#8599;</span><span class="sn-sr"> (opens in a new tab)</span></a></div>{% endif %}
+        </div>
+      </details>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endfor %}
+</section>
+
+<footer class="sn-foot">Read-only snapshot. Published from RepoDoctor on your Mac.</footer>
+</div>

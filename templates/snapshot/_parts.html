@@ -1,0 +1,53 @@
+{# Macros for the phone snapshot body. Every value is text from GitHub or a
+   cache: autoescape handles it, nothing here uses |safe, and the copy text
+   rides in an escaped data attribute (the shell's delegated handler reads it). #}
+
+{# One Do next row (snapshot.build_view item). `chip` shows the tier label
+   (rows outside a tier group); `why` shows the reason line. #}
+{% macro item(x, chip=False, why=True) -%}
+<li class="sn-item sn-tier-{{ x.tier }}">
+  {% if chip or x.repo %}
+  <div class="sn-item-head">
+    {% if chip %}<span class="sn-chip sn-chip-{{ x.tier }}">{{ x.label }}</span>{% endif %}
+    {% if x.repo %}<strong class="sn-repo">{{ x.repo }}</strong>{% endif %}
+  </div>
+  {% endif %}
+  {% if x.title %}<p class="sn-title">{{ x.title }}</p>{% endif %}
+  {% if why and x.why %}<p class="sn-why">{{ x.why }}</p>{% endif %}
+  {% set su = x.session_url|safe_session_url %}
+  {% if su or x.links or x.prompt or x.age %}
+  <div class="sn-actions">
+    {% if su %}{{ session_link(su) }}{% endif %}
+    {% for link in x.links %}
+    <a class="sn-btn" href="{{ link.url }}" target="_blank" rel="noopener noreferrer">{{ link.label }} <span aria-hidden="true">&#8599;</span><span class="sn-sr"> (opens in a new tab)</span></a>
+    {% endfor %}
+    {% if x.prompt %}<button type="button" class="sn-btn js-copy" data-copy="{{ x.prompt }}" title="Copy a ready-to-paste prompt for a fresh Claude Code session">COPY PROMPT</button>{% endif %}
+    {% if x.age %}<span class="sn-age">{{ x.age }}</span>{% endif %}
+  </div>
+  {% endif %}
+</li>
+{%- endmacro %}
+
+{# OPEN SESSION: only ever a canonical https://claude.ai/code/session_<id>
+   (callers pass values already checked by sessions.safe_session_url). #}
+{% macro session_link(url) -%}
+{%- set url = url|safe_session_url -%}
+{%- if url -%}
+<a class="sn-btn sn-session" href="{{ url }}" target="_blank" rel="noopener noreferrer">OPEN SESSION <span aria-hidden="true">&#8599;</span><span class="sn-sr"> (opens in a new tab)</span></a>
+{%- endif -%}
+{%- endmacro %}
+
+{# "3 commits · 2 PRs merged" for a shipped / range repo. #}
+{% macro counts(x) -%}
+{{ x.commits|plural('commit') }}{% if x.prs %} · {{ x.prs|plural('PR') }} merged{% elif x.merges %} · {{ x.merges|plural('merge') }}{% endif %}
+{%- endmacro %}
+
+{# AI paragraph with its STALE marker. #}
+{% macro ai_text(ai, cls='sn-ai') -%}
+<p class="{{ cls }}">{{ ai.text }}{% if ai.stale %} <span class="sn-chip sn-chip-stale" title="Written before the latest work. SUMMARIZE on Stats rewrites it.">STALE</span>{% endif %}</p>
+{%- endmacro %}
+
+{# "GitHub couldn't be read for a, b" (never a claim that nothing shipped there). #}
+{% macro failed_note(names) -%}
+<p class="sn-note">GitHub couldn't be read for {{ names|join(', ') }}, so {{ 'it is' if names|length == 1 else 'they are' }} left out here. That isn't a claim that nothing happened there.</p>
+{%- endmacro %}
