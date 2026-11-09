@@ -125,10 +125,13 @@ def one_liner(repo: dict, blurbs: dict, summaries: dict) -> tuple[str, str]:
 
 
 def build_view(repos: list[dict], groups: dict, blurbs: dict, summaries: dict,
-               inflight_items: list[dict], activity_cutoff: str = "") -> dict:
+               inflight_items: list[dict], activity_cutoff: str = "",
+               grades: dict | None = None) -> dict:
     """Sections per tag (a repo appears under each of its tags) plus Untagged.
 
     activity_cutoff: ISO timestamp; repos pushed at/after it count as active.
+    grades: health.grade_scan()["grades"] ({owner/name: result}); each row
+    carries its result as "health" (None when absent).
     """
     open_by_full: dict[str, int] = {}
     for i in inflight_items or []:
@@ -158,6 +161,7 @@ def build_view(repos: list[dict], groups: dict, blurbs: dict, summaries: dict,
             "tags": sorted(tags_by_repo.get(r.get("name", ""), [])),
             "open_branches": open_by_full.get(full, 0),
             "active": bool(activity_cutoff and (r.get("pushed_at") or "") >= activity_cutoff),
+            "health": (grades or {}).get(full),
         }
 
     def _sorted(items):
@@ -235,6 +239,8 @@ def compose_markdown(view: dict, infra: list[dict], owner_login: str, when: str)
                 extra.append(f"{r['open_branches']} open branch{'es' if r['open_branches'] != 1 else ''}")
             if r["pushed_at"]:
                 extra.append(f"last push {r['pushed_at'][:10]}")
+            if (r.get("health") or {}).get("graded"):
+                extra.append(f"health {r['health']['grade']} ({r['health']['score']}/100)")
             tail = f" _({', '.join(extra)})_" if extra else ""
             lines.append(f"- {' — '.join(bits)}{tail}")
         lines.append("")
