@@ -41,10 +41,24 @@ Branch: `claude/sweet-fermi-yt1v9m`, pushed to `main` on request. Asked for idea
 - Stats panel title color lost to a later selector; `.btn-sm` 23.7px tall on phones (now 40px under 640px).
 - Health's archived/fork exemptions could never fire (the scan dropped the flags) → carried through.
 
-REVIEW_PLACEHOLDER
+### Independent reviews — every finding fixed, each with a regression test
+**Backend + security (0 critical, 1 high, 2 medium, 5 low):**
+- High: health graded a repo with 8 open branches "A, No branches besides main" whenever the In Flight cache existed but hadn't read that repo → In Flight data is used only when it saw every branch the scan lists and didn't cap the repo; otherwise the scan count with a refresh note.
+- Medium: a rate-limited / 5xx file-tree read during the scan read as "no files" → a confident F; the parallel scan makes that likelier → the scan's branch and tree reads are strict, so the repo becomes an ungraded error row.
+- Medium: Update Anthropic key saved any text when Anthropic was unreachable, replacing a working key → refuses non-`sk-ant-` text; unverified keys are held unless "Save even if it can't be checked" is ticked.
+- Low: key check broke on SDKs without `client.models` → plain GET /v1/models fallback; redaction ran after truncation (partial key in logs) → redact first, shared redactor; Do next: a blocked item hid the planned step, P2/P3 awaiting deploy never reached CONFIRM LIVE; hand-edited `inflight.json` / summaries in the wrong shape 500'd pages → cleaned at load; old scans can't exempt archived repos → re-scan hint.
+
+**Browser sweep, 15 screens × 375 / 1280, adversarial fixture (0 critical, 4 high, 2 medium, 9 low):**
+- High: In Flight treated a scan-error row as "tidy" and skipped it, so that repo's PRs vanished from Do next / Weekly review (made likelier by the stricter scan) → error rows are always read.
+- High: Weekly review, Resume, Recent sessions, In Flight and Do next said "nothing" for repos GitHub couldn't read → each names the unread repos ("couldn't read"), page and Markdown; `gather_sessions(failures=…)`; Resume tracks failures per section.
+- High: one long word in a commit/PR title widened Recent sessions / In Flight / Portfolio to 557–672px on a phone → wrap rules (and fixing my own first attempt, which squeezed timestamps until they spilled).
+- High: Portfolio 500 before the first scan (pre-existing) → guarded.
+- Medium: SUMMARIZE 401 sent you to Reset Credentials (wipes the GitHub token) → Update Anthropic key; Stats warns up front after a bad-key login; the overlay stops spinning on failure. Do next ranked planned steps for archived repos and forks → archived out, forks keep real work but no planned steps.
+- Low: strict URL check in the OPEN SESSION macro; In Flight REFRESH kept `?kind`; tap targets 21–27px → 36–40px on phones; phone nav hid the active tab → scrolled into view + "more tabs" fade; Settings `#credentials` anchor; "fix-mobile-layout" lost its last word → only session branches drop the suffix; U+202E could spoof titles → bidi controls stripped; sort headers keyboard-operable; buttons / tag chips wrap instead of overflowing.
+- Not fixed (known limitations): same-named repos under two owners share name-keyed storage; In Flight's refresh flash counts the whole portfolio on a filtered page.
 
 ### Tests
-TESTS_PLACEHOLDER
+**867 passing** (was 560). New: `tests/test_nextup.py` (Do next + Weekly review), `tests/test_session_links.py`, `tests/test_health.py`, `tests/test_activity_summaries.py`, `tests/test_scan_and_keys.py`, `tests/test_session24_review.py` (every review finding). After the fixes, the reviewer's own harness re-ran clean: 15 screens × 2 viewports, no console / page errors, no dialogs, no horizontal scroll with realistic or adversarial data, keyboard reaches 100% of controls; copy, download, health breakdown, SUMMARIZE (incl. the 401 path), tier jumps, refresh round-trips and nav all pass.
 
 ### Next Steps
 1. Pull `main` and launch as usual (no new dependencies). Next Up now opens on **Do next**; press REFRESH FROM GITHUB once so branches and PRs are current.

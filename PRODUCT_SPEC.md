@@ -113,7 +113,7 @@ The matcher returns the **actual full path** found, so downstream features (fres
 - Full scan mode (`scan_repo`): complete branch analysis with commit history, file changes, classification — for deep repo inspection
 - Archive tag creation: creates `archive/[branch]/[date]` tags before branch deletion
 
-**Parallel scan (Session 24):** `/scan` reads repos 8 at a time (`_scan_repos_parallel`), returns them in the original order so output is identical to the old one-at-a-time loop, cancels the rest on a GitHub 401 (global handler shows the PAT remedy), keeps the per-repo error row for any other failure, and logs "Scan finished: N repos in X.Xs, E errors" plus elapsed time and error count in the action log. Each row now also carries GitHub's `archived` and `fork` flags (from the repo list; no extra calls).
+**Parallel scan (Session 24):** `/scan` reads repos 8 at a time (`_scan_repos_parallel`), returns them in the original order so output is identical to the old one-at-a-time loop, cancels the rest on a GitHub 401 (global handler shows the PAT remedy), keeps the per-repo error row for any other failure, and logs "Scan finished: N repos in X.Xs, E errors" plus elapsed time and error count in the action log. Each row now also carries GitHub's `archived` and `fork` flags (from the repo list; no extra calls). The scan's branch-list and file-tree reads are strict: a rate limit or 5xx makes that repo's error row (shown ungraded, retried next scan) instead of reading as '0 branches' / 'no docs'; In Flight always reads error rows rather than treating them as tidy.
 
 ### 4.6 AI-Powered Branch Analysis
 
@@ -396,11 +396,11 @@ Every project at a glance, grouped by theme, built for context switching.
 | 5 | OPEN A PR | In Flight: commits, no PR | Most recent first |
 | 6 | P1 | Tracker P1 (todo / in progress) | By repo |
 | 7 | DECIDE | In Flight: stale or couldn't compare | Most recent first |
-| 8 | PLANNED | First planned step, only for repos with nothing above; max 12 | Most recently pushed repo first |
+| 8 | PLANNED | First planned step, only for repos with nothing above (a BLOCKED item doesn't count); max 12; never for forks | Most recently pushed repo first |
 | 9 | CLEAN UP | Merged branches not deleted: ONE row for all repos → In Flight | — |
 | 10 | BLOCKED | Tracker P0/P1 `blocked`, with its note | By repo |
 
-P2/P3 tracker actions are counted, not listed. Each row: tier chip, repo (links to its Resume packet), title, one-line reason, links (PR / branch, OPEN SESSION when the Claude Code session is known, Tracker), and COPY PROMPT (the tracker's own prompt when it has one, otherwise a generated opening line for a fresh Claude Code session). Group filter, tier chips that jump to each section, a Monday banner pointing to the Weekly review, COPY FOR CLAUDE / DOWNLOAD .MD. Views and exports log to `data/logs/nextup.log`.
+P2/P3 tracker actions are counted, not listed (except `awaiting_deploy`, which is always CONFIRM LIVE). Archived repos are left out entirely. When the last In Flight read couldn't reach some repos, a warning names them and the empty state never claims everything is merged. Each row: tier chip, repo (links to its Resume packet), title, one-line reason, links (PR / branch, OPEN SESSION when the Claude Code session is known, Tracker), and COPY PROMPT (the tracker's own prompt when it has one, otherwise a generated opening line for a fresh Claude Code session). Group filter, tier chips that jump to each section, a Monday banner pointing to the Weekly review, COPY FOR CLAUDE / DOWNLOAD .MD. Views and exports log to `data/logs/nextup.log`.
 
 ### 4.7l Weekly review (Next Up → "Weekly review")
 
@@ -427,7 +427,7 @@ One letter per repo so neglected projects surface themselves, computed only from
 |---|---|---|
 | Required docs (the 5 dashboard files) | 30 | 6 each; all 5 OK, 3–4 WARN, 0–2 FIX |
 | Docs current | 15 | The scan's `docs_updated` (same as the "Current?" column) |
-| Branches tidy | 25 | With In Flight data: STALE + merged-not-deleted branches (0 → 25, 1 → 15, 2–3 → 8, 4+ → 0); without it, extra-branch count from the scan (0–2 → 25, 3–5 → 15, 6+ → 5). Branches in progress cost nothing |
+| Branches tidy | 25 | With In Flight data that has seen every branch the scan lists (and didn't cap the repo): STALE + merged-not-deleted branches (0 → 25, 1 → 15, 2–3 → 8, 4+ → 0); otherwise the extra-branch count from the scan (0–2 → 25, 3–5 → 15, 6+ → 5) with a 'refresh In flight' note. Branches in progress cost nothing |
 | Recently active | 30 | Last push: ≤30 days 30, ≤90 20, ≤180 10, older 0 |
 
 A 90+, B 80+, C 70+, D 60+, F below. Checks the scan can't answer are left out and the score is rescaled (under 50 scoreable points → not graded). Not graded ("—", with the reason): scan error, archived or forked on GitHub (flags carried by the scan since Session 24), tagged "Archived", empty repo. The breakdown opens by click, tap or keyboard, lists every check with points and a plain-English fix, and names the single fix that lifts the grade most. My Repos gets a sortable Health column (lowest first, ungraded last) and a "Health D or F" tile. Each My Repos render logs the grade distribution to `data/logs/health.log`; grading can never take the page down.
@@ -449,7 +449,7 @@ Commits made by Claude Code carry a `Claude-Session: https://claude.ai/code/sess
 - **Product spec management** — upload/view specs per repo for AI context
 - **Credential reset** — delete encrypted credentials and force re-setup
 
-**Anthropic key check (Session 24):** `ai_analyzer.verify_anthropic_key` makes one models-list call (no tokens), no retries, 2s connect / 2.5s read, hard 5s cap, and returns ok / invalid (empty key or 401) / unverified (timeout, network, 5xx, 429, 403). At login GitHub stays the gate: an invalid key still logs you in but flashes that summaries, briefs and recaps will fail and how to fix it; unverified only logs. Settings → Credentials shows the last result and has **Update Anthropic key** (new key + app password, re-encrypts credentials; a key Anthropic rejects is not saved, an unverifiable one is saved with a warning) and **CHECK KEY**. The key is never logged or echoed. "ok" proves the key works, not that the account has credit.
+**Anthropic key check (Session 24):** `ai_analyzer.verify_anthropic_key` makes one models-list call (no tokens), no retries, 2s connect / 2.5s read, hard 5s cap, and returns ok / invalid (empty key or 401) / unverified (timeout, network, 5xx, 429, 403). At login GitHub stays the gate: an invalid key still logs you in but flashes that summaries, briefs and recaps will fail and how to fix it; unverified only logs. Settings → Credentials shows the last result and has **Update Anthropic key** (new key + app password, re-encrypts credentials; text that isn't an `sk-ant-` key is refused, a key Anthropic rejects is not saved, and a key that can't be checked right now is only saved when 'Save even if it can't be checked' is ticked) and **CHECK KEY**. The key is never logged or echoed. "ok" proves the key works, not that the account has credit.
 
 ### 4.9 Data Persistence
 

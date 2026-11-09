@@ -23,8 +23,13 @@ Seven improvements picked from the ideas list (1, 2, 4, 5, 6, 7, 12), built in p
 - **What we shipped (Stats, AI).** SUMMARIZE writes a plain-English paragraph per updated repo plus an overview for the range, cached by content so the same work is never paid for twice; STALE when the work changed; included in COPY / .MD.
 - **Faster scan.** 8 repos at a time, identical output.
 - **Anthropic key checked at login** (never blocks, 5s cap) and in Settings, which now has Update Anthropic key + CHECK KEY (before, the only option was resetting all credentials).
-- REVIEW_PLACEHOLDER
-- TESTS_PLACEHOLDER
+- **Two independent reviews, every finding fixed.** Backend + security (1 high, 2 medium, 5 low): health no longer trusts an In Flight cache that never saw a repo's branches; a rate-limited scan read becomes an ungraded error row instead of a false F; Update Anthropic key refuses non-keys and won't replace a working key when Anthropic can't be reached unless you tick "save anyway"; plus key-check fallback for old SDKs, redaction order, Do next ranking, corrupt-cache crashes, a re-scan hint. Browser sweep at 375px / 1280px (4 high, 2 medium, 9 low): In Flight no longer skips repos whose scan errored; every screen says "couldn't read" instead of "nothing" when GitHub failed; long words no longer widen phones; Portfolio no longer 500s before a first scan; SUMMARIZE's 401 points to Update Anthropic key; 40px tap targets; the phone nav shows the active tab and a "more tabs" fade.
+- **Tests: 867 passing** (was 560). Chromium sweep of 15 screens at 375px and 1280px with realistic and adversarial data: no console or page errors, no payload fired, no horizontal scroll, keyboard reaches every control.
+
+### Known limitations (not fixed this session)
+- Same-named repos under two owners still share groups, the category badge and the Projects summary (storage keyed by bare repo name, a pre-existing design noted in Session 21). Do next attaches a planned step to one of them.
+- In Flight's REFRESH flash reports portfolio-wide counts even on a group-filtered page (it does refresh the whole portfolio).
+- Health's archived / fork exemptions need a re-scan after this update; until then low grades carry a "re-scan" hint.
 
 ---
 
