@@ -389,14 +389,21 @@ def _pad(raw: bytes) -> bytes:
     return raw + _PAD_OPEN + b" " * (total - len(raw) - overhead) + _PAD_CLOSE
 
 
+def _require_passphrase(passphrase) -> None:
+    """Building only needs SOME passphrase. The strength rules
+    (check_passphrase) apply when one is CHOSEN, in Settings: re-checking a
+    saved one here would break every publish whenever the rules tighten,
+    and the message could quote part of it into a log."""
+    if not isinstance(passphrase, str) or not passphrase.strip():
+        raise ValueError("Enter a passphrase.")
+
+
 def encrypt(plaintext: str, passphrase: str) -> dict:
-    """Encrypt `plaintext` for the phone. Raises ValueError (the plain-English
-    check_passphrase problem) for an unusable passphrase."""
+    """Encrypt `plaintext` for the phone. Raises ValueError for a missing
+    passphrase (strength is checked when it's chosen, not here)."""
     if not isinstance(plaintext, str):
         raise TypeError("plaintext must be a str")
-    problem = check_passphrase(passphrase)
-    if problem:
-        raise ValueError(problem)
+    _require_passphrase(passphrase)
     salt = os.urandom(SALT_BYTES)
     iv = os.urandom(NONCE_BYTES)
     key = _derive_key(passphrase, salt, KDF_ITERATIONS)
@@ -1342,11 +1349,12 @@ def build_zip(files: dict[str, bytes]) -> bytes:
 
 def build_site(data: dict, passphrase: str) -> dict[str, bytes]:
     """render_body -> encrypt -> build_shell -> site_files, logged. Raises
-    ValueError with a plain-English problem for an unusable passphrase."""
-    problem = check_passphrase(passphrase)
-    if problem:
-        log_snapshot_event("build_refused", reason="passphrase", problem=problem)
-        raise ValueError(problem)
+    ValueError for a missing passphrase (never logs anything about it)."""
+    try:
+        _require_passphrase(passphrase)
+    except ValueError:
+        log_snapshot_event("build_refused", reason="no_passphrase")
+        raise
     t0 = time.monotonic()
     data = data if isinstance(data, dict) else {}
     label = _clean_label(data.get("built_label")) or make_built_label()

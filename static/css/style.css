@@ -6708,9 +6708,9 @@ main .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .snapshot-site, .snapshot-site a { min-width: 0; overflow-wrap: anywhere; }
 #snapshot .cred-item { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 4px; }
 #snapshot .cred-item > span + span { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
-#snapshot-suggest, #snapshot .snapshot-copy { white-space: nowrap; overflow-wrap: normal; flex: 0 0 auto; }
+#snapshot-suggest, #snapshot .snapshot-copy, #snapshot .snapshot-small { white-space: nowrap; overflow-wrap: normal; flex: 0 0 auto; }
 .snapshot-actions .btn, .snapshot-unlock .btn, .snapshot-submit, .snapshot-publish-btn { min-height: 44px; }
-#snapshot .snapshot-copy { min-height: 36px; }
+#snapshot .snapshot-copy, #snapshot .snapshot-small { min-height: 36px; }
 .snapshot-unlock label { display: block; margin-bottom: 6px; font-size: 0.85rem; }
 .snapshot-phone > summary { cursor: pointer; font-size: 0.9rem; color: var(--text-primary); }
 .snapshot-phone-body { display: flex; flex-wrap: wrap; gap: var(--space-md); align-items: flex-start; margin-top: var(--space-sm); }

@@ -145,10 +145,11 @@
             {% if st.last_error %}
             <div class="cred-item"><span class="status-warn">&#9888;</span><span>Last attempt failed: {{ st.last_error }}</span></div>
             {% endif %}
-            {% for old in st.retire or [] %}
+            {% if snapshot_weak %}
             <div class="cred-item"><span class="status-warn">&#9888;</span>
-                <span class="snapshot-site">Your previous phone link ({{ old.url or 'old site' }}) is still online. It's deleted after the next successful publish.</span></div>
-            {% endfor %}
+                <span>Your passphrase is easier to guess than RepoDoctor now allows. Set a new one below (the phone link changes).</span></div>
+            {% endif %}
+            {% include "_snapshot_retire_list.html" %}
         </div>
         {% if st.url %}
         <details class="snapshot-phone mt-sm" {% if request.args.get('snapshot_new') or not st.last_published_at %}open{% endif %}>
@@ -191,9 +192,18 @@
         <details class="mt-sm" {% if st.needs_setup or not snapshot_configured or form_open %}open{% endif %}>
             <summary class="text-secondary">Change the Netlify token or passphrase</summary>
         {% else %}
-        {% if st.last_error or st.gone_url %}
+        {% set why = st.last_error or ('The phone site no longer exists on Netlify.' if st.gone_url else '') %}
+        {% set was_reset = st.needs_setup and not snapshot_configured %}
+        {% if not why and not was_reset and snapshot_configured %}{% set why = "There's no phone site right now." %}{% endif %}
+        {% if why or was_reset or st.retire %}
         <div class="credential-status">
-            <div class="cred-item"><span class="status-warn">&#9888;</span><span>{{ st.last_error or 'The phone site no longer exists on Netlify.' }}</span></div>
+            {% if was_reset %}
+            <div class="cred-item"><span class="status-warn">&#9888;</span><span>Your app credentials were reset, so the Netlify token and passphrase were cleared. Run setup again below.</span></div>
+            {% endif %}
+            {% if why %}
+            <div class="cred-item"><span class="status-warn">&#9888;</span><span>{{ why }}</span></div>
+            {% endif %}
+            {% include "_snapshot_retire_list.html" %}
         </div>
         {% endif %}
         {% if snapshot_configured and snapshot_unlocked %}
@@ -202,6 +212,11 @@
         <div class="snapshot-actions">
             <form method="POST" action="{{ url_for('snapshot_recreate') }}" class="inline-form">
                 <button type="submit" class="btn btn-primary" data-loading-text="CREATING…">CREATE NEW SITE &amp; PUBLISH</button>
+            </form>
+            <form method="POST" action="{{ url_for('snapshot_takedown') }}" class="inline-form"
+                  data-confirm="Forget the Netlify token and passphrase{{ ' and delete your previous phone sites' if st.retire else '' }}?">
+                <input type="hidden" name="reset_token" value="{{ reset_token }}">
+                <button type="submit" class="btn btn-danger" data-loading-text="TAKING DOWN…">TAKE DOWN</button>
             </form>
         </div>
         <details class="mt-sm" {% if form_open %}open{% endif %}>

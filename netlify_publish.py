@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime
 import email.utils
 import json as _json
+import hashlib
 import logging
 import math
 import re
@@ -144,6 +145,12 @@ def _random_name() -> str:
     """24 random lowercase letters/digits, starting with a letter."""
     return (secrets.choice(string.ascii_lowercase)
             + "".join(secrets.choice(_SUFFIX_ALPHABET) for _ in range(_RANDOM_NAME_LEN - 1)))
+
+
+def account_key(user_id) -> str:
+    """Opaque, stable fingerprint of a Netlify user id (first 16 hex chars
+    of its SHA-256)."""
+    return hashlib.sha256(f"netlify-user:{str(user_id).strip()}".encode("utf-8")).hexdigest()[:16]
 
 
 def _site_name_prefix(prefix) -> str:
@@ -273,9 +280,14 @@ class NetlifyClient:
     # --- public API -----------------------------------------------------------
 
     def verify(self) -> dict:
-        """Check the token. Returns {"ok": True, "account_slug": str | None}.
-        The slug (the Netlify team's URL name) is best-effort and only for
-        display; nothing personal (name, email) is returned or logged."""
+        """Check the token. Returns {"ok": True, "account_slug": str | None,
+        "account_key": str | None}. The slug (the Netlify team's URL name) is
+        best-effort and only for display. account_key is an opaque
+        fingerprint of the Netlify user the token belongs to (a hash of the
+        user id, never the id itself), so the app can tell whether two
+        tokens are the same account: a 404 only proves a site is gone when
+        it comes from the account that owns it. Nothing personal (name,
+        email) is returned or logged."""
         t0 = self._clock()
         try:
             resp = self._call("GET", "/user", action="verify")
@@ -285,9 +297,12 @@ class NetlifyClient:
                        elapsed_ms=self._ms(t0))
             raise
         slug = _text(user.get("slug")) or self._first_account_slug()
+        uid = user.get("id")
+        key = account_key(uid) if isinstance(uid, (str, int)) and str(uid).strip() else None
         self._emit("verify", ok=True, status=resp.status_code,
-                   has_account_slug=bool(slug), elapsed_ms=self._ms(t0))
-        return {"ok": True, "account_slug": slug}
+                   has_account_slug=bool(slug), has_account_key=bool(key),
+                   elapsed_ms=self._ms(t0))
+        return {"ok": True, "account_slug": slug, "account_key": key}
 
     def create_site(self, name_prefix: str = DEFAULT_SITE_PREFIX) -> dict:
         """Create an empty site named '<prefix>-<6 random a-z0-9>'. A 422

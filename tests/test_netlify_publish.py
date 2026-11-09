@@ -237,7 +237,8 @@ class WireTests(NetlifyTestBase):
             ("GET", f"{API}/user"): [resp(200, {"id": "u1", "email": "x@example.com"})],
             ("GET", f"{API}/accounts"): [resp(200, [{"slug": "my-team"}])],
         })
-        self.assertEqual(client.verify(), {"ok": True, "account_slug": "my-team"})
+        self.assertEqual(client.verify(), {"ok": True, "account_slug": "my-team",
+                                           "account_key": nf.account_key("u1")})
         request, timeout = adapter.sent[0]
         self.assertEqual(request.url, f"{API}/user")
         self.assertEqual(request.headers["Authorization"], f"Bearer {TOKEN}")
@@ -306,7 +307,8 @@ class VerifyTests(NetlifyTestBase):
     def test_ok_returns_only_ok_and_slug(self):
         c = self.client(resp(200, self.USER),
                         resp(200, [{"slug": "my-team", "billing_email": "b@example.com"}]))
-        self.assertEqual(c.verify(), {"ok": True, "account_slug": "my-team"})
+        self.assertEqual(c.verify(), {"ok": True, "account_slug": "my-team",
+                                      "account_key": nf.account_key("u1")})
         self.assertEqual([x["url"] for x in self.session.calls],
                          [f"{API}/user", f"{API}/accounts"])
         self.assertEqual(self.events_named("verify")[0]["ok"], True)
@@ -318,7 +320,8 @@ class VerifyTests(NetlifyTestBase):
 
     def test_slug_on_user_skips_accounts_call(self):
         c = self.client(resp(200, {"id": "u1", "slug": "team-a"}))
-        self.assertEqual(c.verify(), {"ok": True, "account_slug": "team-a"})
+        self.assertEqual(c.verify(), {"ok": True, "account_slug": "team-a",
+                                      "account_key": nf.account_key("u1")})
         self.assertEqual(len(self.session.calls), 1)
 
     def test_accounts_failure_still_verifies(self):
@@ -327,7 +330,19 @@ class VerifyTests(NetlifyTestBase):
                          requests.ConnectionError("down")):
             with self.subTest(accounts=accounts):
                 c = self.client(resp(200, self.USER), accounts)
-                self.assertEqual(c.verify(), {"ok": True, "account_slug": None})
+                self.assertEqual(c.verify(), {"ok": True, "account_slug": None,
+                                              "account_key": nf.account_key("u1")})
+
+    def test_account_key_is_an_opaque_stable_fingerprint(self):
+        k = nf.account_key("u1")
+        self.assertRegex(k, r"^[0-9a-f]{16}$")
+        self.assertEqual(k, nf.account_key(" u1 "))
+        self.assertNotEqual(k, nf.account_key("u2"))
+        c = self.client(resp(200, {"slug": "team-a"}))  # no id: unknown account
+        self.assertIsNone(c.verify()["account_key"])
+        c = self.client(resp(200, {"id": "u1", "slug": "team-a"}))
+        c.verify()
+        self.assertNotIn("u1", repr(self.events))
 
     def test_401_says_make_a_new_token(self):
         c = self.client(resp(401, {"code": 401, "message": "Access Denied"}))

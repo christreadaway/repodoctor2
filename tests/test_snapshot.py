@@ -315,10 +315,17 @@ class TestCrypto(unittest.TestCase):
         plain = AESGCM(key).decrypt(base64.b64decode(p["iv"]), base64.b64decode(p["ct"]), None)
         self.assertTrue(plain.decode("utf-8").startswith("nfc body<!--"))
 
-    def test_encrypt_refuses_weak_passphrase(self):
-        with self.assertRaises(ValueError) as cm:
-            snapshot.encrypt("body", "short")
-        self.assertIn("at least 12 characters", str(cm.exception))
+    def test_encrypt_needs_a_passphrase_but_not_the_strength_rules(self):
+        # Session 25 review: a passphrase saved under older rules must keep
+        # publishing (the rules apply when one is chosen, in Settings), and
+        # a refusal must never quote part of it into a log.
+        for missing in ("", "   ", None):
+            with self.assertRaises(ValueError) as cm:
+                snapshot.encrypt("body", missing)
+            self.assertEqual(str(cm.exception), "Enter a passphrase.")
+        older = "monkey banana tree"
+        self.assertIsNotNone(snapshot.check_passphrase(older))
+        self.assertEqual(snapshot.decrypt(snapshot.encrypt("body", older), older), "body")
         with self.assertRaises(TypeError):
             snapshot.encrypt(None, PASS)
 
@@ -623,12 +630,16 @@ class TestShell(unittest.TestCase):
         self.assertEqual(build["iterations"], 600000)
         self.assertEqual(set(build["files"]), {"index.html", "robots.txt", "_headers"})
 
-    def test_build_site_refuses_weak_passphrase_and_logs_it(self):
+    def test_build_site_refuses_a_missing_passphrase_and_logs_it(self):
         with self.assertRaises(ValueError):
-            snapshot.build_site(realistic_data(), "weak")
+            snapshot.build_site(realistic_data(), "")
         last = snapshot.tail_snapshot_log(1)[-1]
         self.assertEqual(last["event"], "build_refused")
-        self.assertNotIn("weak", json.dumps({k: v for k, v in last.items() if k != "problem"}))
+        self.assertEqual(last["reason"], "no_passphrase")
+        self.assertNotIn("problem", last)
+        # A passphrase saved under older, looser rules still builds.
+        files = snapshot.build_site(realistic_data(), "monkey banana tree")
+        self.assertIn("index.html", files)
 
 
 # ----------------------------------------------------------------------

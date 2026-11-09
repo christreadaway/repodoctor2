@@ -43,6 +43,14 @@ class FakeNetlify:
     deployed: list = []
     sites_made = 0
     sites: dict = {}
+    revoked: set = set()
+    create_no_url = False
+    hook = None  # called inside deploy_zip (e.g. to log out mid-publish)
+
+    @staticmethod
+    def account_of(token):
+        """Tokens with OTHER in them belong to a second Netlify account."""
+        return "acct-b" if "OTHER" in token else "acct-a"
 
     def __init__(self, token, session=None, log_event=None):
         self.token = token
@@ -52,7 +60,7 @@ class FakeNetlify:
         FakeNetlify.calls.append(("verify",))
         if FakeNetlify.verify_error:
             raise FakeNetlify.verify_error
-        return {"ok": True}
+        return {"ok": True, "account_slug": None, "account_key": self.account_of(self.token)}
 
     def create_site(self, name_prefix=""):
         FakeNetlify.calls.append(("create_site",))
@@ -62,23 +70,30 @@ class FakeNetlify:
         n = FakeNetlify.sites_made
         sid = "site-123" if n == 1 else f"site-{n}"
         site = {"site_id": sid, "name": f"abc{n}",
-                "url": "https://repodoctor-snapshot-abc123.netlify.app" if n == 1 else f"https://new{n}.netlify.app",
+                "url": "" if FakeNetlify.create_no_url else
+                ("https://repodoctor-snapshot-abc123.netlify.app" if n == 1 else f"https://new{n}.netlify.app"),
                 "admin_url": f"https://app.netlify.com/sites/abc{n}"}
-        FakeNetlify.sites[sid] = site
+        FakeNetlify.sites[sid] = {**site, "account": self.account_of(self.token), "deleted": False}
         return dict(site)
 
     def get_site(self, site_id):
         FakeNetlify.calls.append(("get_site", site_id))
         if FakeNetlify.get_site_error:
             raise FakeNetlify.get_site_error
-        return dict(FakeNetlify.sites.get(site_id) or {"site_id": site_id, "name": "existing",
-                                                        "url": "https://existing.netlify.app", "admin_url": ""})
+        known = FakeNetlify.sites.get(site_id)
+        if known and (known["deleted"] or known["account"] != self.account_of(self.token)):
+            raise nf.NetlifyError(nf.MSG_SITE_GONE, status=404, kind="site_gone")
+        if known:
+            return {k: known[k] for k in ("site_id", "name", "url", "admin_url")}
+        return {"site_id": site_id, "name": "existing", "url": "https://existing.netlify.app", "admin_url": ""}
 
     def deploy_zip(self, site_id, zip_bytes):
         FakeNetlify.calls.append(("deploy_zip", site_id, len(zip_bytes)))
         if FakeNetlify.deploy_error:
             raise FakeNetlify.deploy_error
         FakeNetlify.deployed.append(zip_bytes)
+        if FakeNetlify.hook:
+            FakeNetlify.hook()
         return {"deploy_id": "dep-1", "state": "ready", "url": "https://dep--x.netlify.app", "elapsed_s": 1.0}
 
     def get_deploy(self, deploy_id):
@@ -88,8 +103,16 @@ class FakeNetlify:
 
     def delete_site(self, site_id):
         FakeNetlify.calls.append(("delete_site", site_id, self.token))
+        if self.token in FakeNetlify.revoked:
+            raise nf.NetlifyError(nf.MSG_AUTH, status=401, kind="auth")
         if FakeNetlify.delete_error:
             raise FakeNetlify.delete_error
+        known = FakeNetlify.sites.get(site_id)
+        if known:  # Netlify answers 404 for a site on another account
+            if known["deleted"] or known["account"] != self.account_of(self.token):
+                return "already_gone"
+            known["deleted"] = True
+            return "deleted"
         return FakeNetlify.delete_outcome
 
 
@@ -175,6 +198,8 @@ class TestSnapshotRoutes(unittest.TestCase):
         FakeNetlify.deploy_error = FakeNetlify.delete_error = None
         FakeNetlify.delete_outcome, FakeNetlify.deploy_state, FakeNetlify.sites_made = "deleted", "ready", 0
         FakeNetlify.sites = {}
+        FakeNetlify.revoked = set()
+        FakeNetlify.create_no_url, FakeNetlify.hook = False, None
         self.patcher = patch.object(nf, "NetlifyClient", FakeNetlify)
         self.patcher.start()
 
@@ -336,7 +361,16 @@ class TestSnapshotRoutes(unittest.TestCase):
         msgs = [m for _, m in self.flashes()]
         self.assertTrue(any("https://old.netlify.app" in m and "still online" in m
                             and "app.netlify.com/sites/abc1" in m for m in msgs), msgs)
-        self.assertEqual(models.get_snapshot_state()["retire"], [])  # nothing more we can do
+        # It stays listed in the card, with where to delete it, until the
+        # owner says it's gone (Session 25 review 3: never forget a live site).
+        (entry,) = models.get_snapshot_state()["retire"]
+        self.assertEqual((entry["site_id"], entry["manual"]), ("site-123", "refused"))
+        page = self.client.get("/settings").data.decode()
+        self.assertIn("I DELETED IT", page)
+        self.assertIn('href="https://app.netlify.com/sites/abc1"', page)
+        self.client.post("/snapshot/forget-old", data={"site_id": "site-123"})
+        self.assertEqual(models.get_snapshot_state()["retire"], [])
+        self.assertNotIn("I DELETED IT", self.client.get("/settings").data.decode())
 
     def test_old_site_delete_that_fails_temporarily_is_retried(self):
         self.setup_ok()
@@ -348,6 +382,204 @@ class TestSnapshotRoutes(unittest.TestCase):
         FakeNetlify.delete_error = None
         self.client.post("/snapshot/publish")
         self.assertEqual(models.get_snapshot_state()["retire"], [])
+
+    # --- Session 25 review 3: whose site is it? ---------------------------
+
+    OTHER = "nfp_OTHERaccountTOKEN1234567890"
+
+    def card(self):
+        return self.client.get("/settings").data.decode()
+
+    def test_404_from_another_accounts_token_never_counts_as_deleted(self):
+        # Reviewer s5: account-A site queued, token switched to account B
+        # with no publish, then a new passphrase: the B token's 404 used to
+        # drop the A site silently while it stayed live.
+        self.setup_ok()
+        site_a = models.get_snapshot_state()["site_id"]
+        scan = self.m._scan_results
+        self.m._scan_results = None  # no scan: setup can't publish yet
+        self.setup_ok(netlify_token=self.OTHER, passphrase="", passphrase_confirm="")
+        msgs = [m for _, m in self.flashes()]
+        self.assertTrue(any("another Netlify account" in m for m in msgs), msgs)
+        (entry,) = models.get_snapshot_state()["retire"]
+        self.assertEqual((entry["site_id"], entry["manual"]), (site_a, "foreign"))
+        self.m._scan_results = scan
+        self.change_passphrase(netlify_token="")
+        msgs = [m for _, m in self.flashes()]
+        self.assertFalse(FakeNetlify.sites[site_a]["deleted"])
+        self.assertFalse(any(site_a in m or ("repodoctor-snapshot-abc123" in m and "was deleted" in m)
+                             for m in msgs), msgs)
+        self.assertIn(site_a, [p["site_id"] for p in models.get_snapshot_state()["retire"]])
+        page = self.card()
+        self.assertIn("is on another Netlify account, so RepoDoctor can't delete it", page)
+
+    def test_account_switch_that_publishes_deletes_the_old_site_with_the_old_token(self):
+        self.setup_ok()
+        site_a = models.get_snapshot_state()["site_id"]
+        FakeNetlify.calls = []
+        self.setup_ok(netlify_token=self.OTHER, passphrase="", passphrase_confirm="")
+        self.assertTrue(FakeNetlify.sites[site_a]["deleted"])
+        self.assertIn(("delete_site", site_a, TOKEN), FakeNetlify.calls)
+        self.assertEqual(models.get_snapshot_state()["retire"], [])
+
+    def test_revoked_old_token_and_other_account_keeps_the_site_listed(self):
+        # Reviewer s1: old token 401, new token on another account 404.
+        self.setup_ok()
+        site_a = models.get_snapshot_state()["site_id"]
+        FakeNetlify.revoked = {TOKEN}
+        self.flashes()
+        self.setup_ok(netlify_token=self.OTHER, passphrase="", passphrase_confirm="")
+        self.assertFalse(FakeNetlify.sites[site_a]["deleted"])
+        (entry,) = models.get_snapshot_state()["retire"]
+        self.assertEqual(entry["site_id"], site_a)
+        self.assertTrue(entry["manual"])
+        self.assertIn("I DELETED IT", self.card())
+
+    def test_old_token_network_error_then_other_account_isnt_promised_a_retry(self):
+        # Reviewer s3(a): the old token's DELETE hits a network error.
+        self.setup_ok()
+        site_a = models.get_snapshot_state()["site_id"]
+        real_delete = FakeNetlify.delete_site
+
+        def flaky(this, site_id):
+            if this.token == TOKEN:
+                FakeNetlify.calls.append(("delete_site", site_id, this.token))
+                raise nf.NetlifyError(nf.MSG_NETWORK, None, kind="network")
+            return real_delete(this, site_id)
+        with patch.object(FakeNetlify, "delete_site", flaky):
+            self.setup_ok(netlify_token=self.OTHER, passphrase="", passphrase_confirm="")
+        self.assertFalse(FakeNetlify.sites[site_a]["deleted"])
+        (entry,) = models.get_snapshot_state()["retire"]
+        self.assertEqual(entry["manual"], "foreign")  # the old token is gone after setup
+        self.assertNotIn("deleted after the next successful publish", self.card())
+
+    def test_takedown_lists_sites_it_couldnt_delete(self):
+        # Reviewer #2: TAKE DOWN said everything was deleted.
+        self.setup_ok()
+        site_a = models.get_snapshot_state()["site_id"]
+        self.m._scan_results = None
+        self.setup_ok(netlify_token=self.OTHER, passphrase="", passphrase_confirm="")
+        self.flashes()
+        self.takedown()
+        msgs = [(c, m) for c, m in self.flashes()]
+        self.assertTrue(any(c == "warning" and "NOT deleted" in m for c, m in msgs), msgs)
+        self.assertFalse(FakeNetlify.sites[site_a]["deleted"])
+        self.assertFalse(security.snapshot_secrets_exist())
+        st = models.get_snapshot_state()
+        self.assertEqual([p["site_id"] for p in st["retire"]], [site_a])
+        self.assertNotIn("site_id", st)
+        page = self.card()
+        self.assertIn("I DELETED IT", page)
+        self.assertIn("SET UP &amp; PUBLISH", page)
+        self.client.post("/snapshot/forget-old", data={"site_id": site_a})
+        self.assertEqual(models.get_snapshot_state(), {})
+
+    def test_saved_passphrase_from_older_rules_still_publishes(self):
+        # Reviewer #4: a re-check at build time broke publish/PREVIEW and
+        # quoted part of the passphrase into the logs.
+        older = "monkey banana tree"
+        self.assertIsNotNone(snap.check_passphrase(older))
+        self.setup_ok()
+        security.encrypt_snapshot_secrets(PASSWORD, {"netlify_token": TOKEN, "passphrase": older})
+        self.m._snapshot_secrets = {"netlify_token": TOKEN, "passphrase": older}
+        self.flashes()
+        self.client.post("/snapshot/publish")
+        (cat, msg), = self.flashes()
+        self.assertEqual(cat, "success")
+        self.assertEqual(self.client.get("/snapshot/preview").status_code, 200)
+        self.assertIn("easier to guess than RepoDoctor now allows", self.card())
+        self.assertNotIn("monkey", open(models.SNAPSHOT_LOG_PATH).read())
+
+    def test_logout_mid_publish_is_not_a_500(self):
+        # Reviewer #5.
+        self.setup_ok()
+        self.change_passphrase(netlify_token="")  # leaves nothing queued
+        FakeNetlify.deploy_error = nf.NetlifyError("down", status=502)
+        self.change_passphrase(netlify_token="", passphrase="maple orbit seven quilt 21",
+                               passphrase_confirm="maple orbit seven quilt 21")
+        self.assertEqual(len(models.get_snapshot_state()["retire"]), 1)
+        FakeNetlify.deploy_error = None
+        FakeNetlify.hook = self.m._lock_snapshot
+        r = self.client.post("/snapshot/publish")
+        self.assertEqual(r.status_code, 302)
+        self.assertIsNone(self.m._snapshot_secrets)
+        self.assertEqual(models.get_snapshot_state()["retire"], [])  # still cleaned up
+
+    def test_credential_reset_waits_for_the_snapshot_lock(self):
+        import threading
+        self.setup_ok()
+        self.m._snapshot_op_lock.acquire()
+        t = threading.Thread(target=self.m._forget_snapshot_secrets, args=("test",))
+        t.start()
+        t.join(0.3)
+        self.assertTrue(t.is_alive())  # waiting, not racing a publish
+        self.assertTrue(security.snapshot_secrets_exist())
+        self.m._snapshot_op_lock.release()
+        t.join(5)
+        self.assertFalse(security.snapshot_secrets_exist())
+
+    def test_lost_track_of_an_uploaded_deploy_is_pending_not_failed(self):
+        # Reviewer #6: a status poll failing after the upload.
+        self.setup_ok()
+        self.flashes()
+        FakeNetlify.deploy_error = nf.NetlifyError(nf.MSG_NETWORK, None, kind="network", deploy_id="dep-x")
+        self.client.post("/snapshot/publish")
+        (cat, msg), = self.flashes()
+        self.assertEqual(cat, "warning")
+        self.assertIn("lost track", msg)
+        st = models.get_snapshot_state()
+        self.assertEqual(st["pending_deploy"]["deploy_id"], "dep-x")
+        self.assertEqual(st["last_error"], "")
+        # A real failure is still a failure.
+        FakeNetlify.deploy_error = nf.NetlifyError("bad build", None, kind="deploy_failed", deploy_id="dep-y")
+        self.client.post("/snapshot/publish")
+        self.assertEqual(models.get_snapshot_state()["last_error"], "bad build")
+
+    def test_site_gone_card_offers_takedown_and_unlock_says_what_works(self):
+        # Reviewer #7 and #8.
+        self.setup_ok()
+        FakeNetlify.deploy_error = nf.NetlifyError(nf.MSG_SITE_GONE, status=404, kind="site_gone")
+        self.client.post("/snapshot/publish")
+        FakeNetlify.deploy_error = None
+        page = self.card()
+        self.assertIn('action="/snapshot/takedown"', page)
+        self.m._snapshot_secrets = None
+        self.flashes()
+        self.client.post("/snapshot/unlock", data={"password": PASSWORD})
+        (cat, msg), = self.flashes()
+        self.assertIn("CREATE NEW SITE", msg)
+        self.assertNotIn("PREVIEW", msg)
+        self.takedown()
+        self.assertFalse(security.snapshot_secrets_exist())
+        self.assertEqual(models.get_snapshot_state(), {})
+
+    def test_new_site_never_inherits_the_old_link(self):
+        # Reviewer #9.
+        self.setup_ok()
+        FakeNetlify.create_no_url = True
+        self.change_passphrase()
+        st = models.get_snapshot_state()
+        self.assertNotEqual(st.get("url"), "https://repodoctor-snapshot-abc123.netlify.app")
+        self.assertEqual(st["url"], "https://abc2.netlify.app")  # Netlify's standard address
+
+    def test_failed_save_cleans_up_the_new_site_and_keeps_secrets_in_step(self):
+        # Reviewer #10.
+        self.setup_ok()
+        before = models.get_snapshot_state()
+        with patch.object(security, "encrypt_snapshot_secrets", side_effect=OSError("disk full")):
+            self.change_passphrase()
+        self.assertTrue(FakeNetlify.sites["site-2"]["deleted"])
+        self.assertEqual(models.get_snapshot_state(), before)
+        self.flashes()
+        real_save = models.save_snapshot_state
+        with patch.object(models, "save_snapshot_state", side_effect=OSError("disk full")):
+            self.change_passphrase()
+        (cat, msg), = self.flashes()
+        self.assertIn("Nothing was changed", msg)
+        self.assertTrue(FakeNetlify.sites["site-3"]["deleted"])
+        self.assertEqual(security.decrypt_snapshot_secrets(PASSWORD)["passphrase"], PASSPHRASE)
+        self.assertEqual(self.m._snapshot_secrets["passphrase"], PASSPHRASE)
+        self.assertEqual(real_save, models.save_snapshot_state)
 
     def test_token_only_change_keeps_the_site_and_link(self):
         # E2E review M3: a new token for the same account (same passphrase)
