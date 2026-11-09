@@ -811,6 +811,61 @@ def tail_activity_log(n: int = 100) -> list[dict]:
     return _tail_log(ACTIVITY_LOG_PATH, n)
 
 
+# --- START [S24-D] Stats AI summaries ---
+# Plain-English "what we shipped" paragraphs on Stats → What changed: one per
+# updated repo, one for the whole portfolio (or active group). Stored in
+# data/activity_summaries.json as {"repos": {fp: entry}, "portfolio": {fp:
+# entry}}, where fp is a CONTENT fingerprint built by activity.py (model +
+# repo + in-range commit SHAs + merged PR numbers), never a date range, so
+# rolling presets that cover the same work reuse one paragraph. Each section
+# keeps the newest ACTIVITY_SUMMARIES_MAX entries.
+
+ACTIVITY_SUMMARIES_PATH = os.path.join(DATA_DIR, "activity_summaries.json")
+ACTIVITY_SUMMARIES_MAX = 500
+
+
+def get_activity_summaries() -> dict:
+    """{"repos": {...}, "portfolio": {...}} — always both keys, always dicts,
+    even when the file is missing or was hand-edited into another shape."""
+    data = _load_json(ACTIVITY_SUMMARIES_PATH)
+    data = data if isinstance(data, dict) else {}
+    out = {}
+    for section in ("repos", "portfolio"):
+        entries = data.get(section)
+        out[section] = ({k: v for k, v in entries.items() if isinstance(v, dict)}
+                        if isinstance(entries, dict) else {})
+    return out
+
+
+def _cap_activity_summaries(entries: dict, cap: int) -> dict:
+    """Keep the `cap` newest entries (by generated_at)."""
+    if len(entries) <= cap:
+        return entries
+    newest = sorted(entries.items(), key=lambda kv: str(kv[1].get("generated_at", "")),
+                    reverse=True)[:cap]
+    return dict(newest)
+
+
+def _save_activity_summary(section: str, fingerprint: str, entry: dict) -> dict:
+    with _STORE_LOCK:
+        data = get_activity_summaries()
+        entry = dict(entry)
+        entry["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        data[section][fingerprint] = entry
+        data[section] = _cap_activity_summaries(data[section], ACTIVITY_SUMMARIES_MAX)
+        _save_json(ACTIVITY_SUMMARIES_PATH, data)
+        return entry
+
+
+def save_activity_repo_summary(fingerprint: str, entry: dict) -> dict:
+    return _save_activity_summary("repos", fingerprint, entry)
+
+
+def save_activity_portfolio_summary(fingerprint: str, entry: dict) -> dict:
+    return _save_activity_summary("portfolio", fingerprint, entry)
+# --- END [S24-D] ---
+
+
 # --- Session Cost Tracking ---
 
 class SessionCost:
@@ -1004,11 +1059,6 @@ def tail_portfolio_log(n: int = 100) -> list[dict]:
 
 # --- START [S24-C] Health grade ---
 # --- END [S24-C] ---
-
-# (spacer)
-
-# --- START [S24-D] Stats AI summaries ---
-# --- END [S24-D] ---
 
 # (spacer)
 

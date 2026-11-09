@@ -50,6 +50,11 @@
     {% if review.failed %}
     <div class="flash flash-error stats-notice">GitHub couldn't be read for {% for r in review.failed %}{{ r.name }}{% if not loop.last %}, {% endif %}{% endfor %}, so {{ 'it is' if review.failed|length == 1 else 'they are' }} left out.</div>
     {% endif %}
+    {% if review.overview and review.overview.text %}
+    <p class="rv-overview">{{ review.overview.text }}{% if review.overview.stale %} <span class="chip rv-stale" title="Written before the latest work. SUMMARIZE on Stats → Week rewrites it.">STALE</span>{% endif %}</p>
+    {% elif review.shipped %}
+    <p class="rv-hint">Want this in plain English? <a href="{{ url_for('stats', range='week', group=active_group or None) }}">Stats → Week → SUMMARIZE</a> writes a paragraph per repo and an overview; they show up here.</p>
+    {% endif %}
     {% if review.shipped %}
     <ul class="rv-shipped">
         {% for s in review.shipped %}
@@ -59,6 +64,9 @@
                 {{ category_badge(s.repo) }}
                 <span class="rv-count">{{ s.commits }} commit{{ 's' if s.commits != 1 }}{% if s.prs %} · {{ s.prs }} PR{{ 's' if s.prs != 1 }} merged{% elif s.merges %} · {{ s.merges }} merge{{ 's' if s.merges != 1 }}{% endif %}</span>
             </div>
+            {% if s.ai and s.ai.text %}
+            <p class="rv-ai">{{ s.ai.text }}{% if s.ai.stale %} <span class="chip rv-stale">STALE</span>{% endif %}</p>
+            {% endif %}
             <ul class="rv-titles">
                 {% for title in s.titles %}<li>{{ title }}</li>{% endfor %}
                 {% if s.more %}<li class="rv-more-items"><a href="{{ url_for('stats', range='week', group=active_group or None) }}">+{{ s.more }} more</a></li>{% endif %}

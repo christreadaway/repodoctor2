@@ -344,6 +344,28 @@ class TestRoutes(unittest.TestCase):
         self.assertIn("no activity for 40 days", body)
         self.assertIn("view_review", [e["event"] for e in models.tail_nextup_log(5)])
 
+    def test_review_shows_stats_ai_paragraphs_for_the_same_work(self):
+        import activity
+        self.client.get("/review")  # warm the cache
+        rng, _ = activity.resolve_range({"range": "week"})
+        rep = self.m._stats_report(self.m._scan_results, self.m._activity_data(self.Fake(), self.m._scan_results, rng),
+                                   "", {}, rng)
+        row = rep["updated"][0]
+        fp = activity.repo_fingerprint(row, models.get_ai_model())
+        store_path = os.path.join(self.tmp, "activity_summaries.json")
+        self._paths.setdefault("ACTIVITY_SUMMARIES_PATH", models.ACTIVITY_SUMMARIES_PATH)
+        models.ACTIVITY_SUMMARIES_PATH = store_path
+        import json
+        with open(store_path, "w") as f:
+            json.dump({"repos": {fp: {"text": "Shipped the <b>volunteer</b> form.", "repo": row["full_name"],
+                                      "generated_at": "2026-11-09T00:00:00Z", "model": models.get_ai_model()}},
+                       "portfolio": {}}, f)
+        r, body = self.get("/review")
+        self.assertIn("Shipped the &lt;b&gt;volunteer&lt;/b&gt; form.", body)
+        self.assertIn("Stats → Week → SUMMARIZE", body, "no overview yet: hint points to Stats")
+        md = self.client.get("/review/export.md").data.decode()
+        self.assertIn("Shipped the <b>volunteer</b> form.", md)
+
     def test_review_reuses_the_stats_cache(self):
         self.client.get("/stats")
         before = self.Fake.calls

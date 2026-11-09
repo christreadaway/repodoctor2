@@ -366,6 +366,7 @@ def build_review(week_report: dict | None, quarter_report: dict | None, do_next:
             if len(titles) < REVIEW_SHIPPED_TITLES:
                 titles += [c.get("summary", "") for c in r.get("commits", [])]
             shipped.append({
+                "ai": r.get("ai"),
                 "repo": r["name"], "owner": r["owner"], "commits": r["commit_count"],
                 "prs": r["pr_count"], "merges": r.get("merge_count", 0),
                 "titles": [t for t in titles if t][:REVIEW_SHIPPED_TITLES],
@@ -380,6 +381,7 @@ def build_review(week_report: dict | None, quarter_report: dict | None, do_next:
     return {
         "now": now,
         "week": week_report,
+        "overview": (week_report or {}).get("ai_portfolio"),
         "shipped": shipped,
         "failed": (week_report or {}).get("failed", []),
         "waiting": waiting,
@@ -404,12 +406,20 @@ def compose_review_markdown(review: dict, owner_login: str = "", group: str = ""
     if review["failed"]:
         lines += ["_GitHub couldn't be read for " + ", ".join(r["name"] for r in review["failed"])
                   + "; they're left out._", ""]
+    ov = review.get("overview")
+    if ov and ov.get("text"):
+        lines += [ov["text"] + (" _(stale: written before the latest work)_" if ov.get("stale") else ""), ""]
     if review["shipped"]:
         for s in review["shipped"]:
             bits = [f"{s['commits']} commit{'s' if s['commits'] != 1 else ''}"]
             if s["prs"]:
                 bits.append(f"{s['prs']} PR{'s' if s['prs'] != 1 else ''} merged")
-            lines.append(f"- **{s['repo']}** ({', '.join(bits)}): " + "; ".join(s["titles"]))
+            ai = s.get("ai") or {}
+            if ai.get("text"):
+                lines.append(f"- **{s['repo']}** ({', '.join(bits)}): {ai['text']}"
+                             + (" _(stale)_" if ai.get("stale") else ""))
+            else:
+                lines.append(f"- **{s['repo']}** ({', '.join(bits)}): " + "; ".join(s["titles"]))
         lines.append("")
     elif review.get("week") is not None:
         lines += ["Nothing landed on a default branch this week.", ""]

@@ -169,6 +169,37 @@
 
 <div id="view-changes" class="stats-view">
     {% if report.updated %}
+    {# --- What we shipped: on-demand AI paragraphs (overview + one per card) --- #}
+    {% set aiq = report.ai_targets %}
+    {% set overview = report.ai_portfolio %}
+    {% set stale_tip = "Written from different work than this range now shows (new or dropped commits, or a different AI model in Settings). SUMMARIZE rewrites it." %}
+    <section class="shipped-panel" id="shipped-panel" aria-labelledby="shipped-title">
+        <h2 class="session-section-label shipped-title" id="shipped-title">What we shipped{% if active_group %} · {{ active_group }}{% endif %}
+            {%- if overview and overview.stale %} <span class="shipped-stale" title="{{ stale_tip }}">STALE</span>{% endif %}</h2>
+        {% if overview %}
+        <p class="session-section-text shipped-text">{{ overview.text }}</p>
+        {% else %}
+        <p class="shipped-empty">Turn this range into plain English you could hand a board or staff meeting:
+            a short paragraph for each updated repo, plus one overview{% if active_group %} of the {{ active_group }} group{% endif %}.
+            Written only from the merged PR titles and commit messages below.</p>
+        {% endif %}
+        {% if github_connected %}
+        {% set n_needs = aiq.needs|length %}
+        <div class="shipped-actions">
+            <button type="button" class="btn btn-secondary btn-sm" id="shipped-summarize-btn"
+                    {% if not n_needs and aiq.portfolio_fresh %}disabled title="Every repo in view, and the overview, already has a current paragraph."{% endif %}>
+                {%- if n_needs %}SUMMARIZE ({{ n_needs }}){% elif not aiq.portfolio_fresh %}SUMMARIZE OVERVIEW{% else %}SUMMARIZE (0){% endif -%}
+            </button>
+            {% if aiq.all|length > n_needs or aiq.portfolio_fresh %}
+            <button type="button" class="btn btn-secondary btn-sm" id="shipped-redo-btn">REDO ALL ({{ aiq.all|length }})</button>
+            {% endif %}
+            <span class="shipped-cost">~${{ '%.3f'|format(ai_cost_each) }} each on {{ ai_model_label }}</span>
+        </div>
+        {% else %}
+        <p class="shipped-empty">Log in again to write these: the app restarted, so it no longer holds your Anthropic key.</p>
+        {% endif %}
+    </section>
+
     <div class="changes-list">
         {% for r in report.updated %}
         <article class="change-card">
@@ -184,6 +215,14 @@
                     {% elif r.merge_count %}<span><strong>{{ r.merge_count }}</strong> merge{% if r.merge_count != 1 %}s{% endif %}</span>{% endif %}
                 </div>
             </header>
+            {% if r.ai %}
+            <div class="session-section shipped-repo">
+                <div class="session-section-label">In plain English
+                    {%- if r.ai.stale %} <span class="shipped-stale" title="{{ stale_tip }}">STALE</span>
+                    {%- elif r.ai.capped %}<span class="shipped-note"> · from the newest {{ r.ai.items }} of {{ r.ai.total_items }} items</span>{% endif %}</div>
+                <p class="session-section-text">{{ r.ai.text }}</p>
+            </div>
+            {% endif %}
             <div class="change-meta">
                 {% if r.last_at %}<span>last update {{ r.last_at|central_time }}</span>{% endif %}
                 <span>{{ r.active_days }} active day{% if r.active_days != 1 %}s{% endif %}</span>
@@ -323,6 +362,53 @@
     "range_dates": rng.dates_label
 } | tojson }}
 </script>
+
+{% if report.updated %}
+<script id="shipped-config" type="application/json">
+{{ {
+    "all": report.ai_targets.all,
+    "needs": report.ai_targets.needs,
+    "body": dict(range_args, group=active_group or ""),
+    "overview": "Overview: " ~ ((active_group ~ " group") if active_group else "all repos"),
+    "cost_each": ai_cost_each
+} | tojson }}
+</script>
+<script>
+(function () {
+    // SUMMARIZE: one POST per repo (live progress, one failure never sinks the
+    // batch), then the overview, then a reload. The server skips anything
+    // already current unless REDO ALL sends force.
+    var cfg = JSON.parse(document.getElementById('shipped-config').textContent);
+    var detail = 'Writing a short plain-English paragraph per repo from its merged PR titles and ' +
+                 'commit messages, then one overview. A few seconds each.';
+    function urlFor(target) {
+        if (target === cfg.overview) return '/api/stats/summarize-portfolio';
+        var i = target.indexOf('/');
+        return '/api/stats/summarize/' + encodeURIComponent(target.slice(0, i)) + '/' +
+               encodeURIComponent(target.slice(i + 1));
+    }
+    function run(targets, force) {
+        window.runGenerationQueue({
+            targets: targets.concat([cfg.overview]), urlFor: urlFor,
+            body: Object.assign({force: !!force}, cfg.body),
+            title: 'SUMMARIZING', detail: detail
+        });
+    }
+    var sumBtn = document.getElementById('shipped-summarize-btn');
+    if (sumBtn) sumBtn.addEventListener('click', function () { run(cfg.needs, false); });
+    var redoBtn = document.getElementById('shipped-redo-btn');
+    if (redoBtn) {
+        redoBtn.addEventListener('click', function () {
+            var n = cfg.all.length;
+            var est = Math.max(0.01, (n + 1) * cfg.cost_each).toFixed(2);
+            if (!confirm('Rewrite all ' + n + ' repo paragraph' + (n === 1 ? '' : 's') +
+                         ' and the overview? Uses the API for each (about $' + est + ').')) return;
+            run(cfg.all, true);
+        });
+    }
+})();
+</script>
+{% endif %}
 
 <script>
 (function () {
