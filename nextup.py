@@ -191,16 +191,19 @@ def build_do_next(inflight_items: list[dict] | None, trackers: dict | None,
         raw = {n.get("id"): n for n in (tracker.get("next_actions") or []) if isinstance(n, dict)}
         for a in open_tracker_actions(tracker):
             pri, status = a.get("priority"), a.get("status")
-            if pri not in ("P0", "P1"):
+            if status == "awaiting_deploy":
+                tier = "deploy"  # shipped in code: confirm it's live, whatever the priority
+            elif pri not in ("P0", "P1"):
                 hidden_low += 1
                 continue
-            if status == "blocked":
+            elif status == "blocked":
                 tier = "blocked"
-            elif status == "awaiting_deploy":
-                tier = "deploy"
             else:
                 tier = "p0" if pri == "P0" else "p1"
-            busy.add(full)
+            if tier != "blocked":
+                # BLOCKED ranks below PLANNED: a repo whose only item is
+                # blocked still gets its planned step.
+                busy.add(full)
             why = {"blocked": f"Blocked{': ' + a['status_note'] if a.get('status_note') else ''}.",
                    "deploy": "Shipped in code; confirm it's live, then mark it shipped in Tracker.",
                    }.get(tier, f"{pri} tracker action ({status.replace('_', ' ')})."

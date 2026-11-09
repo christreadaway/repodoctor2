@@ -31,7 +31,8 @@ def scan_repo(name="proj", owner="chris", **kw):
     """A repo dict shaped like github_client.scan_repo_lite's output."""
     r = {
         "owner": owner, "name": name, "full_name": f"{owner}/{name}",
-        "default_branch": "main", "private": True, "html_url": f"https://github.com/{owner}/{name}",
+        "default_branch": "main", "private": True, "archived": False, "fork": False,
+        "html_url": f"https://github.com/{owner}/{name}",
         "description": "", "created_at": "2025-01-01T00:00:00Z", "updated_at": ago(2),
         "pushed_at": ago(2), "total_branch_count": 1, "non_default_branch_count": 0,
         "henry_branch_count": 0, "non_henry_branch_count": 1, "branch_names": ["main"],
@@ -270,7 +271,12 @@ class TestBranchesCheckFromInflight(unittest.TestCase):
         items = [item("a", "stale", repo="other"), item("a", "stale", owner="someorg"),
                  item("henry-x", "stale"), "junk", None, item("", "stale"), {"repo": "proj", "kind": "stale"}]
         c = health.check_branches(with_branches("a", "henry-x"), items)
-        self.assertEqual((c["stale"], c["points"]), (0, 25))
+        # Other repos' stale items never count against this one. In Flight
+        # hasn't seen this repo's "a" branch, so the scan count is used
+        # (Session 24 review H1) — 1 open branch, full points.
+        self.assertEqual((c["source"], c["points"]), ("scan", 25))
+        self.assertNotIn("stale branch", c["detail"])
+        self.assertIn("hasn't read it yet", c["detail"])
 
     def test_branch_gone_from_scan_is_not_counted(self):
         # In Flight read it, but the newer scan no longer lists it (deleted).
@@ -673,6 +679,10 @@ class TestDashboardRoute(_RouteBase):
             {"owner": "chris", "repo": "messyrepo", "branch": "old-a", "kind": "stale"},
             {"owner": "chris", "repo": "messyrepo", "branch": "old-b", "kind": "complete"},
             {"owner": "chris", "repo": "messyrepo", "branch": "old-c", "kind": "merge"},
+            # In Flight reads every non-default branch; the rest are in progress.
+            {"owner": "chris", "repo": "messyrepo", "branch": "old-d", "kind": "continue"},
+            {"owner": "chris", "repo": "messyrepo", "branch": "old-e", "kind": "continue"},
+            {"owner": "chris", "repo": "messyrepo", "branch": "old-f", "kind": "finish"},
         ], "gathered_at": "2026-11-01T10:00:00+00:00", "failed_repos": []})
         html = self.client.get("/").get_data(as_text=True)
         self.assertIn("1 stale branch and 1 merged branch not deleted.", html)
@@ -787,3 +797,46 @@ class TestScanCarriesArchivedAndFork(unittest.TestCase):
         self.assertIs(err["archived"], True)
         self.assertIs(err["fork"], True)
         self.assertEqual(health.grade_repo(err)["grade"], "—")
+
+
+
+class TestInflightCoverage(unittest.TestCase):
+    """Review H1: an In Flight cache with no items for a repo must not make a
+    repo with open branches read as 'No branches besides main'."""
+
+    def repo(self, branches):
+        return {"owner": "o", "name": "r", "default_branch": "main",
+                "branch_names": ["main"] + branches, "non_default_branch_count": len(branches)}
+
+    def test_branches_unseen_by_inflight_fall_back_to_scan(self):
+        r = self.repo([f"claude/b{i}" for i in range(8)])
+        c = health.check_branches(r, [])
+        self.assertEqual(c["source"], "scan")
+        self.assertIn("8 open branches", c["detail"])
+        self.assertIn("hasn't read all of them", c["detail"])
+        self.assertNotIn("No branches besides", c["detail"])
+
+    def test_partly_seen_falls_back_too(self):
+        r = self.repo(["claude/a", "claude/b"])
+        items = [{"owner": "o", "repo": "r", "branch": "claude/a", "kind": "stale"}]
+        self.assertEqual(health.check_branches(r, items)["source"], "scan")
+
+    def test_fully_seen_uses_inflight(self):
+        r = self.repo(["claude/a", "claude/b"])
+        items = [{"owner": "o", "repo": "r", "branch": "claude/a", "kind": "stale"},
+                 {"owner": "o", "repo": "r", "branch": "claude/b", "kind": "complete"}]
+        c = health.check_branches(r, items)
+        self.assertEqual((c["source"], c["stale"], c["merged"]), ("inflight", 1, 1))
+
+    def test_no_branches_with_empty_inflight_is_still_tidy(self):
+        c = health.check_branches(self.repo([]), [])
+        self.assertIn("No branches besides main", c["detail"])
+
+    def test_grade_scan_ignores_inflight_for_truncated_repos(self):
+        r = with_branches("a")
+        key = health.repo_key(r)
+        items = [item("a", "stale")]
+        full = health.grade_scan([r], {"items": items, "failed_repos": []})
+        trunc = health.grade_scan([r], {"items": items, "truncated_repos": {key: 40}})
+        src = lambda rep: {c["key"]: c for c in rep["grades"][key]["checks"]}["branches"]["source"]
+        self.assertEqual((src(full), src(trunc)), ("inflight", "scan"))

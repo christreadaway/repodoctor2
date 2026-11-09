@@ -148,13 +148,17 @@
                 <label for="new_anthropic_key">New Anthropic API key</label>
                 <input type="password" id="new_anthropic_key" name="anthropic_key" required
                        placeholder="sk-ant-xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
-                <span class="form-hint">Checked with Anthropic before it's saved. A key Anthropic rejects is not saved.</span>
+                <span class="form-hint">Checked with Anthropic before it's saved. A key Anthropic rejects, or that doesn't look like a key, is not saved.</span>
             </div>
             <div class="form-group">
                 <label for="key_password">App password</label>
                 <input type="password" id="key_password" name="password" required
                        placeholder="The password you unlock RepoDoctor with" autocomplete="current-password">
                 <span class="form-hint">Needed to re-encrypt your keys. Your GitHub token stays as it is.</span>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label"><input type="checkbox" name="save_unverified" value="1">
+                    Save even if it can't be checked (only if Anthropic is unreachable right now)</label>
             </div>
             <button type="submit" class="btn btn-primary">SAVE KEY</button>
         </form>

@@ -250,6 +250,19 @@ def check_branches(repo: dict, inflight_items: list[dict] | None = None) -> dict
             if existing is not None and branch not in existing:
                 continue
             mine.append(i)
+        # Only trust In Flight for this repo when it has actually seen every
+        # branch the scan lists. Branches made after the last In Flight
+        # refresh (or a repo In Flight skipped as tidy) would otherwise read
+        # as "no branches besides main" — an A for a repo with 8 open branches.
+        scan_branches = ({b for b in existing
+                          if isinstance(b, str) and b and b != default and not _is_henry(b, default)}
+                         if existing is not None else None)
+        seen = {i.get("branch") for i in mine}
+        n_scan = _open_branch_count(repo)
+        covered = (not (scan_branches - seen)) if scan_branches is not None else (
+            n_scan is None or n_scan <= len(mine))
+        if not covered:
+            return _scan_branch_check(repo, label, default, unseen=True)
         stale = sum(1 for i in mine if i.get("kind") == "stale")
         merged = sum(1 for i in mine if i.get("kind") == "complete")
         dead = stale + merged
@@ -274,13 +287,26 @@ def check_branches(repo: dict, inflight_items: list[dict] | None = None) -> dict
         return _check("branches", label, status, points, WEIGHT_BRANCHES, detail,
                       source="inflight", stale=stale, merged=merged, live=live)
 
+    return _scan_branch_check(repo, label, default)
+
+
+def _scan_branch_check(repo: dict, label: str, default: str, unseen: bool = False) -> dict:
+    """The gentler proxy: open-branch count from the scan. `unseen`: In Flight
+    has data but hasn't read (all of) this repo's branches yet."""
     n = _open_branch_count(repo)
+    note = ""
+    if unseen and n:
+        note = ("In flight hasn't read it yet; refresh it to see whether it's stale or merged."
+                if n == 1 else
+                "In flight hasn't read all of them yet; refresh it to see which are stale or merged.")
     if n is None:
         return _not_scored("branches", label, "The scan has no branch list for this repo. Re-scan to check.",
                            source="scan")
     points, status = _ladder(n, OPEN_BRANCH_LADDER, OPEN_BRANCH_FLOOR)
     if n == 0:
         detail = f"No branches besides {default}."
+    elif note:
+        detail = f"{_plural(n, 'open branch')}. {note}"
     elif status == "ok":
         detail = f"{_plural(n, 'open branch')}."
     else:
@@ -413,6 +439,10 @@ def grade_repo(repo: dict, inflight_items: list[dict] | None = None,
         else:
             summary = (f"{score}/100. {_FIX_PHRASES[worst['key']]} alone lifts it to "
                        f"{lifted} ({letter_for(lifted)}).")
+    if grade in ("D", "F") and "archived" not in repo:
+        # Scans before Session 24 didn't record GitHub's archived / fork
+        # flags, so an archived repo can't be exempted until a re-scan.
+        summary += " If it's archived or a fork on GitHub, re-scan so it isn't graded."
     result = {
         "grade": grade,
         "score": score,
@@ -460,6 +490,11 @@ def grade_scan(repos: list[dict], inflight: dict | None = None,
             if isinstance(i, dict):
                 items_by_repo.setdefault(f"{i.get('owner')}/{i.get('repo')}", []).append(i)
         failed = {f for f in (inflight.get("failed_repos") or []) if isinstance(f, str)}
+        # Repos In Flight stopped comparing at its branch cap: its counts are
+        # partial, so they fall back to the scan count like failed repos.
+        trunc = inflight.get("truncated_repos")
+        if isinstance(trunc, dict):
+            failed |= {f for f in trunc if isinstance(f, str)}
     tags_by_name: dict[str, list[str]] = {}
     for tag, members in (groups or {}).items():
         for m in members or []:

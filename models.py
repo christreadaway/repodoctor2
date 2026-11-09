@@ -832,7 +832,8 @@ def get_activity_summaries() -> dict:
     out = {}
     for section in ("repos", "portfolio"):
         entries = data.get(section)
-        out[section] = ({k: v for k, v in entries.items() if isinstance(v, dict)}
+        out[section] = ({k: v for k, v in entries.items()
+                         if isinstance(v, dict) and isinstance(v.get("text", ""), str)}
                         if isinstance(entries, dict) else {})
     return out
 
@@ -902,9 +903,48 @@ INFLIGHT_PATH = os.path.join(DATA_DIR, "inflight.json")
 INFLIGHT_LOG_PATH = os.path.join(DATA_DIR, "logs", "inflight.log")
 
 
+_INFLIGHT_STR_FIELDS = ("repo", "owner", "branch", "kind", "label", "topic", "text", "base",
+                        "branch_url", "html_url", "last_activity_at", "last_commit_at", "session_url")
+
+
+def _clean_inflight_item(i: dict) -> dict:
+    """Coerce one cached In Flight item to the shapes every page expects, so
+    a hand-edited data/inflight.json can't 500 In Flight, Do next, Weekly
+    review, Portfolio or My Repos."""
+    i = dict(i)
+    for k in _INFLIGHT_STR_FIELDS:
+        # Missing or wrong-typed: several pages and exports index these
+        # directly (i["kind"], i["topic"], ...), so fill them in.
+        if not isinstance(i.get(k), str):
+            i[k] = ""
+    for k in ("pr", "merged_pr"):
+        if i.get(k) is not None and not isinstance(i[k], dict):
+            i[k] = None
+    for k in ("ahead_by", "behind_by", "age_days", "session_count"):
+        if k in i and (not isinstance(i[k], int) or isinstance(i[k], bool)):
+            i[k] = None if k != "session_count" else 0
+    if not isinstance(i.get("commits", []), list):
+        i["commits"] = []
+    else:
+        i["commits"] = [c for c in i.get("commits", []) if isinstance(c, dict)]
+    return i
+
+
 def get_inflight() -> dict | None:
     data = _load_json(INFLIGHT_PATH)
-    return data if isinstance(data, dict) and data.get("items") is not None else None
+    if not isinstance(data, dict) or data.get("items") is None:
+        return None
+    items = data.get("items")
+    data = dict(data)
+    data["items"] = [_clean_inflight_item(i) for i in items if isinstance(i, dict)] \
+        if isinstance(items, list) else []
+    if not isinstance(data.get("gathered_at"), str):
+        data["gathered_at"] = ""
+    if not isinstance(data.get("failed_repos"), list):
+        data["failed_repos"] = []
+    if not isinstance(data.get("truncated_repos"), dict):
+        data["truncated_repos"] = {}
+    return data
 
 
 def save_inflight(data: dict):

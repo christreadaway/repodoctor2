@@ -184,12 +184,16 @@ class GitHubClient:
                     "affiliation": "owner,collaborator,organization_member"},
         )
 
-    def get_branches(self, owner: str, repo: str) -> list[dict]:
-        """Fetch all branches for a repo."""
-        return self._get_paginated(
-            f"{GITHUB_API}/repos/{owner}/{repo}/branches",
-            f"get_branches {owner}/{repo}",
-        )
+    def get_branches(self, owner: str, repo: str, strict: bool = False) -> list[dict]:
+        """Fetch all branches for a repo. strict=True raises GitHubFetchError
+        on a failed page (rate limit, 5xx) instead of returning a partial or
+        empty list; an empty repo (409) is still []."""
+        url = f"{GITHUB_API}/repos/{owner}/{repo}/branches"
+        if strict:
+            items, _truncated = self._get_paginated_strict(
+                url, f"branches {owner}/{repo}", max_pages=50)
+            return items
+        return self._get_paginated(url, f"get_branches {owner}/{repo}")
 
     def compare_branches(self, owner: str, repo: str, base: str, head: str) -> dict | None:
         """Compare two branches. Returns comparison data or None on error."""
@@ -363,7 +367,8 @@ class GitHubClient:
         parts = path.split("/")
         return any(p in self._SKIP_PATH_SEGMENTS for p in parts[:-1])
 
-    def check_required_files(self, owner: str, repo: str, ref: str | None = None) -> tuple[dict[str, bool], dict[str, str]]:
+    def check_required_files(self, owner: str, repo: str, ref: str | None = None,
+                             strict: bool = False) -> tuple[dict[str, bool], dict[str, str]]:
         """Check which required project files exist anywhere in the repo.
 
         Searches recursively and prefers root-level matches, falling back to the
@@ -373,7 +378,9 @@ class GitHubClient:
             (results, actual_names) where results maps display_name -> bool,
             and actual_names maps display_name -> full path (only for found files).
         """
-        all_paths = self.get_all_file_paths(owner, repo, ref=ref)
+        # strict: a failed tree read raises instead of reading as "no files",
+        # which the scan would otherwise report as every doc missing (an F).
+        all_paths = self.get_all_file_paths(owner, repo, ref=ref, strict=strict)
 
         # Only these extensions count as project docs. Without this filter,
         # .github/workflows/claude.yml satisfies "CLAUDE.md", license.py
@@ -738,7 +745,9 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
     name = repo["name"]
     default_branch = repo.get("default_branch", "main")
 
-    branches = client.get_branches(owner, name)
+    # Strict reads: a rate limit or 5xx must become this repo's error row
+    # (shown as "—", retried next scan), never "0 branches" / "no docs".
+    branches = client.get_branches(owner, name, strict=True)
     total_branch_count = len(branches)
     non_default_count = total_branch_count - 1 if total_branch_count > 0 else 0
 
@@ -753,7 +762,8 @@ def scan_repo_lite(client: GitHubClient, repo: dict) -> dict:
     )
     non_henry_branch_count = total_branch_count - henry_branch_count
 
-    required_files, actual_names = client.check_required_files(owner, name, ref=default_branch)
+    required_files, actual_names = client.check_required_files(owner, name, ref=default_branch,
+                                                                strict=True)
 
     # Code size via /languages (bytes per language).
     languages = client.get_language_bytes(owner, name)

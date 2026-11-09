@@ -906,6 +906,10 @@ def _settings_update_anthropic_key() -> None:
     if not new_key:
         flash("No Anthropic key entered. Paste the new key, then click SAVE KEY.", "error")
         return
+    if not ai.looks_like_anthropic_key(new_key):
+        flash("That doesn't look like an Anthropic API key (they start with sk-ant-). "
+              "Nothing was changed.", "error")
+        return
     creds = security.decrypt_credentials(password) if password else None
     if creds is None:
         logger.warning("Anthropic key update rejected: wrong or missing app password")
@@ -918,6 +922,15 @@ def _settings_update_anthropic_key() -> None:
         models.log_action("anthropic_key", "all", "all", f"Settings update rejected: {message}")
         flash(f"Not saved: {message} Your previous key is unchanged. "
               "Copy a fresh key from console.anthropic.com and try again.", "error")
+        return
+    if status != ai.KEY_OK and not request.form.get("save_unverified"):
+        # Couldn't reach Anthropic: saving now could replace a working key with
+        # a typo nobody checked. Only on an explicit "save anyway".
+        logger.warning("Anthropic key update held: could not verify (%s)", message)
+        models.log_action("anthropic_key", "all", "all", f"Settings update held, unverified: {message}")
+        flash(f"Not saved yet: couldn't check the new key with Anthropic ({message}) "
+              "Your previous key is unchanged. Try again in a minute, or tick "
+              "\"Save even if it can't be checked\" to save it anyway.", "warning")
         return
 
     try:
@@ -935,7 +948,7 @@ def _settings_update_anthropic_key() -> None:
     if status == ai.KEY_OK:
         flash("Anthropic key saved and verified: AI features are ready.", "success")
     else:
-        flash(f"Anthropic key saved, but it couldn't be verified right now: {message} "
+        flash(f"Anthropic key saved without a check (you chose save anyway): {message} "
               "Use CHECK KEY in a minute, or it will be checked at your next login.", "warning")
 
 
@@ -1563,7 +1576,15 @@ def _stats_attach_ai(report: dict, active_group: str, model: str) -> None:
         logger.warning("stats: could not read activity summaries: %s", e)
         models.log_activity_event("summaries_load_error", error=f"{type(e).__name__}: {str(e)[:200]}")
         store = {"repos": {}, "portfolio": {}}
-    activity.attach_summaries(report, store, model, active_group)
+    try:
+        activity.attach_summaries(report, store, model, active_group)
+    except Exception as e:  # noqa: BLE001 - odd cached data must not 500 Stats / Review
+        logger.warning("stats: could not attach activity summaries: %s", e)
+        models.log_activity_event("summaries_attach_error", error=f"{type(e).__name__}: {str(e)[:200]}")
+        for r in report.get("rows", []):
+            r["ai"] = None
+        report["ai_portfolio"] = None
+        report["ai_targets"] = {"all": [], "needs": [], "portfolio_fresh": False, "fingerprint": ""}
 
 
 def _stats_markdown(report: dict, active_group: str) -> str:
@@ -1703,8 +1724,9 @@ def _stats_ai_error(e: Exception) -> str:
 def _stats_redact(text: str, creds: dict) -> str:
     """Belt and braces: an exception string must never carry the API key
     into the log file."""
-    key = (creds or {}).get("anthropic_key") or ""
-    return text.replace(key, "[redacted]") if len(key) >= 8 else text
+    # ai._redact also catches any sk-ant-… shaped token, so a key that a
+    # caller truncated mid-way still can't leak a usable prefix.
+    return ai._redact(text, (creds or {}).get("anthropic_key") or "")
 
 
 def _stats_ai_context():
@@ -1773,7 +1795,7 @@ def stats_summarize_repo(owner, name):
         models.log_activity_event(
             "summarize_error", repo=full, range=rng.key, fingerprint=fp, model=model,
             forced=ctx["force"], elapsed_ms=_stats_ms(t0),
-            error=_stats_redact(f"{type(e).__name__}: {str(e)[:300]}", ctx["creds"]))
+            error=_stats_redact(f"{type(e).__name__}: {str(e)}", ctx["creds"])[:340])
         return jsonify({"error": _stats_ai_error(e)}), 502
 
     usage = out.pop("_usage", None) or {}
@@ -1824,7 +1846,7 @@ def stats_summarize_portfolio():
         models.log_activity_event(
             "summarize_error", repo="(overview)", group=group, range=rng.key, fingerprint=fp,
             model=model, forced=ctx["force"], elapsed_ms=_stats_ms(t0),
-            error=_stats_redact(f"{type(e).__name__}: {str(e)[:300]}", ctx["creds"]))
+            error=_stats_redact(f"{type(e).__name__}: {str(e)}", ctx["creds"])[:340])
         return jsonify({"error": _stats_ai_error(e)}), 502
 
     usage = out.pop("_usage", None) or {}

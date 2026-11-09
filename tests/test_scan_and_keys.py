@@ -108,7 +108,7 @@ class FakeScanClient:
             }
 
     # scan_repo_lite's first call: where overlap is measured and faults fire.
-    def get_branches(self, owner, name):
+    def get_branches(self, owner, name, strict=False):
         with self.lock:
             self.active += 1
             self.max_active = max(self.max_active, self.active)
@@ -125,7 +125,7 @@ class FakeScanClient:
             with self.lock:
                 self.active -= 1
 
-    def check_required_files(self, owner, name, ref=None):
+    def check_required_files(self, owner, name, ref=None, strict=False):
         s = self.spec[name]
         return dict(s["files"]), dict(s["paths"])
 
@@ -765,13 +765,17 @@ class TestSettingsKeyUpdate(_AppStateMixin, unittest.TestCase):
                                    "anthropic_key": "sk-ant-api03-OLDKEYsecret"}
         self.login_session()
 
-    def _update(self, key=None, password=None, verify_result=("ok", "Anthropic accepted the API key.")):
+    def _update(self, key=None, password=None, verify_result=("ok", "Anthropic accepted the API key."),
+                save_unverified=False):
+        data = {
+            "action": "update_anthropic_key",
+            "anthropic_key": self.NEW_KEY if key is None else key,
+            "password": self.PASSWORD if password is None else password,
+        }
+        if save_unverified:
+            data["save_unverified"] = "1"
         with patch.object(ai, "verify_anthropic_key", return_value=verify_result) as verify:
-            resp = self.client.post("/settings", data={
-                "action": "update_anthropic_key",
-                "anthropic_key": self.NEW_KEY if key is None else key,
-                "password": self.PASSWORD if password is None else password,
-            })
+            resp = self.client.post("/settings", data=data)
         self.assertEqual(resp.status_code, 302)
         return verify
 
@@ -804,14 +808,37 @@ class TestSettingsKeyUpdate(_AppStateMixin, unittest.TestCase):
         # The loaded (old) key's status is untouched by a rejected candidate.
         self.assertEqual(app_module.get_anthropic_key_status()["status"], "ok")
 
-    def test_unverified_saves_with_a_warning(self):
+    def test_unverified_is_held_unless_save_anyway(self):
+        # Session 24 review M2: offline, an unchecked key must not replace a
+        # working one by default.
         self._update(verify_result=("unverified", "Timed out reaching Anthropic."))
+        self.assertEqual(security.decrypt_credentials(self.PASSWORD)["anthropic_key"],
+                         "sk-ant-api03-OLDKEYsecret")
+        (cat, msg), = self.flashes()
+        self.assertEqual(cat, "warning")
+        self.assertIn("Not saved yet", msg)
+        self.assertIn("Save even if it can't be checked", msg)
+
+    def test_unverified_with_save_anyway_saves_with_a_warning(self):
+        self._update(verify_result=("unverified", "Timed out reaching Anthropic."), save_unverified=True)
         self.assertEqual(security.decrypt_credentials(self.PASSWORD)["anthropic_key"], self.NEW_KEY)
         (cat, msg), = self.flashes()
         self.assertEqual(cat, "warning")
-        self.assertIn("saved, but it couldn't be verified", msg)
+        self.assertIn("saved without a check", msg)
         self.assertIn("Timed out", msg)
         self.assertEqual(app_module.get_anthropic_key_status()["status"], "unverified")
+
+    def test_text_that_is_not_a_key_is_refused_before_any_check(self):
+        for junk in ("my password is hunter2", "sk-ant-short", "ghp_abcdefghijklmnopqrstuvwxyz0123"):
+            verify = self._update(key=junk)
+            verify.assert_not_called()
+            self.assertEqual(security.decrypt_credentials(self.PASSWORD)["anthropic_key"],
+                             "sk-ant-api03-OLDKEYsecret", junk)
+            (cat, msg), = self.flashes()
+            self.assertEqual(cat, "error")
+            self.assertIn("doesn't look like an Anthropic API key", msg)
+            with self.client.session_transaction() as sess:
+                sess.pop("_flashes", None)
 
     def test_wrong_password_changes_nothing_and_skips_the_check(self):
         verify = self._update(password="nope")
@@ -856,7 +883,7 @@ class TestSettingsKeyUpdate(_AppStateMixin, unittest.TestCase):
             with p:
                 self.client.post("/settings", data={
                     "action": "update_anthropic_key", "anthropic_key": self.NEW_KEY,
-                    "password": self.PASSWORD})
+                    "password": self.PASSWORD, "save_unverified": "1"})
         page = self.client.get("/settings").get_data(as_text=True)
         blob = "\n".join(cm.output) + json.dumps(self.flashes()) + page
         self.assertNotIn("NEWKEYsecret", blob)

@@ -708,8 +708,11 @@ def normalize_summary(raw, max_chars: int = _REPO_MAX_CHARS) -> str:
 
 
 def _redact(text: str, api_key: str) -> str:
-    """Never let an exception string carry the API key into app.log."""
-    return text.replace(api_key, "[redacted]") if api_key and len(api_key) >= 8 else text
+    """Never let an exception string carry the API key into app.log. Redact
+    BEFORE truncating (a key cut mid-way no longer matches the full key), and
+    also scrub anything sk-ant-… shaped."""
+    from ai_analyzer import _redact as _scrub
+    return _scrub(text, api_key or "")
 
 
 def summarize_repo(api_key: str, row: dict, model: str = DEFAULT_MODEL) -> dict:
@@ -726,7 +729,7 @@ def summarize_repo(api_key: str, row: dict, model: str = DEFAULT_MODEL) -> dict:
         text = normalize_summary(parsed, _REPO_MAX_CHARS)
     except Exception as e:
         logger.warning("what-we-shipped paragraph failed for %s: %s: %s",
-                       row.get("full_name", "?"), type(e).__name__, _redact(str(e)[:200], api_key))
+                       row.get("full_name", "?"), type(e).__name__, _redact(str(e), api_key)[:200])
         raise
     return {"text": text, "items": items["shown"], "total_items": items["total"],
             "capped": items["capped"], "_usage": usage}
@@ -807,7 +810,7 @@ def summarize_portfolio(api_key: str, notes: list[dict], total_repos: int, group
         text = normalize_summary(parsed, _PORTFOLIO_MAX_CHARS)
     except Exception as e:
         logger.warning("what-we-shipped overview failed (group=%r): %s: %s",
-                       group, type(e).__name__, _redact(str(e)[:200], api_key))
+                       group, type(e).__name__, _redact(str(e), api_key)[:200])
         raise
     return {"text": text, "_usage": usage}
 

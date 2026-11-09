@@ -11,6 +11,7 @@ import re
 import threading
 
 import anthropic
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +221,38 @@ def _redact(text: str, api_key: str) -> str:
     return _KEY_SHAPE.sub("[redacted]", text)
 
 
+ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
+# Anthropic API keys look like sk-ant-api03-…; used to refuse obvious
+# non-keys before they can replace a working one in Settings.
+KEY_FORMAT = re.compile(r"^sk-ant-[A-Za-z0-9_\-]{20,}$")
+
+
+def looks_like_anthropic_key(value: str | None) -> bool:
+    return isinstance(value, str) and bool(KEY_FORMAT.match(value.strip()))
+
+
+def _probe_models_http(key: str) -> tuple[str, str]:
+    """GET /v1/models?limit=1 without the SDK. Same outcomes as the SDK path."""
+    try:
+        resp = requests.get(
+            ANTHROPIC_MODELS_URL, params={"limit": 1},
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+            timeout=(VERIFY_CONNECT_SECONDS, VERIFY_READ_SECONDS),
+        )
+    except requests.Timeout:
+        return KEY_UNVERIFIED, "Timed out reaching Anthropic."
+    except requests.RequestException as e:
+        logger.warning("Anthropic key check (http): %s: %s", type(e).__name__, _redact(str(e), key)[:200])
+        return KEY_UNVERIFIED, "Couldn't connect to Anthropic (network error)."
+    code = resp.status_code
+    if code == 200:
+        return KEY_OK, "Anthropic accepted the API key."
+    if code == 401:
+        return KEY_INVALID, "Anthropic rejected the API key (HTTP 401): it's wrong, revoked, or disabled."
+    kind = "server error" if code >= 500 else {403: "permission denied", 429: "rate limited"}.get(code, "unexpected response")
+    return KEY_UNVERIFIED, f"Anthropic returned HTTP {code} ({kind})."
+
+
 def verify_anthropic_key(api_key: str | None) -> tuple[str, str]:
     """Check an Anthropic API key with the cheapest call that proves it works:
     GET /v1/models?limit=1, which spends no tokens.
@@ -250,7 +283,15 @@ def verify_anthropic_key(api_key: str | None) -> tuple[str, str]:
                 max_retries=0,
                 timeout=anthropic.Timeout(VERIFY_READ_SECONDS, connect=VERIFY_CONNECT_SECONDS),
             )
-            client.models.list(limit=1)
+            models_api = getattr(client, "models", None)
+            if models_api is not None and hasattr(models_api, "list"):
+                client.models.list(limit=1)
+            else:
+                # Older SDKs the requirements still allow (anthropic 0.40.x)
+                # have no Models resource; ask the same endpoint directly so
+                # the check works on any installed version.
+                outcome["result"] = _probe_models_http(key)
+                return
             outcome["result"] = (KEY_OK, "Anthropic accepted the API key.")
         except anthropic.AuthenticationError:
             outcome["result"] = (
