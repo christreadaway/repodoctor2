@@ -113,6 +113,8 @@ The matcher returns the **actual full path** found, so downstream features (fres
 - Full scan mode (`scan_repo`): complete branch analysis with commit history, file changes, classification — for deep repo inspection
 - Archive tag creation: creates `archive/[branch]/[date]` tags before branch deletion
 
+**Parallel scan (Session 24):** `/scan` reads repos 8 at a time (`_scan_repos_parallel`), returns them in the original order so output is identical to the old one-at-a-time loop, cancels the rest on a GitHub 401 (global handler shows the PAT remedy), keeps the per-repo error row for any other failure, and logs "Scan finished: N repos in X.Xs, E errors" plus elapsed time and error count in the action log. Each row now also carries GitHub's `archived` and `fork` flags (from the repo list; no extra calls).
+
 ### 4.6 AI-Powered Branch Analysis
 
 **Files:** `ai_analyzer.py` (157 lines)
@@ -230,6 +232,8 @@ The chosen view is remembered per browser (localStorage, wrapped so a blocked st
 **Fetching + cache:** one parallel read (8 workers) of every scanned repo back 90 days (`activity.default_floor`) serves Week, Month and Quarter (and YTD from January to March) as local filters. YTD later in the year, or a custom range that runs through today, widens that read once. A custom range that ENDS in the past and starts before it gets its own bounded read (`since` → `until`, kept in a 6-slot LRU), so a busy repo's newer history can't crowd the old range out of a capped read. Caches are in memory, keyed by the scan snapshot the request started with, expire hourly, and are dropped on every scan; REFRESH re-reads and redirects back carrying only `range`/`from`/`to`/`group`, so a browser reload doesn't refetch. Fetches are serialized by a lock so two tabs don't double the API calls.
 
 **Failures are never shown as "no activity":** pagination is strict, so a rate limit, 5xx, 403 or 404 on any page marks that repo as unreadable (the message names the real cause: rate limit vs. SAML/access block vs. not found vs. GitHub error), the page names it in a warning, totals leave it out, KPI denominators read "of N read", and the empty state says "No activity found in the repos GitHub could read" instead of "Nothing landed". A failed repo is retried on a later view after a 5-minute backoff (a widening read carries the failure instead of hitting the repo again; REFRESH always re-reads). An empty repo (409) is simply idle. Caps: 5,000 commits and 1,000 closed PRs per repo per read; when a read hits a cap it records how far back it IS complete, and only ranges that start before that point are marked partial (banner + "Only partly read" list, never "Not updated"). A repo in the list with no read at all is shown as "Not read yet", never idle. A merge commit that landed in range without a PR still counts as an update (shown as "Merges (no PR)"), though not toward the commit total. If the app restarted and lost its GitHub connection, a cached read is still shown, marked offline.
+
+**What we shipped (AI, Session 24):** an optional plain-English paragraph per updated repo for the selected range, plus one overview for the portfolio or active group, for handing a quarter to a board or staff meeting. A "What we shipped" panel above the cards has SUMMARIZE (N) (repos lacking a fresh paragraph, then the overview) and REDO ALL, with a model-aware cost hint (~$0.005 each on Haiku); it runs the shared generation queue and reloads. Prompts use ONLY the repo's in-range merged PR titles, commit subjects and merges, with dates (capped at 150 items, and the prompt says when it was capped); output is structured JSON, 2–4 sentences, outcomes first. Paragraphs are cached in `data/activity_summaries.json` (newest 500 per section) keyed by a CONTENT fingerprint (model + repo + in-range commit SHAs + merged PR numbers, no dates), so Week / Month / Quarter reuse a paragraph when the work is the same; when the work changed, the last paragraph for that repo and range is shown marked STALE until SUMMARIZE rewrites it. Endpoints: `POST /api/stats/summarize/<owner>/<name>`, `POST /api/stats/summarize-portfolio` (JSON body: range/from/to, group, force; 401/404/502/503 JSON errors; nothing cached on failure; cost added to the session total). Both paragraphs flow into COPY FOR CLAUDE / DOWNLOAD .MD and into the Weekly review. Logged as `summarize`, `summarize_portfolio`, `summarize_error`, `summarize_skip` in `activity.log`; the API key is never logged.
 
 **Logging:** every fetch (repos, since, ok/errors, truncated repos, commit/PR totals, elapsed ms), per-repo failure, page view (range, group, cache hit, totals) and export goes to `data/logs/activity.log` (one JSON object per line) and through the root logger to `data/logs/app.log`.
 
@@ -413,6 +417,27 @@ P2/P3 tracker actions are counted, not listed. Each row: tier chip, repo (links 
 
 Works offline: if the app lost its GitHub connection and there's no cached read, Shipped and Gone quiet say so and the rest still renders. COPY FOR CLAUDE / DOWNLOAD .MD (`weekly-review-<date>.md`). Logged to `data/logs/nextup.log`.
 
+### 4.7m Health grade (My Repos column + Portfolio chip)
+
+**Files:** `health.py`, `app.py` (`_health_report`, `dashboard()`, Portfolio data), `portfolio.py`, `templates/dashboard.html`, `templates/portfolio.html`, `_macros.html` (`health_breakdown`), `models.py` (`log_health_event`)
+
+One letter per repo so neglected projects surface themselves, computed only from data the app already has (no API calls on page view):
+
+| Check | Points | Rule |
+|---|---|---|
+| Required docs (the 5 dashboard files) | 30 | 6 each; all 5 OK, 3–4 WARN, 0–2 FIX |
+| Docs current | 15 | The scan's `docs_updated` (same as the "Current?" column) |
+| Branches tidy | 25 | With In Flight data: STALE + merged-not-deleted branches (0 → 25, 1 → 15, 2–3 → 8, 4+ → 0); without it, extra-branch count from the scan (0–2 → 25, 3–5 → 15, 6+ → 5). Branches in progress cost nothing |
+| Recently active | 30 | Last push: ≤30 days 30, ≤90 20, ≤180 10, older 0 |
+
+A 90+, B 80+, C 70+, D 60+, F below. Checks the scan can't answer are left out and the score is rescaled (under 50 scoreable points → not graded). Not graded ("—", with the reason): scan error, archived or forked on GitHub (flags carried by the scan since Session 24), tagged "Archived", empty repo. The breakdown opens by click, tap or keyboard, lists every check with points and a plain-English fix, and names the single fix that lifts the grade most. My Repos gets a sortable Health column (lowest first, ungraded last) and a "Health D or F" tile. Each My Repos render logs the grade distribution to `data/logs/health.log`; grading can never take the page down.
+
+### 4.7n OPEN SESSION — back into the Claude Code session
+
+**Files:** `sessions.py` (`claude_session_url`, `safe_session_url`), `inflight.py`, `resume.py`, `nextup.py`, `_macros.html` (`open_session`), In Flight / Recent sessions / Resume / Do next / Weekly review templates
+
+Commits made by Claude Code carry a `Claude-Session: https://claude.ai/code/session_…` trailer. Every In Flight item and Recent-sessions card gets `session_url` (newest commit with a link wins, across all commits before truncation; falls back to the PR body) and `session_count`; the Resume packet picks the most relevant one and shows it at the top, and finish / needs-PR first prompts mention it. A cyan OPEN SESSION ↗ chip (new tab, `rel=noopener`) appears wherever a link is known, and Markdown exports include it. The parser only ever returns `^https://claude\.ai/code/session_[A-Za-z0-9_-]{1,128}$`; values read back from caches are re-checked with `safe_session_url` before reaching an href. Link counts are logged in the existing In Flight / sessions / resume events.
+
 ### 4.8 Settings & Preferences
 
 **Files:** `app.py` (settings route), `models.py`, `templates/settings.html`
@@ -423,6 +448,8 @@ Works offline: if the app lost its GitHub connection and there's no cached read,
 - **Excluded repos** — comma-separated list of repos to skip during scan
 - **Product spec management** — upload/view specs per repo for AI context
 - **Credential reset** — delete encrypted credentials and force re-setup
+
+**Anthropic key check (Session 24):** `ai_analyzer.verify_anthropic_key` makes one models-list call (no tokens), no retries, 2s connect / 2.5s read, hard 5s cap, and returns ok / invalid (empty key or 401) / unverified (timeout, network, 5xx, 429, 403). At login GitHub stays the gate: an invalid key still logs you in but flashes that summaries, briefs and recaps will fail and how to fix it; unverified only logs. Settings → Credentials shows the last result and has **Update Anthropic key** (new key + app password, re-encrypts credentials; a key Anthropic rejects is not saved, an unverifiable one is saved with a warning) and **CHECK KEY**. The key is never logged or echoed. "ok" proves the key works, not that the account has credit.
 
 ### 4.9 Data Persistence
 
@@ -446,6 +473,8 @@ All data stored as local JSON files — no database dependency.
 | Parsed conversations | `projects/conversations.json` | Until re-import |
 | Stats activity cache (commits + merged PRs per repo) | In-memory only (keyed by scan identity) | 1 hour, next scan, or REFRESH |
 | Stats activity log | `data/logs/activity.log` | Append-only; one JSON event per line |
+| What we shipped paragraphs | `data/activity_summaries.json` | Newest 500 per section; keyed by content fingerprint |
+| Health log / Do next + Review log | `data/logs/health.log`, `data/logs/nextup.log` | Append-only; one JSON event per line |
 
 ### 4.10 Session Cost Tracking
 
@@ -564,6 +593,8 @@ Flask Application (app.py)
 | GET | `/next/export.md` | Active | Do next as Markdown |
 | GET | `/review` | Active | Weekly review — shipped / waiting / gone quiet / next up (`?group=`) |
 | GET | `/review/export.md` | Active | Weekly review as Markdown |
+| POST | `/api/stats/summarize/<owner>/<name>` | Active | Write / refresh one repo's "What we shipped" paragraph for a range (JSON) |
+| POST | `/api/stats/summarize-portfolio` | Active | Write / refresh the range's overview paragraph (JSON) |
 | POST | `/inflight/refresh` | Active | Regather In Flight from GitHub and cache it |
 | GET | `/inflight/export.md` | Active | In Flight as a Markdown download |
 | GET | `/portfolio` | Active | Portfolio — projects by theme tag (`?tab=infra` for the infrastructure map) |

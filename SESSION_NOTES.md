@@ -1,11 +1,56 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 23
+**Total Sessions Logged:** 24
 **Date Range:** 2025-02-14 to 2026-11-09
-**Last Updated:** 2026-11-09 (Session 23)
+**Last Updated:** 2026-11-09 (Session 24)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 24 — 2026-11-09 (Do next, Weekly review, OPEN SESSION, health grade, What we shipped, parallel scan, key check)
+
+Branch: `claude/sweet-fermi-yt1v9m`, pushed to `main` on request. Asked for ideas to improve the app, then: "let's do 1, 2, 4, 5, 6, 7, 12 … test comprehensively and fix low→critical bugs, then update .md files and push to main … use multiple agents if helpful."
+
+### How it was built
+- Four builder agents in separate git worktrees (scan + key check; OPEN SESSION; health grade; What we shipped), this session built Do next + Weekly review, then merged all four branches and integrated them. Merge anchors (`[S24-x]` START/END blocks in `style.css` / `models.py` / `app.py`) kept parallel edits apart; the worktrees branched from the last pushed commit, so the CSS block conflicts were resolved by moving each block into its anchor.
+- Then two independent reviewers: one on backend correctness + security, one adversarial browser sweep of every touched screen at 375px and 1280px.
+
+### Decisions
+- **Do next replaces Recent sessions as the Next Up landing page.** Ranking is deterministic (MERGE oldest-first because PRs rot; FINISH / OPEN A PR / DECIDE newest-first because context is warm). P2/P3 tracker actions are counted, not listed. PLANNED only for repos with nothing else, capped at 12. Merged-branch cleanup is one row, not one per branch.
+- **Weekly review = last 7 days**, reusing the Stats 90-day cache (no extra GitHub read). "Gone quiet" = active in the last 90 days, silent for 21+.
+- **OPEN SESSION**: newest commit with a link wins; In Flight/Resume newest overall, Recent sessions newest within the card's window. One shared `open_session` macro.
+- **Health grade** weights activity and branch hygiene over doc freshness, so neglect drives the grade; unknown checks are rescaled out, not failed. A repo tagged "Archived" is not graded (a way to park repos).
+- **What we shipped** is keyed by content (commit SHAs + PR numbers), not dates, so rolling presets reuse paragraphs; buttons live in a panel (the header would wrap on a phone).
+- **Anthropic key**: GitHub stays the login gate; an invalid key warns, never blocks. Settings gained Update Anthropic key (re-encrypts with the app password) because the only option before was resetting every credential.
+
+### What We Built
+- `nextup.py` + `/next`, `/review` (+ `.md`), `templates/next.html`, `templates/review.html`, `do_next_item` macro, Next Up sub-tabs (wrap on phones), In Flight REFRESH `next` redirect, `data/logs/nextup.log`.
+- `sessions.claude_session_url` / `safe_session_url`; `session_url` + `session_count` on In Flight items and Recent-sessions cards; Resume `primary_session`; OPEN SESSION chips and export lines; link counts in existing logs.
+- `health.py` + Health column / tile on My Repos, chips on Portfolio, `health_breakdown` macro, `data/logs/health.log`; scan now carries GitHub's `archived` / `fork` flags.
+- Stats "What we shipped": prompts, capping, fingerprints, `attach_summaries`, `data/activity_summaries.json`, two POST endpoints, panel + per-card paragraphs + STALE, Markdown; Weekly review shows them.
+- `_scan_repos_parallel`; `ai_analyzer.verify_anthropic_key`; login warning; Settings key status + Update Anthropic key + CHECK KEY.
+
+### Bugs fixed while building
+- Next Up's five sub-tabs pushed every Next Up page 10px wider than a 375px phone → wrap on narrow screens.
+- Recent sessions: the direct-to-main card truncated before removing commits already shown on PR cards, hiding real direct pushes; PR commits beyond the 30 shown could reappear as direct pushes.
+- Resume first prompt clipped a long session URL at 375px.
+- My Repos 500'd on a scan row missing branch counts / file lists; a missing doc-freshness value read "Current? No" instead of "—".
+- Adding the Health column overflowed the table by 24px at 1280px; 28px-tall chips and a sticky tap highlight on phones.
+- Stats panel title color lost to a later selector; `.btn-sm` 23.7px tall on phones (now 40px under 640px).
+- Health's archived/fork exemptions could never fire (the scan dropped the flags) → carried through.
+
+REVIEW_PLACEHOLDER
+
+### Tests
+TESTS_PLACEHOLDER
+
+### Next Steps
+1. Pull `main` and launch as usual (no new dependencies). Next Up now opens on **Do next**; press REFRESH FROM GITHUB once so branches and PRs are current.
+2. Monday: **Weekly review**. For plain-English paragraphs, Stats → Week → SUMMARIZE first.
+3. My Repos: sort by **Health** and open the breakdown on the lowest grades; tag repos you've parked as "Archived" to stop grading them.
+4. If you change the Anthropic key, use Settings → Update Anthropic key.
 
 ---
 

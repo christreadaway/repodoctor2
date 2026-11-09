@@ -1,7 +1,7 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-11-09 (Session 23 — Stats: what changed across every repo for Week / Month / Quarter / YTD / any custom date range)
-**Current Branch:** `main` (Session 23 pushed to `main`; also on `claude/sweet-fermi-yt1v9m`)
+**Last Updated:** 2026-11-09 (Session 24 — Do next, Weekly review, OPEN SESSION links, health grade, What we shipped (AI), parallel scan, Anthropic key check)
+**Current Branch:** `main` (Sessions 23-24 pushed to `main`; also on `claude/sweet-fermi-yt1v9m`)
 **Overall Progress:** ~97%
 
 ---
@@ -12,7 +12,23 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 
 ---
 
-## Latest — Session 23 (2026-11-09)
+## Latest — Session 24 (2026-11-09)
+
+Seven improvements picked from the ideas list (1, 2, 4, 5, 6, 7, 12), built in parallel by four agents plus this session, merged, then reviewed independently.
+
+- **Do next (Next Up → Do next, now the Next Up landing page).** One ranked list across every repo: MERGE (oldest PR first) → FINISH → CONFIRM LIVE → P0 → OPEN A PR → P1 → DECIDE → PLANNED → CLEAN UP (one line for all merged branches) → BLOCKED. Each row has a reason, links, COPY PROMPT for a fresh Claude Code session, and OPEN SESSION when known. Reads the In Flight cache + trackers + Projects summaries (no API calls); REFRESH FROM GITHUB re-reads branches and comes back.
+- **Weekly review (Next Up → Weekly review).** Shipped this week (KPI + per repo, with AI paragraphs when Stats has them), Waiting on you, Gone quiet (active in 90 days, silent 21+, plus stale branches), Next up. COPY / .MD. A Monday banner on Do next points here.
+- **OPEN SESSION.** The Claude Code session link in commit trailers (or the PR body) becomes a one-click button on In Flight, Recent sessions, Resume, Do next and Weekly review, and in their exports. Strictly validated; cached values re-checked.
+- **Health grade (A-F)** on My Repos (sortable column + "Health D or F" tile) and Portfolio, from docs present, docs current, branch tidiness and recent activity, with a breakdown naming the fix that lifts the grade most. Archived / forked / empty / "Archived"-tagged repos aren't graded.
+- **What we shipped (Stats, AI).** SUMMARIZE writes a plain-English paragraph per updated repo plus an overview for the range, cached by content so the same work is never paid for twice; STALE when the work changed; included in COPY / .MD.
+- **Faster scan.** 8 repos at a time, identical output.
+- **Anthropic key checked at login** (never blocks, 5s cap) and in Settings, which now has Update Anthropic key + CHECK KEY (before, the only option was resetting all credentials).
+- REVIEW_PLACEHOLDER
+- TESTS_PLACEHOLDER
+
+---
+
+## Session 23 (2026-11-09)
 
 - **Stats → What changed, any date range.** One range picker drives the whole Stats page: **Week** (last 7 days), **Month** (last 30), **Quarter** (last 90), **YTD**, or **Custom** from/to. Across every scanned repo (scoped by group if one is picked) it shows: repos updated of total, commits, PRs merged, active days; a commits-per-day/week/month timeline; and one card per updated repo with its merged PR titles and default-branch commits (linked to GitHub). Repos with nothing in range collapse into one list. **COPY FOR CLAUDE** / **DOWNLOAD .MD** produce the same report.
 - **Commits bar chart now follows the range** (was fixed 1d-2m chips). The 1d / 3d / 2w / 2m chips are gone: Custom covers any window, and Next Up still has Today / Yesterday / Last 3 days.
@@ -207,9 +223,9 @@ Nothing actively in progress. All Session 15 work (Chat Briefing screen + 15b re
 
 - **Netlify serverless port is behind Flask and its hosted deployment is decommissioned (2026-07-23).** The code stays in `netlify/` for reference; local Flask is the supported path. Redeploying would mean re-adding env vars in Netlify (and rotating the PAT) plus porting the April/May features listed under Next Steps.
 - **Truncated git trees.** Very large repos can have a truncated tree response; a warning is logged and some deep files may be missed.
-- **Scan is slightly slower.** `/languages` call per repo doubles API calls vs. previous. Still sequential; parallelization on the backlog.
+- **Scan API volume.** `/languages` per repo doubles API calls vs. the original scan; since Session 24 the scan runs 8 repos at a time, so wall time is much lower.
 - **Stats first-load latency.** The first Stats visit after a scan (or after the hourly cache expires) reads every repo back 90 days; YTD later in the year widens that once. Expect 5-30 seconds on a big account (more for long custom ranges); the page says it's reading. Presets inside the cached window are instant.
-- **Anthropic key not verified at login.** An invalid/empty Anthropic key only surfaces when the user generates summaries or briefs, where it shows up as a per-repo error in the progress overlay. Flagged in audit; low-frequency since the key rarely changes after first setup.
+- ~~Anthropic key not verified at login~~ — FIXED (Session 24). A key with no credit still only surfaces on GENERATE (the check proves the key, not the balance).
 - ~~`/login/reset` has no CSRF protection~~ — FIXED: both credential-reset endpoints require a per-boot anti-CSRF token, `/logout`'s global-state wipe is gated behind an authenticated session, and the local session cookie is now `SameSite=Lax` + `HttpOnly` (Session 16).
 - **Known limitations left as-is (Session 16 audit).** Documented, low-severity, deferred by design: repo lookups keyed by name alone can collide if two collaborator repos share a name; the Netlify port's in-memory scan state isn't shared across serverless instances (moot while decommissioned); GitHub pagination can silently truncate on a mid-list rate-limit (rare for a personal account). See `SESSION_NOTES.md`.
 - ~~`_save_json` has no disk-full / permission error handling~~ — FIXED Session 15b: all JSON/spec/credential writes are atomic (temp file + rename) with errors logged.
@@ -228,10 +244,10 @@ Nothing actively in progress. All Session 15 work (Chat Briefing screen + 15b re
 2. **Generate chat briefs across the portfolio.** Briefing tab → GENERATE BRIEFS, watch the per-repo progress, then COPY FOR CLAUDE CHAT and paste into a Claude chat session.
 3. **Try the tracker against a real repo.** Click Tracker in the nav, pick a repo (e.g. parentpoint, catholicevents), click GENERATE TRACKER. Verify the eight tabs populate and the next-actions prompts copy cleanly into Claude Code.
 4. **Generate trackers across the portfolio** to seed the load-bearing IDs. Re-generations from this point on will preserve those IDs.
-5. **Wire tracker `next_actions` into What's Next** so open P0/P1 actions show up in the simple aggregated inbox alongside the project-summary bullets (Roadmap item 1).
+5. ~~Wire tracker `next_actions` into What's Next~~ — DONE (Session 24): Do next ranks P0/P1 tracker actions with In Flight work and planned steps.
 6. **(Deprioritized) Netlify port.** The hosted deployment is decommissioned — only revisit if you decide to redeploy. Would need the April/May features ported (auth-error handling, Stats with group filter + rollup, What's Next, groups persistence, recursive search, Size column, refreshed nav, recent-updated sort, business-spec aliasing, unassigned-projects list) plus env vars re-added in Netlify. Tracker stays Flask-only by design.
-7. **Parallelize initial scan** using `ThreadPoolExecutor` (same pattern as `/stats`).
-8. **Verify Anthropic key at login** the same way GitHub PAT is verified, so bad keys are caught up front.
+7. ~~Parallelize initial scan~~ — DONE (Session 24): 8 repos at a time, identical output.
+8. ~~Verify Anthropic key at login~~ — DONE (Session 24): checked at login and in Settings (Update Anthropic key + CHECK KEY).
 
 ---
 
