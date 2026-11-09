@@ -1275,7 +1275,7 @@ class TestProjectsSortAndStatsFilter(unittest.TestCase):
 
     def tearDown(self):
         self.app_mod._scan_results = self._orig_scan
-        self.app_mod._stats_cache = None
+        self.app_mod._activity_cache = None
         models.GROUPS_PATH = self._orig_groups
         models._LEGACY_GROUPS_PATH = self._orig_legacy
         models.PREFS_PATH = self._orig_prefs
@@ -1330,76 +1330,62 @@ class TestProjectsSortAndStatsFilter(unittest.TestCase):
         self.assertIn("Every project belongs to at least one group", body)
         self.assertEqual(self._unassigned_names(body), set())
 
+    class _FakeActivityClient:
+        """Stands in for GitHubClient on the Stats page: one commit + one
+        merged PR per repo, dated an hour ago."""
+
+        def __init__(self):
+            ts = (datetime.datetime.now(datetime.timezone.utc)
+                  - datetime.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            self.ts = ts
+
+        def get_commits_range(self, owner, repo, since_iso, ref=None, until_iso=None, max_pages=50):
+            return [{"sha": "abc1234def", "parents": [{}], "html_url": "",
+                     "commit": {"message": f"Work on {repo}", "author": {"name": "c", "date": self.ts},
+                                "committer": {"date": self.ts}}}], False
+
+        def get_merged_pulls_since(self, owner, repo, since_iso, max_pages=10):
+            return [{"number": 7, "title": f"PR for {repo}", "merged_at": self.ts,
+                     "html_url": "", "user": {"login": "c"}, "base": {"ref": "main"}}], False
+
+    def _with_fake_client(self):
+        self._orig_client = self.app_mod._github_client
+        self.app_mod._github_client = self._FakeActivityClient()
+        self.app_mod._activity_cache = None
+        self.addCleanup(setattr, self.app_mod, "_github_client", self._orig_client)
+        self.addCleanup(setattr, self.app_mod, "_activity_cache", None)
+
     def test_stats_page_has_group_bar_when_groups_exist(self):
         models.set_group("Core", ["repo-newest"])
-        # Stub out the API-backed activity collector
-        def fake_collect(c, r, since, now):
-            return {
-                "name": r["name"], "owner": r["owner"],
-                "full_name": r["full_name"], "html_url": "",
-                "commits_by_period": {k: 1 for k in self.app_mod.PERIOD_DAYS},
-                "code_size_bytes": r.get("code_size_bytes", 0),
-            }
-        self._orig_collect = self.app_mod._collect_repo_activity
-        self._orig_client = self.app_mod._github_client
-        self.app_mod._collect_repo_activity = fake_collect
-        class FakeClient: pass
-        self.app_mod._github_client = FakeClient()
-        try:
-            resp = self.client.get("/stats")
-            self.assertEqual(resp.status_code, 200)
-            body = resp.data.decode()
-            self.assertIn("Core", body, "Group tab should render")
-            self.assertNotIn("Lines Added", body, "LOC tab must be gone")
-            self.assertIn("By group", body, "Group-rollup mode toggle missing")
-        finally:
-            self.app_mod._collect_repo_activity = self._orig_collect
-            self.app_mod._github_client = self._orig_client
+        self._with_fake_client()
+        resp = self.client.get("/stats")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.data.decode()
+        self.assertIn("Core", body, "Group tab should render")
+        self.assertNotIn("Lines Added", body, "LOC tab must be gone")
+        self.assertIn("By group", body, "Group-rollup mode toggle missing")
+        self.assertIn("What changed", body)
 
     def test_stats_nonexistent_group_falls_back_to_all(self):
         models.set_group("Real", ["repo-newest"])
-        def fake_collect(c, r, since, now):
-            return {
-                "name": r["name"], "owner": r["owner"],
-                "full_name": r["full_name"], "html_url": "",
-                "commits_by_period": {k: 0 for k in self.app_mod.PERIOD_DAYS},
-                "code_size_bytes": 0,
-            }
-        self._orig_collect = self.app_mod._collect_repo_activity
-        self._orig_client = self.app_mod._github_client
-        self.app_mod._collect_repo_activity = fake_collect
-        class FakeClient: pass
-        self.app_mod._github_client = FakeClient()
-        try:
-            resp = self.client.get("/stats?group=DoesNotExist")
-            self.assertEqual(resp.status_code, 200)
-        finally:
-            self.app_mod._collect_repo_activity = self._orig_collect
-            self.app_mod._github_client = self._orig_client
+        self._with_fake_client()
+        resp = self.client.get("/stats?group=DoesNotExist")
+        self.assertEqual(resp.status_code, 200)
+        # All three repos are in scope (not just the Real group's one).
+        self.assertIn(b"PR for repo-mid", resp.data)
+        self.assertIn(b"PR for repo-none", resp.data)
 
     def test_stats_mode_toggle_hidden_when_group_selected(self):
         """Per-group view is degenerate for a single group — toggle hides."""
         models.set_group("Real", ["repo-newest"])
-        def fake_collect(c, r, since, now):
-            return {
-                "name": r["name"], "owner": r["owner"],
-                "full_name": r["full_name"], "html_url": "",
-                "commits_by_period": {k: 0 for k in self.app_mod.PERIOD_DAYS},
-                "code_size_bytes": 0,
-            }
-        self._orig_collect = self.app_mod._collect_repo_activity
-        self._orig_client = self.app_mod._github_client
-        self.app_mod._collect_repo_activity = fake_collect
-        class FakeClient: pass
-        self.app_mod._github_client = FakeClient()
-        try:
-            resp = self.client.get("/stats?group=Real")
-            self.assertEqual(resp.status_code, 200)
-            # Mode toggle absent when a specific group is active
-            self.assertNotIn(b'data-mode="groups"', resp.data)
-        finally:
-            self.app_mod._collect_repo_activity = self._orig_collect
-            self.app_mod._github_client = self._orig_client
+        self._with_fake_client()
+        resp = self.client.get("/stats?group=Real")
+        self.assertEqual(resp.status_code, 200)
+        # Mode toggle absent when a specific group is active
+        self.assertNotIn(b'data-mode="groups"', resp.data)
+        # And the What changed list is scoped to the group.
+        self.assertIn(b"PR for repo-newest", resp.data)
+        self.assertNotIn(b"PR for repo-mid", resp.data)
 
 
 class TestNextUpMerge(unittest.TestCase):

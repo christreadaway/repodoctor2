@@ -1,18 +1,30 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-10-26 (Session 22 — Portfolio: projects by theme tag, editable tags with AI suggestions, infrastructure map)
-**Current Branch:** `main` (Sessions 20-22 pushed to `main`; also on `claude/confident-wright-gfnscy`)
+**Last Updated:** 2026-11-09 (Session 23 — Stats: what changed across every repo for Week / Month / Quarter / YTD / any custom date range)
+**Current Branch:** `main` (Session 23 pushed to `main`; also on `claude/sweet-fermi-yt1v9m`)
 **Overall Progress:** ~97%
 
 ---
 
 ## Snapshot
 
-RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch counts, required-spec-file presence, code size, AI-generated project summaries, named groups for filtering, a Stats view with Commits / Code Size bar charts across time periods (aggregatable by group), an aggregated What's Next view, a per-repo Codebase Tracker, a Chat Briefing screen that composes a single portfolio document for pasting into a Claude chat session, a **Yesterday** screen that reconstructs what you were doing across every repo (broken out by session, with a where-you-left-off call), a **Docs Explorer** for reading each repo's Markdown files in the browser, a **Repo Selector** for ticking any repos (personal, private, public, and organization repos) and copying a clean three-sentence summary sheet into another document, an **In Flight** view of every unmerged branch and open PR across all repos, a **Resume** packet per project for context switching, and a **Components** inventory of reusable infrastructure across repos. **Runs locally as a Flask app — this is the supported way to use it.** A Node.js/Netlify serverless port still lives in `netlify/` for reference, but the hosted deployment was decommissioned on 2026-07-23.
+RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch counts, required-spec-file presence, code size, AI-generated project summaries, named groups for filtering, a **Stats** view that shows what changed across every repo for Week / Month / Quarter / YTD or any custom date range (KPI tiles, a commits timeline, per-repo cards with merged PRs and commits, plus Commits / Code Size bar charts aggregatable by group), an aggregated What's Next view, a per-repo Codebase Tracker, a Chat Briefing screen that composes a single portfolio document for pasting into a Claude chat session, a **Yesterday** screen that reconstructs what you were doing across every repo (broken out by session, with a where-you-left-off call), a **Docs Explorer** for reading each repo's Markdown files in the browser, a **Repo Selector** for ticking any repos (personal, private, public, and organization repos) and copying a clean three-sentence summary sheet into another document, an **In Flight** view of every unmerged branch and open PR across all repos, a **Resume** packet per project for context switching, and a **Components** inventory of reusable infrastructure across repos. **Runs locally as a Flask app — this is the supported way to use it.** A Node.js/Netlify serverless port still lives in `netlify/` for reference, but the hosted deployment was decommissioned on 2026-07-23.
 
 ---
 
-## Latest — Session 22 (2026-10-26)
+## Latest — Session 23 (2026-11-09)
+
+- **Stats → What changed, any date range.** One range picker drives the whole Stats page: **Week** (last 7 days), **Month** (last 30), **Quarter** (last 90), **YTD**, or **Custom** from/to. Across every scanned repo (scoped by group if one is picked) it shows: repos updated of total, commits, PRs merged, active days; a commits-per-day/week/month timeline; and one card per updated repo with its merged PR titles and default-branch commits (linked to GitHub). Repos with nothing in range collapse into one list. **COPY FOR CLAUDE** / **DOWNLOAD .MD** produce the same report.
+- **Commits bar chart now follows the range** (was fixed 1d-2m chips). The 1d / 3d / 2w / 2m chips are gone: Custom covers any window, and Next Up still has Today / Yesterday / Last 3 days.
+- **Honest numbers.** Merge commits are left out (their work is already counted). A repo GitHub couldn't read (rate limit, 5xx, renamed) is named in a warning and left out of totals instead of showing as "no activity", then retried on the next view. Very busy repos that hit the per-read cap are flagged.
+- **Fast after the first read.** One parallel read covers every preset, cached for an hour (REFRESH forces it, a new scan clears it). Everything is logged to `data/logs/activity.log`.
+- **Stats now remembers your group** like every other screen (it used to ignore the saved group).
+- **Fixed a test that broke by itself on Nov 7** (In Flight fixture dates aged past the 14-day stale line); the clock is pinned now.
+- **Tests: see Session 23 notes.** Verified in Chromium at 375px and 1280px: no console errors, no horizontal scroll.
+
+---
+
+## Session 22 (2026-10-26)
 
 - **Portfolio (new tab).** Every project grouped by theme tag, with a one-line summary, open branches and last push, for fast context switching. Each theme links to its In flight, Briefing, Resume and Recent sessions views. Tags are the app's groups, so a theme picked here filters every screen.
 - **Editable tags.** Add/remove tags per project with chips, create / rename / delete tags, and SUGGEST TAGS (one AI call) proposes themes that you review and tick before anything changes. Default themes: Investing / Personal Finance, Marketing / GTM, School, Church, Infrastructure.
@@ -154,13 +166,14 @@ Focused on making local setup foolproof and hardening the app. See `SESSION_NOTE
 - **5 default groups seeded on login** (School, Church, Catholic Games, Infrastructure, Fun) — temporary one-shot recovery; removal flagged in `CLAUDE.md`
 
 ### Stats
-- Two views: **Commits**, **Code Size** (Lines Added removed — was broken on cold repos)
-- Period selector: 1d / 3d / 1w / 2w / 1m / 2m (applies to Commits)
+- One date-range picker for the whole page: Week / Month / Quarter / YTD / Custom from-to (Session 23)
+- Three views: **What changed** (default; per-repo merged PRs + commits), **Commits** (bar chart for the range), **Code Size** (Lines Added removed — was broken on cold repos)
+- KPI tiles + commits timeline; COPY FOR CLAUDE / DOWNLOAD .MD
 - **Group filter bar** mirrors Projects: All / named groups, server-rendered with `?group=<name>`
 - **"By repo" / "By group" rollup toggle** (hidden when no groups or when a single group is active) — aggregates commits and code-size across each group; repos in no group roll up under "Ungrouped"
 - No artificial cap on commit count (was 200; now effectively unlimited with a 5000-commit safety ceiling per repo)
 - Empty-period repos drop below an alphabetical divider
-- Per-scan in-memory cache; `?refresh=1` forces recompute
+- In-memory cache keyed by scan, hourly expiry; REFRESH forces a re-read; failed repos retried on the next view
 
 ### Storage Persistence
 - **Groups live in `~/.repodoctor/groups.json`** — survives wiping/re-cloning the project directory
@@ -194,7 +207,7 @@ Nothing actively in progress. All Session 15 work (Chat Briefing screen + 15b re
 - **Netlify serverless port is behind Flask and its hosted deployment is decommissioned (2026-07-23).** The code stays in `netlify/` for reference; local Flask is the supported path. Redeploying would mean re-adding env vars in Netlify (and rotating the PAT) plus porting the April/May features listed under Next Steps.
 - **Truncated git trees.** Very large repos can have a truncated tree response; a warning is logged and some deep files may be missed.
 - **Scan is slightly slower.** `/languages` call per repo doubles API calls vs. previous. Still sequential; parallelization on the backlog.
-- **Stats first-load latency.** Commit stats page through up to 5000 commits per repo × N repos — first visit after a scan can take noticeably longer for heavy accounts. `?refresh=1` forces recompute; normal loads are cache hits.
+- **Stats first-load latency.** The first Stats visit after a scan (or after the hourly cache expires) reads every repo back to Jan 1 (or 90 days, whichever is earlier), up to 5,000 commits per repo — expect 10-60 seconds on a big account; the page says it's reading. Every preset after that is instant.
 - **Anthropic key not verified at login.** An invalid/empty Anthropic key only surfaces when the user generates summaries or briefs, where it shows up as a per-repo error in the progress overlay. Flagged in audit; low-frequency since the key rarely changes after first setup.
 - ~~`/login/reset` has no CSRF protection~~ — FIXED: both credential-reset endpoints require a per-boot anti-CSRF token, `/logout`'s global-state wipe is gated behind an authenticated session, and the local session cookie is now `SameSite=Lax` + `HttpOnly` (Session 16).
 - **Known limitations left as-is (Session 16 audit).** Documented, low-severity, deferred by design: repo lookups keyed by name alone can collide if two collaborator repos share a name; the Netlify port's in-memory scan state isn't shared across serverless instances (moot while decommissioned); GitHub pagination can silently truncate on a mid-list rate-limit (rare for a personal account). See `SESSION_NOTES.md`.

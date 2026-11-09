@@ -1,11 +1,48 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 22
-**Date Range:** 2025-02-14 to 2026-10-26
-**Last Updated:** 2026-10-26 (Session 22)
+**Total Sessions Logged:** 23
+**Date Range:** 2025-02-14 to 2026-11-09
+**Last Updated:** 2026-11-09 (Session 23)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 23 — 2026-11-09 (Stats: what changed across every repo, any date range)
+
+Branch: `claude/sweet-fermi-yt1v9m`, pushed to `main` on request. The ask: "a view in my metrics to look across all my repositories to see what we've updated in the last week, month, quarter, YTD, or any custom date range — does this exist? If not, build it out, test comprehensively, fix low→critical bugs, push to main."
+
+### Did it exist?
+No. Stats had fixed 1d / 3d / 1w / 2w / 1m / 2m chips, showed commit COUNTS only, and reached back 60 days at most. Next Up covered Today / Yesterday / Last 3 / Last 7 or one single day. Nothing showed quarter, YTD, a custom range, or WHAT changed.
+
+### Decisions
+- **Lives on Stats, not a new tab** (the nav stays at ten). One range picker drives the whole page; "What changed" is the default view.
+- **Rolling presets:** Week = last 7 days, Month = last 30, Quarter = last 90, YTD = Jan 1 → today. Calendar month/quarter is one Custom range away. Days are whole local (Central) days, both ends inclusive, same as Next Up.
+- **What counts as "updated":** commits that landed on the default branch + PRs merged in range. Merge commits excluded (double counting). Unmerged branches stay in In flight.
+- **One superset read** (back to min(Jan 1, today − 89)) so every preset after the first is instant; hourly expiry; custom ranges that start earlier refetch from their own start.
+- **Fail loud, not quiet:** a new strict paginator raises on any failed page, so a rate-limited repo is reported as unreadable instead of quietly showing fewer commits. The existing lenient `_get_paginated` (used by every other screen) is unchanged.
+- Dropped the 1d / 3d / 2w / 2m chips on the Commits chart (Custom covers them).
+
+### What We Built
+- `activity.py`: `DateRange` + `resolve_range` (presets, custom, notices for every adjustment: swapped, future, pre-2008, unreadable), `fetch_floor`, `fetch_repo` / `gather` (parallel, auth errors cancel the rest), `build_report` (rows, updated / idle / failed kept disjoint, totals, timeline in day / week / month buckets), `compose_markdown`.
+- `github_client.py`: `_get_paginated_strict`, `get_commits_range`, `get_merged_pulls_since` (closed PRs newest-updated first, stops at the first page older than the window), `_parse_iso`.
+- `app.py`: `/stats` rebuilt on a lock-guarded activity cache (scan-keyed, hourly, self-heals failed repos, serves a stale read marked offline when the app lost its GitHub connection), REFRESH as redirect-after-fetch, `/stats/export.md`. Old `_stats_cache`, `PERIOD_DAYS`, `_collect_repo_activity` removed. Stats now uses the shared saved group like every other screen.
+- `templates/stats.html` + CSS: range chips + Custom form, KPI tiles, accessible timeline (hover or keyboard focus shows each bucket), What changed cards, idle disclosure, range-driven Commits chart with By group rollup, loading message after 400 ms on slow reads, view remembered in localStorage.
+- `models.log_activity_event` → `data/logs/activity.log` (fetch, fetch_error, view, export, range_adjusted).
+
+### Bugs fixed along the way
+- **Low (test):** `tests/test_inflight.py::test_packet_composes_all_sections` started failing on its own on 2026-11-07: its Oct 24 fixture commit aged past the 14-day STALE line under the real clock. Clock pinned to the fixture date.
+- **Low:** Stats ignored the saved group (every other screen honors it) → now uses `_resolve_active_group`.
+- Caught in my own browser pass before commit: hidden timeline tooltips still widened the page by 23px on a 375px phone → kept out of layout until hover/focus and anchored by thirds.
+
+### Tests
+**546 passing** (was 484 + 1 failing). New `tests/test_activity.py` (~60): range presets / custom / every bad-input path / DST day / cross-year labels / half-open local bounds / fetch floor; strict pagination (409, 403/404/5xx raise, truncation, PR early stop); fetch + gather (failure isolation, auth error propagates); report (merge exclusion, PR-only repos, idle vs failed disjoint, sorting, portfolio active days, truncation); timeline day / week / month incl. year end; Markdown; routes (one fetch serves every preset, earlier custom refetch, failed repo retried alone, refresh redirect, TTL, new scan, not connected with and without cache, auth error, bad range notice, group scope + links keep range, export, logging, POST /scan clears cache). Three old Stats tests rewritten for the new client. Chromium at 375 / 1280: 33 interaction checks (view switching + persistence, by-group rollup, custom swap, group keeps range, copy to clipboard, download, keyboard tooltip, refresh, bad date notice, loading message), no console errors, no horizontal scroll.
+
+### Next Steps
+1. Pull `main` and launch as usual (no new dependencies). Open **Stats**: the first visit reads every repo (10-60s on a big account), then every preset is instant.
+2. Try **Quarter** and **YTD**, then COPY FOR CLAUDE to paste a portfolio "what changed" report into a chat.
+3. Possible follow-ups: an optional AI one-paragraph summary per repo for the range; calendar presets (This month / This quarter) if rolling windows don't match how you report.
 
 ---
 

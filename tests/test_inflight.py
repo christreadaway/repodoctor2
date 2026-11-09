@@ -293,8 +293,12 @@ class TestBuildPacket(unittest.TestCase):
                             "session_notes": "# Notes\n\n## Session 9\nDid things\n\n## Session 8\nold"},
                    "readme": ""}
         tracker = {"next_actions": [{"id": "N1", "title": "Ship it", "priority": "P0", "status": "todo"}]}
+        # Pin In Flight's clock to the fixture dates: with the real clock the
+        # Oct 24 commit aged past STALE_DAYS on Nov 7, 2026, the branch read as
+        # STALE instead of NEEDS PR, and this test started failing on its own.
         with patch.object(resume.gh, "fetch_repo_docs", return_value=fetched), \
-             patch.object(resume.sessions, "gather_sessions", return_value=[]):
+             patch.object(resume.sessions, "gather_sessions", return_value=[]), \
+             patch.object(inflight, "_now", return_value=NOW):
             packet = resume.build_packet(
                 client, _repo(), summary={"what_it_does": "A demo.", "next_steps": ["Step one"]},
                 brief={"what_it_is": "Demo app", "stage": "Building", "where_we_are": "Midway"},

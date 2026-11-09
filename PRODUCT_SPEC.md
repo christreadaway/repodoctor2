@@ -197,19 +197,39 @@ A single-select category on top of groups: the four categories **are** groups (s
 - **Tagged** on the Projects "Categorize" panel: one `<select>` per repo, saved instantly via `POST /api/categorize` (no reload; a brief "saved" flash per row). Assigning a category drops the repo from the other three category groups; non-category groups are untouched.
 - **Badged everywhere:** `repo_categories` (name→category) is injected into every template by the context processor; the `category_badge` macro renders a colored badge (four distinct hues) on My Repos, Projects, Selector, and Next Up cards, and the category is written into the Selector's copy/paste output (`Church · Private`).
 
-### 4.7b Stats View
+### 4.7b Stats View — what changed across every repo, any date range
 
-**Files:** `app.py` (`/stats`, `_collect_repo_activity`), `templates/stats.html`, `github_client.py` (`get_commits_since`, `get_code_frequency`, `get_language_bytes`)
+**Files:** `activity.py` (range resolution, fetch, report, Markdown), `app.py` (`/stats`, `/stats/export.md`, `_activity_data` cache), `templates/stats.html`, `github_client.py` (`get_commits_range`, `get_merged_pulls_since`, `_get_paginated_strict`), `models.py` (`log_activity_event`)
 
-Three CSS bar-chart views with a period selector (1d / 3d / 1w / 2w / 1m / 2m):
+**Job:** "Across ALL my repos, what did we update in the last week / month / quarter / YTD / any range I pick?" (Session 23).
 
-| View | Source | Notes |
-|---|---|---|
-| **Commits** | `/repos/{o}/{r}/commits?since=...` | Counted by commit age; `N+` suffix if truncated at 200 commits (2 pages × 100) |
-| **Code Size** | `/repos/{o}/{r}/languages` byte sums | Sortable static view; no period needed |
-| **Lines Added** | `/repos/{o}/{r}/stats/code_frequency` | Weekly buckets with explicit overlap pro-rating so sub-week periods (1d/3d) estimate cleanly |
+**Date range (one picker drives the whole page):**
 
-Repos with zero activity in the selected period drop below a divider and sort alphabetically; active repos sort by count descending. Bars scale to the busiest repo in the period. Data is cached in memory keyed by scan identity; `?refresh=1` forces recompute. Per-repo fetches run in parallel via `ThreadPoolExecutor(max_workers=8)`.
+| Preset | Meaning (whole local days, America/Chicago, inclusive) |
+|---|---|
+| Week | Last 7 days including today |
+| Month | Last 30 days including today |
+| Quarter | Last 90 days including today |
+| YTD | Jan 1 through today |
+| Custom | Any From / To pair (`?range=custom&from=YYYY-MM-DD&to=YYYY-MM-DD`) |
+
+Bad custom input never errors: reversed dates swap, a future end stops at today, a pre-2008 start clamps to Jan 1 2008 (GitHub's launch), and an unreadable date falls back to Week. Each adjustment is said in a notice on the page and logged (`range_adjusted`). The caption shows the exact dates, day count, and when the data was read.
+
+**What it counts:** commits that landed on each repo's default branch, plus pull requests merged in the range (any base). Merge commits are counted separately and kept out of totals and lists, because the branch commits they bring in are already counted. Unmerged branch work belongs to Next Up → In flight.
+
+**Page layout:** range chips + Custom → group filter (keeps the range) → KPI tiles (repos updated of total, commits, PRs merged, active days of days in range) → timeline (commits per day ≤31 days, per week ≤182 days, per month beyond; hover or keyboard focus shows a bucket's commits + PRs) → three views:
+
+| View | What it shows |
+|---|---|
+| **What changed** (default) | One card per updated repo, busiest first: counts, last update, active days, merged PR titles (6 shown, rest behind a disclosure), commits on the default branch (40 shown, then "+N more on GitHub" to GitHub's own filtered history). Repos with nothing in range collapse into "Not updated in this range (N)". |
+| **Commits** | The bar chart, now for the selected range; By repo / By group rollup (repos in no group roll up as "Ungrouped"). |
+| **Code Size** | Bytes from `/languages` (not range-dependent). |
+
+The chosen view is remembered per browser (localStorage, wrapped so a blocked store falls back to What changed). COPY FOR CLAUDE and DOWNLOAD .MD produce the same Markdown (`what-changed-<from>-to-<to>.md`): totals, per repo merged PRs and up to 50 commits (then a link), the idle list, and an "Incomplete" line naming repos GitHub couldn't read.
+
+**Fetching + cache:** one parallel read (8 workers) of every scanned repo from a floor that covers every preset (`min(Jan 1, today − 89 days)`), so switching presets is instant; a custom start earlier than the cache refetches from that day. Cached in memory keyed by scan identity, expires hourly, dropped on every scan; REFRESH re-reads and redirects back without `?refresh` so a browser reload doesn't refetch. Fetches are serialized by a lock so two tabs don't double the API calls. Pagination is strict: a rate limit, 5xx or 404 on any page marks that repo as failed (shown in a warning, left out of totals, retried alone on the next view) instead of showing partial data as "less activity"; an empty repo (409) is simply idle. Caps: 5,000 commits and 1,000 closed PRs per repo per read, flagged on the card when hit. If the app restarted and lost its GitHub connection, a cached read is still shown, marked offline.
+
+**Logging:** every fetch (repos, since, ok/errors, truncated repos, commit/PR totals, elapsed ms), per-repo failure, page view (range, group, cache hit, totals) and export goes to `data/logs/activity.log` (one JSON object per line) and through the root logger to `data/logs/app.log`.
 
 ### 4.7c Planned Next Steps (was "What's Next", now part of Next Up)
 
@@ -382,7 +402,8 @@ All data stored as local JSON files — no database dependency.
 | Tracker event log | `data/logs/tracker.log` | Append-only; one JSON event per line |
 | Conversation mappings | `config.json` | Permanent |
 | Parsed conversations | `projects/conversations.json` | Until re-import |
-| Stats cache | In-memory only (keyed by scan identity) | Until next scan or `?refresh=1` |
+| Stats activity cache (commits + merged PRs per repo) | In-memory only (keyed by scan identity) | 1 hour, next scan, or REFRESH |
+| Stats activity log | `data/logs/activity.log` | Append-only; one JSON event per line |
 
 ### 4.10 Session Cost Tracking
 
@@ -516,7 +537,8 @@ Flask Application (app.py)
 | POST | `/projects/groups/save` | Active | Create or rename a group + set its repo membership |
 | POST | `/projects/groups/delete` | Active | Delete a group (prefers hidden `original_name` field) |
 | POST | `/api/categorize` | Active | Set one project's category (Church/School/Combined/Personal, or empty to clear) |
-| GET | `/stats` | Active | Commits / Size / Lines-Added bar charts with period selector |
+| GET | `/stats` | Active | What changed across every repo for Week / Month / Quarter / YTD / Custom (`?range=`, `from`, `to`, `group`, `refresh=1`), plus Commits / Code Size charts |
+| GET | `/stats/export.md` | Active | The What changed document as a Markdown download (same args as `/stats`) |
 | GET | `/whats-next` | Redirect | → `/yesterday` (merged into Next Up; kept so old links don't 404) |
 | GET | `/tracker` | Active | Tracker landing — redirects to most recent tracker or shows onboarding + dropdown |
 | GET | `/tracker/<owner>/<name>` | Active | Full 8-tab per-repo tracker view |
@@ -597,7 +619,7 @@ Coverage areas:
 | "Current?" doc freshness column | Working |
 | Repo detail (spec viewer + branch list) | Working |
 | Project Groups (filter + manage) | Working |
-| Stats view (Commits / Code Size / Lines Added) | Working |
+| Stats view (What changed for any date range + Commits / Code Size) | Working |
 | What's Next aggregated view | Working |
 | Codebase Tracker (per-repo, 8 tabs, ID preservation, validation, debug surface) | Working |
 | Firestore auto-detection inside tracker generation | Working |
@@ -620,7 +642,7 @@ Coverage areas:
 ### Near Term
 1. Surface tracker `next_actions` (open P0/P1) into the What's Next aggregated view so the single-page inbox includes them alongside the project-summary bullets
 2. (Deprioritized — hosted Netlify site decommissioned 2026-07-23) If ever redeployed: port Project Groups + recursive spec search + Stats + What's Next to the Netlify Node.js version (Tracker is Flask-only by design — relies on local JSON storage)
-3. Parallelize the initial scan (languages call doubled API traffic; `ThreadPoolExecutor` on `scan_repo_lite` like `/stats` does)
+3. Parallelize the initial scan (languages call doubled API traffic; `ThreadPoolExecutor` on `scan_repo_lite` like `/stats` does via `activity.gather`)
 4. Wire `project_mapper.py` into Flask routes and add conversation import UI (drag-and-drop ZIP + mapping review screen)
 5. Re-enable commented-out features: AI analysis, archive, action log, setup guide
 6. Build branch detail cards with AI summary display, risk badges, and action buttons

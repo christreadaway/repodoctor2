@@ -1,11 +1,18 @@
 {% extends "base.html" %}
+{% from "_macros.html" import category_badge with context %}
 {% block title %}RepoDoctor — Stats{% endblock %}
 {% block content %}
+{% set range_args = rng.query_args() %}
 <div class="page-header">
     <h1>Stats</h1>
     <div class="page-actions">
-        {% if scan_results %}
-        <a href="{{ url_for('stats', refresh=1, group=active_group) }}" class="btn btn-secondary">REFRESH</a>
+        {% if report %}
+        <button type="button" class="btn btn-primary" id="copy-activity-btn">COPY FOR CLAUDE</button>
+        <a href="{{ url_for('stats_export', group=active_group or None, **range_args) }}" class="btn btn-secondary">DOWNLOAD .MD</a>
+        {% endif %}
+        {% if scan_results and not not_connected %}
+        <a href="{{ url_for('stats', refresh=1, group=active_group or None, **range_args) }}" class="btn btn-secondary js-stats-nav"
+           title="Re-read every repo from GitHub now (otherwise refreshed hourly)">REFRESH</a>
         {% endif %}
     </div>
 </div>
@@ -17,25 +24,55 @@
         <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first.</p>
     </div>
 </div>
-{% elif not repos %}
-<div class="onboarding">
-    <div class="onboarding-welcome">
-        <h2>Computing stats…</h2>
-        <p>This may take a moment the first time — refresh to retry.</p>
-    </div>
-</div>
 {% else %}
 
+{# --- Date range: presets + custom from/to --------------------------- #}
+<div class="group-bar stats-rangebar">
+    <div class="group-tabs" role="group" aria-label="Date range">
+        {% for key, chip, _days in presets %}
+        <a href="{{ url_for('stats', range=key, group=active_group or None) }}"
+           class="group-tab js-stats-nav {% if rng.preset == key %}active{% endif %}"
+           {% if rng.preset == key %}aria-current="true"{% endif %}>{{ chip }}</a>
+        {% endfor %}
+        <button type="button" class="group-tab stats-custom-toggle {% if rng.preset == 'custom' %}active{% endif %}"
+                aria-expanded="{{ 'true' if rng.preset == 'custom' else 'false' }}" aria-controls="stats-custom">Custom</button>
+    </div>
+    <form class="stats-custom" id="stats-custom" method="get" action="{{ url_for('stats') }}"
+          {% if rng.preset != 'custom' %}hidden{% endif %}>
+        <input type="hidden" name="range" value="custom">
+        {% if active_group %}<input type="hidden" name="group" value="{{ active_group }}">{% endif %}
+        <label for="stats-from">From</label>
+        <input type="date" id="stats-from" name="from" value="{{ rng.start_date.isoformat() }}"
+               min="2008-01-01" max="{{ today }}" required>
+        <label for="stats-to">To</label>
+        <input type="date" id="stats-to" name="to" value="{{ rng.end_date.isoformat() }}"
+               min="2008-01-01" max="{{ today }}" required>
+        <button type="submit" class="btn btn-sm btn-outline">APPLY</button>
+    </form>
+</div>
+
+<p class="stats-range-caption" id="stats-range-caption">
+    <strong>{{ rng.name }}</strong> · {{ rng.dates_label }} · {{ rng.days }} day{% if rng.days != 1 %}s{% endif %}
+    {% if fetched_at %}
+    <span class="stats-asof {% if stale %}is-stale{% endif %}">· data as of {{ fetched_at|central_time }}{% if stale %} (offline — reconnect to refresh){% endif %}</span>
+    {% endif %}
+</p>
+
+{% if notice %}
+<div class="flash flash-warning stats-notice">{{ notice }}</div>
+{% endif %}
+
+{# --- Group filter (keeps the current range) --------------------------- #}
 {% if groups %}
 <div class="group-bar">
     <div class="group-tabs">
-        <a href="{{ url_for('stats') }}"
-           class="group-tab {% if not active_group %}active{% endif %}">
-           All <span class="group-count">{{ repos|length }}</span>
+        <a href="{{ url_for('stats', group='', **range_args) }}"
+           class="group-tab js-stats-nav {% if not active_group %}active{% endif %}">
+           All <span class="group-count">{{ all_repos_count }}</span>
         </a>
         {% for gname, gRepos in groups.items() %}
-        <a href="{{ url_for('stats', group=gname) }}"
-           class="group-tab {% if active_group == gname %}active{% endif %}">
+        <a href="{{ url_for('stats', group=gname, **range_args) }}"
+           class="group-tab js-stats-nav {% if active_group == gname %}active{% endif %}">
            {{ gname }} <span class="group-count">{{ gRepos|length }}</span>
         </a>
         {% endfor %}
@@ -43,50 +80,218 @@
 </div>
 {% endif %}
 
+{% if not_connected %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>Not connected to GitHub.</h2>
+        <p>Stats reads commits and merged PRs live from GitHub, and the app has restarted since you logged in.
+        <a href="{{ url_for('login', next=request.full_path.rstrip('?')) }}">Enter your password to reconnect</a>, and you'll land right back here.</p>
+    </div>
+</div>
+{% else %}
+{% set t = report.totals %}
+
+{# --- Headline numbers ------------------------------------------------- #}
+<div class="stats-kpis">
+    <div class="stats-kpi">
+        <div class="stats-kpi-label">Repos updated</div>
+        <div class="stats-kpi-value">{{ t.repos_updated }}<span class="stats-kpi-of"> of {{ t.repos_total }}</span></div>
+    </div>
+    <div class="stats-kpi">
+        <div class="stats-kpi-label">Commits</div>
+        <div class="stats-kpi-value">{{ "{:,}".format(t.commits) }}</div>
+    </div>
+    <div class="stats-kpi">
+        <div class="stats-kpi-label">PRs merged</div>
+        <div class="stats-kpi-value">{{ "{:,}".format(t.prs_merged) }}</div>
+    </div>
+    <div class="stats-kpi">
+        <div class="stats-kpi-label">Active days</div>
+        <div class="stats-kpi-value">{{ t.active_days }}<span class="stats-kpi-of"> of {{ t.days }}</span></div>
+    </div>
+</div>
+
+{% if report.failed %}
+<div class="flash flash-error stats-notice">
+    GitHub couldn't be read for {{ report.failed|length }} repo{% if report.failed|length != 1 %}s{% endif %}
+    ({% for r in report.failed %}<span title="{{ r.error }}">{{ r.name }}</span>{% if not loop.last %}, {% endif %}{% endfor %}),
+    so the numbers above leave {{ 'it' if report.failed|length == 1 else 'them' }} out. They're retried on your next visit; details are in data/logs/activity.log.
+</div>
+{% endif %}
+
+{# --- Timeline: commits per day / week / month ------------------------- #}
+{% set tl = report.timeline %}
+{% if t.commits %}
+<div class="stats-chart stats-timeline">
+    <div class="stats-chart-heading">
+        <h2 class="stats-chart-title">Commits per {{ tl.unit }}</h2>
+        <span class="stats-chart-subtitle">Peak {{ tl.peak }} · hover or tab to a {{ tl.unit }} for its numbers</span>
+    </div>
+    <div class="stats-timeline-plot" role="list" aria-label="Commits per {{ tl.unit }}, {{ rng.dates_label }}">
+        {% for b in tl.buckets %}
+        {# Any non-zero bucket gets at least a 3% sliver so "1 commit" never reads as zero. #}
+        {% set height = ([b.commits / tl.peak * 100, 3]|max) if b.commits else 0 %}
+        {% set tip = b.label ~ ': ' ~ b.commits ~ ' commit' ~ ('' if b.commits == 1 else 's') ~ (', ' ~ b.prs ~ ' PR' ~ ('' if b.prs == 1 else 's') ~ ' merged' if b.prs else '') %}
+        {% set pos = loop.index0 / tl.buckets|length %}
+        <div class="stats-tl-col {{ 'tip-end' if pos >= 0.66 else ('tip-mid' if pos >= 0.33 else '') }}" role="listitem" tabindex="0" aria-label="{{ tip }}" data-tip="{{ tip }}">
+            <div class="stats-tl-bar" style="height: {{ '%.1f'|format(height) }}%"></div>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="stats-timeline-axis">
+        <span>{{ tl.buckets[0].label }}</span>
+        {% if tl.buckets|length > 1 %}<span>{{ tl.buckets[-1].label }}</span>{% endif %}
+    </div>
+</div>
+{% endif %}
+
+{# --- Views ----------------------------------------------------------- #}
 <div class="stats-toolbar">
-    <div class="stats-tabs" role="tablist">
-        <button type="button" class="stats-tab active" data-view="commits">Commits</button>
-        <button type="button" class="stats-tab" data-view="size">Code Size</button>
+    <div class="stats-tabs" role="tablist" aria-label="Stats views">
+        <button type="button" class="stats-tab active" role="tab" data-view="changes" aria-selected="true">What changed</button>
+        <button type="button" class="stats-tab" role="tab" data-view="commits" aria-selected="false">Commits</button>
+        <button type="button" class="stats-tab" role="tab" data-view="size" aria-selected="false">Code Size</button>
     </div>
     {% if groups and not active_group %}
-    <div class="stats-modes" id="stats-modes">
+    <div class="stats-modes" id="stats-modes" hidden>
         <button type="button" class="stats-mode active" data-mode="repos">By repo</button>
         <button type="button" class="stats-mode" data-mode="groups">By group</button>
     </div>
     {% endif %}
-    <div class="stats-periods" id="stats-periods">
-        {% for p in periods %}
-        <button type="button" class="stats-period {% if p == '1w' %}active{% endif %}" data-period="{{ p }}">{{ p }}</button>
+</div>
+
+<div id="view-changes" class="stats-view">
+    {% if report.updated %}
+    <div class="changes-list">
+        {% for r in report.updated %}
+        <article class="change-card">
+            <header class="change-card-header">
+                <div class="change-title">
+                    <a href="{{ url_for('repo_detail', owner=r.owner, name=r.name) }}" class="change-repo">{{ r.name }}</a>
+                    {{ category_badge(r.name) }}
+                    {% if r.html_url %}<a href="{{ r.html_url }}" target="_blank" rel="noopener" class="change-gh" title="Open on GitHub">GitHub ↗</a>{% endif %}
+                </div>
+                <div class="change-counts">
+                    <span><strong>{{ r.commit_count }}</strong> commit{% if r.commit_count != 1 %}s{% endif %}</span>
+                    {% if r.pr_count %}<span><strong>{{ r.pr_count }}</strong> PR{% if r.pr_count != 1 %}s{% endif %} merged</span>{% endif %}
+                </div>
+            </header>
+            <div class="change-meta">
+                {% if r.last_at %}<span>last update {{ r.last_at|central_time }}</span>{% endif %}
+                <span>{{ r.active_days }} active day{% if r.active_days != 1 %}s{% endif %}</span>
+                {% if r.truncated %}<span class="change-warn" title="GitHub returned the maximum this app reads for one repo; the oldest items in the range may be missing.">partial — very busy repo</span>{% endif %}
+            </div>
+
+            {% if r.prs %}
+            <div class="change-section">
+                <div class="change-section-label">Merged PRs</div>
+                <ul class="change-list">
+                    {% for p in r.prs[:6] %}
+                    <li>
+                        <a href="{{ p.html_url }}" target="_blank" rel="noopener" class="change-item-text">#{{ p.number }} {{ p.title }}</a>
+                        <span class="change-item-when">{{ p.merged_at|central_time }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% if r.prs|length > 6 %}
+                <details class="change-more">
+                    <summary>{{ r.prs|length - 6 }} more merged PR{% if r.prs|length - 6 != 1 %}s{% endif %}</summary>
+                    <ul class="change-list">
+                        {% for p in r.prs[6:] %}
+                        <li>
+                            <a href="{{ p.html_url }}" target="_blank" rel="noopener" class="change-item-text">#{{ p.number }} {{ p.title }}</a>
+                            <span class="change-item-when">{{ p.merged_at|central_time }}</span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </details>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            {% if r.commits %}
+            <details class="change-section change-commits" {% if not r.prs %}open{% endif %}>
+                <summary>{{ r.commit_count }} commit{% if r.commit_count != 1 %}s{% endif %} on {{ r.default_branch }}</summary>
+                <ul class="change-list">
+                    {% for c in r.commits[:card_commit_limit] %}
+                    <li>
+                        {% if c.html_url %}<a href="{{ c.html_url }}" target="_blank" rel="noopener" class="change-item-text">{{ c.summary or '(no message)' }}</a>
+                        {% else %}<span class="change-item-text">{{ c.summary or '(no message)' }}</span>{% endif %}
+                        <span class="change-item-when">{{ c.date|central_time }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% if r.commit_count > card_commit_limit %}
+                <a href="{{ r.commits_url }}" target="_blank" rel="noopener" class="change-more-link">
+                    +{{ r.commit_count - card_commit_limit }} more on GitHub ↗</a>
+                {% endif %}
+            </details>
+            {% endif %}
+        </article>
         {% endfor %}
+    </div>
+    {% else %}
+    <div class="onboarding">
+        <div class="onboarding-welcome">
+            <h2>Nothing landed in this range.</h2>
+            <p>No commits reached a default branch and no PRs merged {% if active_group %}in the <strong>{{ active_group }}</strong> group {% endif %}between {{ rng.dates_label }}.
+            {% if rng.preset != 'ytd' %}Try a wider range: <a href="{{ url_for('stats', range='ytd', group=active_group or None) }}" class="js-stats-nav">year to date</a>.{% endif %}
+            Unmerged branch work shows in <a href="{{ url_for('inflight_view') }}">Next Up → In flight</a>.</p>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if report.idle %}
+    <details class="changes-idle">
+        <summary>Not updated in this range ({{ report.idle|length }})</summary>
+        <div class="changes-idle-list">
+            {% for r in report.idle %}
+            <a href="{{ url_for('repo_detail', owner=r.owner, name=r.name) }}" class="changes-idle-chip">{{ r.name }}</a>
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+
+    <p class="stats-footnote">Counts commits that landed on each repo's default branch (merge commits left out, since the
+    work they bring in is already counted) plus pull requests merged in the range. Days run midnight to midnight, Central time.</p>
+</div>
+
+<div id="view-chart" class="stats-view" hidden>
+    <div class="stats-chart">
+        <div class="stats-chart-heading">
+            <h2 class="stats-chart-title" id="chart-title">Commits</h2>
+            <span class="stats-chart-subtitle" id="chart-subtitle"></span>
+        </div>
+        <div class="stats-bars" id="stats-bars">
+            <div class="stats-empty-hint">Loading…</div>
+        </div>
     </div>
 </div>
 
-<div class="stats-chart">
-    <div class="stats-chart-heading">
-        <h2 class="stats-chart-title" id="chart-title">Commits in last 1w</h2>
-        <span class="stats-chart-subtitle" id="chart-subtitle">Bars sized to the busiest repo in the period</span>
-    </div>
-    <div class="stats-bars" id="stats-bars">
-        <div class="stats-empty-hint">Loading…</div>
-    </div>
-</div>
+<textarea id="activity-markdown" hidden readonly>{{ markdown }}</textarea>
 
 <script id="stats-data" type="application/json">
 {{ {
-    "repos": repos,
-    "periods": periods,
+    "rows": chart_rows,
     "groups": groups,
-    "active_group": active_group
+    "active_group": active_group,
+    "range_name": rng.name,
+    "range_dates": rng.dates_label
 } | tojson }}
 </script>
 
 <script>
 (function () {
     var data = JSON.parse(document.getElementById('stats-data').textContent);
-    var repos = data.repos;
+    var rows = data.rows || [];
     var groups = data.groups || {};
     var activeGroup = data.active_group || '';
-    var state = { view: 'commits', period: '1w', mode: 'repos' };
+    var state = { view: 'changes', mode: 'repos' };
+    var VIEW_KEY = 'repodoctor.stats.view';
+    try {
+        var saved = window.localStorage.getItem(VIEW_KEY);
+        if (saved === 'changes' || saved === 'commits' || saved === 'size') state.view = saved;
+    } catch (e) { /* storage blocked: default view */ }
 
     function fmtBytes(n) {
         if (!n) return '0';
@@ -95,100 +300,68 @@
         return n + ' B';
     }
 
-    function visibleRepos() {
-        if (!activeGroup) return repos;
-        var allowed = {};
-        (groups[activeGroup] || []).forEach(function (n) { allowed[n] = true; });
-        return repos.filter(function (r) { return allowed[r.name]; });
+    function scopeText() {
+        return activeGroup ? ('group "' + activeGroup + '"') : 'all repos';
     }
 
     function viewMeta() {
-        var scope = activeGroup ? ('group "' + activeGroup + '"') : 'all repos';
         if (state.view === 'commits') {
             return {
-                title: 'Commits in last ' + state.period + ' — ' + scope,
-                subtitle: state.mode === 'groups'
-                    ? 'Bars sized to the busiest group in the period'
-                    : 'Bars sized to the busiest repo in the period',
-                needsPeriod: true,
-                getValue: function (r) {
-                    var v = (r.commits_by_period || {})[state.period] || 0;
-                    return { value: v, display: String(v) };
-                }
+                title: 'Commits — ' + data.range_name + ', ' + scopeText(),
+                subtitle: data.range_dates + ' · bars sized to the busiest ' + (state.mode === 'groups' ? 'group' : 'repo'),
+                emptyLabel: 'No commits in range',
+                getValue: function (r) { return r.commits || 0; },
+                fmt: function (v) { return v.toLocaleString(); }
             };
         }
-        // size
         return {
-            title: 'Code size — ' + scope,
-            subtitle: 'Sum of bytes across all languages (per GitHub /languages)',
-            needsPeriod: false,
-            getValue: function (r) {
-                var v = r.code_size_bytes || 0;
-                return { value: v, display: fmtBytes(v) };
-            }
+            title: 'Code size — ' + scopeText(),
+            subtitle: 'Bytes across all languages (GitHub /languages) — not affected by the date range',
+            emptyLabel: 'No code size reported',
+            getValue: function (r) { return r.code_size_bytes || 0; },
+            fmt: fmtBytes
         };
     }
 
-    function repoToGroupNames(repoName) {
+    function repoGroupNames(name) {
         var hits = [];
-        Object.keys(groups).forEach(function (gname) {
-            if ((groups[gname] || []).indexOf(repoName) !== -1) hits.push(gname);
+        Object.keys(groups).forEach(function (g) {
+            if ((groups[g] || []).indexOf(name) !== -1) hits.push(g);
         });
         if (!hits.length) hits.push('Ungrouped');
         return hits;
     }
 
-    function rollupByGroup(rows, meta) {
-        var totals = {};
-        rows.forEach(function (r) {
-            var v = meta.getValue(r).value;
-            repoToGroupNames(r.name).forEach(function (g) {
-                totals[g] = (totals[g] || 0) + v;
-            });
-        });
-        return Object.keys(totals).map(function (g) {
-            var v = totals[g];
-            var display = state.view === 'size' ? fmtBytes(v) : String(v);
-            return { name: g, value: v, display: display, html_url: null, isGroup: true };
-        });
-    }
-
     function buildRows(meta) {
-        var visible = visibleRepos();
-        if (state.mode === 'groups') {
-            // When a group is active, "by group" is a degenerate rollup of one,
-            // so we silently fall back to the repo view.
-            if (activeGroup) return visible.map(function (r) {
+        if (state.mode === 'groups' && !activeGroup) {
+            var totals = {};
+            rows.forEach(function (r) {
                 var v = meta.getValue(r);
-                return { name: r.name, value: v.value, display: v.display, html_url: r.html_url };
+                repoGroupNames(r.name).forEach(function (g) { totals[g] = (totals[g] || 0) + v; });
             });
-            return rollupByGroup(visible, meta);
+            return Object.keys(totals).map(function (g) {
+                return { name: g, value: totals[g], html_url: null };
+            });
         }
-        return visible.map(function (r) {
-            var v = meta.getValue(r);
-            return { name: r.name, value: v.value, display: v.display, html_url: r.html_url };
+        return rows.map(function (r) {
+            return { name: r.name, value: meta.getValue(r), html_url: r.html_url, error: r.error };
         });
     }
 
-    function render() {
+    function renderChart() {
         var meta = viewMeta();
         document.getElementById('chart-title').textContent = meta.title;
         document.getElementById('chart-subtitle').textContent = meta.subtitle;
-        document.getElementById('stats-periods').style.visibility = meta.needsPeriod ? 'visible' : 'hidden';
-
-        var rows = buildRows(meta);
-
-        var active = rows.filter(function (r) { return r.value > 0; });
-        var empty = rows.filter(function (r) { return !(r.value > 0); });
-        active.sort(function (a, b) { return b.value - a.value; });
+        var list = buildRows(meta);
+        var active = list.filter(function (r) { return r.value > 0; });
+        var empty = list.filter(function (r) { return !(r.value > 0); });
+        active.sort(function (a, b) { return b.value - a.value || a.name.localeCompare(b.name); });
         empty.sort(function (a, b) { return a.name.toLowerCase().localeCompare(b.name.toLowerCase()); });
-
         var max = active.length ? active[0].value : 0;
-        var container = document.getElementById('stats-bars');
-        container.innerHTML = '';
+        var box = document.getElementById('stats-bars');
+        box.textContent = '';
 
         function appendRow(row, isEmpty) {
-            var pct = max > 0 ? Math.max(2, (row.value / max) * 100) : 0;
             var rowEl = document.createElement('div');
             rowEl.className = 'stats-bar-row' + (isEmpty ? ' is-empty' : '');
             var label;
@@ -202,48 +375,56 @@
             }
             label.className = 'stats-bar-label';
             label.textContent = row.name;
+            label.title = row.name;
             var track = document.createElement('div');
             track.className = 'stats-bar-track';
             var fill = document.createElement('div');
             fill.className = 'stats-bar-fill';
-            fill.style.width = (isEmpty ? 0 : pct) + '%';
+            fill.style.width = (isEmpty || !max ? 0 : Math.max(2, row.value / max * 100)) + '%';
             track.appendChild(fill);
             var val = document.createElement('div');
             val.className = 'stats-bar-value';
-            val.textContent = row.display;
+            val.textContent = row.error ? 'n/a' : meta.fmt(row.value);
+            if (row.error) val.title = "GitHub couldn't be read for this repo";
             rowEl.appendChild(label);
             rowEl.appendChild(track);
             rowEl.appendChild(val);
-            container.appendChild(rowEl);
+            box.appendChild(rowEl);
         }
 
         active.forEach(function (r) { appendRow(r, false); });
-        if (empty.length) {
+        if (empty.length && active.length) {
             var divider = document.createElement('div');
             divider.className = 'stats-divider';
-            divider.textContent = (state.mode === 'groups' ? 'Empty groups' : 'No activity in period') + ' (' + empty.length + ')';
-            container.appendChild(divider);
-            empty.forEach(function (r) { appendRow(r, true); });
+            divider.textContent = (state.mode === 'groups' && !activeGroup ? 'Empty groups' : meta.emptyLabel) + ' (' + empty.length + ')';
+            box.appendChild(divider);
         }
-        if (!rows.length) {
-            container.innerHTML = '<div class="stats-empty-hint">Nothing to show for this selection.</div>';
+        empty.forEach(function (r) { appendRow(r, true); });
+        if (!list.length) {
+            var hint = document.createElement('div');
+            hint.className = 'stats-empty-hint';
+            hint.textContent = 'Nothing to show for this selection.';
+            box.appendChild(hint);
         }
+    }
+
+    function render() {
+        document.querySelectorAll('.stats-tab').forEach(function (b) {
+            var on = b.dataset.view === state.view;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+        document.getElementById('view-changes').hidden = state.view !== 'changes';
+        document.getElementById('view-chart').hidden = state.view === 'changes';
+        var modes = document.getElementById('stats-modes');
+        if (modes) modes.hidden = state.view === 'changes';
+        if (state.view !== 'changes') renderChart();
     }
 
     document.querySelectorAll('.stats-tab').forEach(function (btn) {
         btn.addEventListener('click', function () {
-            document.querySelectorAll('.stats-tab').forEach(function (b) { b.classList.remove('active'); });
-            btn.classList.add('active');
             state.view = btn.dataset.view;
-            render();
-        });
-    });
-
-    document.querySelectorAll('.stats-period').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            document.querySelectorAll('.stats-period').forEach(function (b) { b.classList.remove('active'); });
-            btn.classList.add('active');
-            state.period = btn.dataset.period;
+            try { window.localStorage.setItem(VIEW_KEY, state.view); } catch (e) { /* ignore */ }
             render();
         });
     });
@@ -253,13 +434,73 @@
             document.querySelectorAll('.stats-mode').forEach(function (b) { b.classList.remove('active'); });
             btn.classList.add('active');
             state.mode = btn.dataset.mode;
-            render();
+            renderChart();
         });
     });
+
+    var copyBtn = document.getElementById('copy-activity-btn');
+    var source = document.getElementById('activity-markdown');
+    if (copyBtn && source) {
+        copyBtn.addEventListener('click', function () { window.copyToClipboard(source.value, copyBtn); });
+    }
 
     render();
 })();
 </script>
+{% endif %}
 
+<script>
+(function () {
+    // Custom range toggle.
+    var toggle = document.querySelector('.stats-custom-toggle');
+    var form = document.getElementById('stats-custom');
+    if (toggle && form) {
+        toggle.addEventListener('click', function () {
+            form.hidden = !form.hidden;
+            toggle.setAttribute('aria-expanded', form.hidden ? 'false' : 'true');
+            if (!form.hidden) { var f = document.getElementById('stats-from'); if (f) f.focus(); }
+        });
+        form.addEventListener('submit', function (e) {
+            var from = document.getElementById('stats-from').value;
+            var to = document.getElementById('stats-to').value;
+            if (from && to && from > to) {
+                // Swap rather than bounce an error back: the intent is clear.
+                document.getElementById('stats-from').value = to;
+                document.getElementById('stats-to').value = from;
+            }
+            showLoading();
+        });
+    }
+
+    // A range not yet in the cache reads GitHub for every repo (can take
+    // ~10-30s on a first YTD or an early custom start). Say so instead of
+    // leaving a dead-looking page; only after a beat, so cache hits don't flash.
+    var timer = null;
+    var cap = document.getElementById('stats-range-caption');
+    var capHtml = cap ? cap.innerHTML : '';
+    function showLoading() {
+        if (timer) return;
+        timer = setTimeout(function () {
+            if (cap) {
+                cap.classList.add('is-loading');
+                cap.textContent = 'Reading commits and merged PRs from GitHub for every repo… this can take up to a minute the first time.';
+            }
+        }, 400);
+    }
+    document.querySelectorAll('.js-stats-nav').forEach(function (a) {
+        a.addEventListener('click', function (e) {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            showLoading();
+        });
+    });
+    // Back/forward cache can restore the page mid-"loading": put it back.
+    window.addEventListener('pageshow', function (e) {
+        if (!e.persisted) return;
+        clearTimeout(timer);
+        timer = null;
+        if (cap) { cap.classList.remove('is-loading'); cap.innerHTML = capHtml; }
+    });
+})();
+</script>
 {% endif %}
 {% endblock %}

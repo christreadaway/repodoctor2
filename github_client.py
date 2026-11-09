@@ -13,6 +13,18 @@ GITHUB_API = "https://api.github.com"
 logger = logging.getLogger(__name__)
 
 
+def _parse_iso(value: str) -> datetime.datetime | None:
+    """GitHub ISO-8601 timestamp ('2026-11-09T15:50:00Z') -> aware datetime,
+    or None. Naive input is read as UTC so comparisons never raise."""
+    if not value:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=datetime.timezone.utc)
+
+
 class GitHubAuthError(Exception):
     """Raised when GitHub returns 401 Unauthorized.
 
@@ -501,6 +513,78 @@ class GitHubClient:
             f"{GITHUB_API}/repos/{owner}/{repo}/commits",
             f"get_commits_since {owner}/{repo}", params=params, max_pages=max_pages,
         )
+
+    def _get_paginated_strict(self, url: str, label: str, params: dict | None = None,
+                              max_pages: int = 10, stop=None) -> tuple[list[dict], bool]:
+        """Like _get_paginated, but a failed page RAISES GitHubFetchError
+        instead of quietly returning what it had so far — for screens where a
+        half-read repo would be misreported as "less activity". Returns
+        (items, truncated); truncated means max_pages ran out with more to go.
+        `stop(batch)` may return True to end paging early (sorted lists).
+        HTTP 409 (empty repository) is an empty list, not an error."""
+        items: list[dict] = []
+        for page in range(1, max_pages + 1):
+            merged = {"per_page": 100, "page": page, **(params or {})}
+            resp = self._get(url, params=merged)
+            if resp.status_code == 409:
+                return items, False
+            if resp.status_code != 200:
+                hint = ""
+                if resp.status_code in (403, 429):
+                    hint = " (rate limited — try again in a few minutes)"
+                elif resp.status_code == 404:
+                    hint = " (not found — renamed, deleted, or no access)"
+                raise GitHubFetchError(f"{label} page {page}: HTTP {resp.status_code}{hint}")
+            batch = resp.json()
+            if not isinstance(batch, list) or not batch:
+                return items, False
+            items.extend(batch)
+            if len(batch) < 100 or (stop and stop(batch)):
+                return items, False
+        return items, True
+
+    def get_commits_range(self, owner: str, repo: str, since_iso: str,
+                          ref: str | None = None, until_iso: str | None = None,
+                          max_pages: int = 50) -> tuple[list[dict], bool]:
+        """Commits on `ref` since `since_iso` (optionally until `until_iso`),
+        newest first. Strict: raises GitHubFetchError on a failed page.
+        Returns (commits, truncated)."""
+        params: dict = {"since": since_iso}
+        if until_iso:
+            params["until"] = until_iso
+        if ref:
+            params["sha"] = ref
+        return self._get_paginated_strict(
+            f"{GITHUB_API}/repos/{owner}/{repo}/commits",
+            f"commits {owner}/{repo}", params=params, max_pages=max_pages,
+        )
+
+    def get_merged_pulls_since(self, owner: str, repo: str, since_iso: str,
+                               max_pages: int = 10) -> tuple[list[dict], bool]:
+        """Pull requests merged at or after `since_iso` (any base branch).
+
+        Pages closed PRs newest-updated first and stops once a page reaches PRs
+        last updated before the window: merging updates a PR, so nothing older
+        can have merged inside it. Strict like get_commits_range. Returns
+        (merged_prs, truncated)."""
+        since = _parse_iso(since_iso)
+
+        def older_than_window(batch):
+            last = _parse_iso(batch[-1].get("updated_at") or "")
+            return since is not None and last is not None and last < since
+
+        raw, truncated = self._get_paginated_strict(
+            f"{GITHUB_API}/repos/{owner}/{repo}/pulls",
+            f"merged PRs {owner}/{repo}",
+            params={"state": "closed", "sort": "updated", "direction": "desc"},
+            max_pages=max_pages, stop=older_than_window,
+        )
+        merged = []
+        for pr in raw:
+            at = _parse_iso(pr.get("merged_at") or "")
+            if at is not None and (since is None or at >= since):
+                merged.append(pr)
+        return merged, truncated
 
     def branch_last_commit(self, owner: str, repo: str, branch: str,
                            comparison: dict) -> tuple[str | None, str | None]:

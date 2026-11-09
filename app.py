@@ -49,6 +49,7 @@ import resume
 import components
 import portfolio
 import docs_explorer
+import activity
 import md_render
 import program
 
@@ -535,8 +536,8 @@ def dashboard():
 @app.route("/scan", methods=["POST"])
 @_require_auth
 def scan():
-    global _scan_results, _stats_cache
-    _stats_cache = None
+    global _scan_results, _activity_cache
+    _activity_cache = None
     client = _get_github_client()
     if not client:
         flash("Not authenticated with GitHub.", "error")
@@ -1201,152 +1202,167 @@ def generate_selector_blurb_one(owner, name):
     return jsonify({"ok": True, "repo": full_name})
 
 
-# --- Stats ---
+# --- Stats (commits, code size, and What changed — any date range) ---
+#
+# Every number on the Stats page comes from ONE cached GitHub read (see
+# activity.py): default-branch commits + merged PRs for every scanned repo,
+# fetched from a floor far enough back to cover every preset (Week / Month /
+# Quarter / YTD), then filtered locally per range. A custom range that starts
+# earlier refetches from its own start. The cache expires hourly (REFRESH
+# forces it), is dropped on every new scan, and repos whose read failed are
+# retried on the next view instead of being cached as "no activity".
 
-# Cached stats data so the page doesn't re-hit the API on every visit.
-# Keyed by scan identity (len + first repo full_name + total_branches).
-_stats_cache: dict | None = None
+_activity_cache: dict | None = None
+# Serializes fetches: a second tab (or a double-click) waits for the first
+# fetch and then reads its cache instead of doubling the GitHub calls.
+_activity_lock = threading.Lock()
+ACTIVITY_CACHE_TTL_SECONDS = 3600
 
 
-def _stats_cache_key() -> str:
+def _activity_scan_key() -> str:
+    """Identity of the scan the cache was built from; a new scan changes it."""
     if not _scan_results:
         return ""
     repos = _scan_results.get("repos", [])
-    first = repos[0]["full_name"] if repos else ""
-    # The hour bucket expires the cache: commits_by_period is computed against
-    # "now", so a cache kept for days would show stale 1d/3d bars.
-    return f"{len(repos)}|{first}|{_scan_results.get('total_branches', 0)}|{int(time.time() // 3600)}"
+    first = repos[0].get("full_name", "") if repos else ""
+    return f"{_scan_results.get('scanned_at', '')}|{len(repos)}|{first}"
 
 
-PERIOD_DAYS = {
-    "1d": 1, "3d": 3, "1w": 7, "2w": 14, "1m": 30, "2m": 60,
-}
+def _repo_full_name(r: dict) -> str:
+    return r.get("full_name") or f"{r['owner']}/{r['name']}"
 
 
-def _collect_repo_activity(client, repo, since_iso, now_utc):
-    """Fetch commit activity for one repo. Returns dict to merge."""
-    import datetime as _dt
-    owner = repo["owner"]
-    name = repo["name"]
-    ref = repo.get("default_branch", "main")
+def _activity_data(client, repos: list[dict], rng, force: bool = False) -> dict | None:
+    """Cached commits + merged PRs for `repos`, covering `rng`.
 
-    commits_by_period = {k: 0 for k in PERIOD_DAYS}
+    Returns {"data", "errors", "fetched_at", "cache_hit", "stale"} or None
+    when there is no usable cache and no GitHub client (app restarted)."""
+    global _activity_cache
+    key = _activity_scan_key()
+    today = activity._local_now().date()
+    floor = min(activity.fetch_floor(today), rng.start_date)
+    log = models.log_activity_event
 
-    # Page through all commits in the longest stats window. The hard ceiling
-    # (50 pages = 5000 commits) just bounds API calls for pathological repos;
-    # it doesn't visibly cap the bar like the old 200 limit did.
-    try:
-        commits = client.get_commits_since(owner, name, since_iso, ref=ref, max_pages=50)
-    except gh.GitHubAuthError:
-        raise
-    except Exception:
-        commits = []
+    with _activity_lock:
+        cache = _activity_cache
+        covers = bool(cache and cache["key"] == key and cache["floor"] <= rng.start_date)
+        fresh = covers and (time.time() - cache["fetched_ts"]) < ACTIVITY_CACHE_TTL_SECONDS
 
-    for c in commits:
-        date_str = (
-            c.get("commit", {}).get("committer", {}).get("date")
-            or c.get("commit", {}).get("author", {}).get("date")
-        )
-        if not date_str:
-            continue
-        try:
-            dt = _dt.datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        age_days = (now_utc - dt).total_seconds() / 86400.0
-        for pkey, pdays in PERIOD_DAYS.items():
-            if age_days <= pdays:
-                commits_by_period[pkey] += 1
+        if not client:
+            if covers:  # stale is better than nothing; the page says how old
+                return {**_activity_result(cache), "cache_hit": True, "stale": not fresh}
+            return None
 
-    return {
-        "name": name,
-        "owner": owner,
-        "full_name": repo.get("full_name", f"{owner}/{name}"),
-        "html_url": repo.get("html_url", ""),
-        "commits_by_period": commits_by_period,
-        "code_size_bytes": repo.get("code_size_bytes", 0),
-    }
+        if fresh and not force:
+            if cache["errors"]:
+                # Self-heal: re-read only the repos that failed last time.
+                retry = [r for r in repos if _repo_full_name(r) in cache["errors"]]
+                if retry:
+                    got, errs = activity.gather(client, retry, cache["since_iso"], log)
+                    errors = {k: v for k, v in cache["errors"].items() if k not in got}
+                    errors.update(errs)
+                    cache = {**cache, "data": {**cache["data"], **got}, "errors": errors}
+                    _activity_cache = cache
+            return {**_activity_result(cache), "cache_hit": True, "stale": False}
+
+        since_iso = activity._local_midnight(floor).astimezone(datetime.timezone.utc).isoformat()
+        data, errors = activity.gather(client, repos, since_iso, log)
+        cache = {
+            "key": key, "floor": floor, "since_iso": since_iso,
+            "fetched_ts": time.time(),
+            "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "data": data, "errors": errors,
+        }
+        _activity_cache = cache
+        return {**_activity_result(cache), "cache_hit": False, "stale": False}
+
+
+def _activity_result(cache: dict) -> dict:
+    return {"data": cache["data"], "errors": cache["errors"], "fetched_at": cache["fetched_at"]}
+
+
+def _stats_report(result: dict, active_group: str, groups: dict, rng):
+    all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
+    scoped = _filter_by_group(all_repos, active_group, groups)
+    return activity.build_report(scoped, result["data"], result["errors"], rng)
+
+
+def _stats_markdown(report: dict, active_group: str) -> str:
+    return activity.compose_markdown(
+        report, session.get("github_user", ""), active_group,
+        generated_at=sessions._local_time_label(
+            datetime.datetime.now(datetime.timezone.utc).isoformat()))
 
 
 @app.route("/stats")
 @_require_auth
 def stats():
-    global _stats_cache
-
     groups = models.get_groups()
-    requested_group = request.args.get("group")
-    active_group = (requested_group if requested_group in groups else "") if requested_group is not None else ""
+    active_group = _resolve_active_group(groups)
+    rng, notice = activity.resolve_range(request.args)
+    if notice:
+        models.log_activity_event("range_adjusted", args=request.args.to_dict(), notice=notice)
+    all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
+    ctx = dict(groups=groups, active_group=active_group, rng=rng, notice=notice,
+               presets=activity.PRESETS, today=activity._local_now().date().isoformat(),
+               all_repos_count=len(all_repos), scan_results=_scan_results)
 
     if not _scan_results:
-        return render_template(
-            "stats.html",
-            repos=None,
-            scan_results=None,
-            groups=groups,
-            active_group=active_group,
-        )
+        return render_template("stats.html", **ctx)
 
+    t0 = time.monotonic()
     force = request.args.get("refresh") == "1"
-    key = _stats_cache_key()
-    # Bind the global to a local once: a concurrent POST /scan sets _stats_cache
-    # to None, and reading it twice (truthiness then .get) could otherwise race
-    # into an AttributeError on None.
-    cache = _stats_cache
-    if not force and cache and cache.get("key") == key:
-        return render_template(
-            "stats.html",
-            repos=cache["repos"],
-            scan_results=_scan_results,
-            periods=list(PERIOD_DAYS.keys()),
-            groups=groups,
-            active_group=active_group,
-        )
+    result = _activity_data(_get_github_client(), all_repos, rng, force=force)
+    if force:
+        # Post/Redirect/Get: a browser reload after REFRESH must not refetch.
+        args = request.args.to_dict()
+        args.pop("refresh", None)
+        return redirect(url_for("stats", **args))
+    if result is None:
+        return render_template("stats.html", not_connected=True, **ctx)
 
-    client = _get_github_client()
-    if not client:
-        flash("Not authenticated with GitHub.", "error")
-        return redirect(url_for("dashboard"))
-
-    import datetime as _dt
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    now_utc = _dt.datetime.now(_dt.timezone.utc)
-    since = (now_utc - _dt.timedelta(days=max(PERIOD_DAYS.values()))).isoformat()
-
-    repos = _scan_results.get("repos", [])
-    results: list[dict] = []
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {
-            pool.submit(_collect_repo_activity, client, r, since, now_utc): r
-            for r in repos
-        }
-        for fut in as_completed(futures):
-            try:
-                results.append(fut.result())
-            except gh.GitHubAuthError:
-                # Surface the PAT remediation via the global handler instead
-                # of caching all-zero rows that hide the real problem.
-                raise
-            except Exception as e:
-                r = futures[fut]
-                results.append({
-                    "name": r["name"],
-                    "owner": r["owner"],
-                    "full_name": r.get("full_name", ""),
-                    "html_url": r.get("html_url", ""),
-                    "commits_by_period": {k: 0 for k in PERIOD_DAYS},
-                    "code_size_bytes": r.get("code_size_bytes", 0),
-                    "error": str(e),
-                })
-
-    _stats_cache = {"key": key, "repos": results}
+    report = _stats_report(result, active_group, groups, rng)
+    chart_rows = [{
+        "name": r["name"], "html_url": r["html_url"], "commits": r["commit_count"],
+        "prs": r["pr_count"], "code_size_bytes": r["code_size_bytes"],
+        "error": bool(r["error"]),
+    } for r in report["rows"]]
+    t = report["totals"]
+    models.log_activity_event(
+        "view", range=rng.key, group=active_group, cache_hit=result["cache_hit"],
+        stale=result["stale"], repos=t["repos_total"], updated=t["repos_updated"],
+        commits=t["commits"], prs=t["prs_merged"], errors=t["errors"],
+        elapsed_ms=int((time.monotonic() - t0) * 1000))
     return render_template(
-        "stats.html",
-        repos=results,
-        scan_results=_scan_results,
-        periods=list(PERIOD_DAYS.keys()),
-        groups=groups,
-        active_group=active_group,
+        "stats.html", report=report, chart_rows=chart_rows,
+        markdown=_stats_markdown(report, active_group),
+        fetched_at=result["fetched_at"], stale=result["stale"],
+        card_commit_limit=activity.CARD_COMMIT_LIMIT, **ctx)
+
+
+@app.route("/stats/export.md")
+@_require_auth
+def stats_export():
+    """The same document COPY FOR CLAUDE produces, as a .md download."""
+    rng, _notice = activity.resolve_range(request.args)
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups, persist=False)
+    back = url_for("stats", group=active_group or None, **rng.query_args())
+    if not _scan_results:
+        flash("No scan data yet — run a scan first.", "error")
+        return redirect(back)
+    result = _activity_data(_get_github_client(), list(_scan_results.get("repos", [])), rng)
+    if result is None:
+        flash(NOT_CONNECTED_REMEDY, "error")
+        return redirect(back)
+    report = _stats_report(result, active_group, groups, rng)
+    models.log_activity_event("export", range=rng.key, group=active_group,
+                              updated=report["totals"]["repos_updated"])
+    filename = f"what-changed-{rng.start_date.isoformat()}-to-{rng.end_date.isoformat()}.md"
+    return Response(
+        _stats_markdown(report, active_group),
+        mimetype="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

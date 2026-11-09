@@ -796,6 +796,21 @@ def tail_selector_log(n: int = 100) -> list[dict]:
     return _tail_log(SELECTOR_LOG_PATH, n)
 
 
+# --- Activity (Stats → What changed, any date range) ---
+# One JSON object per line: every GitHub fetch (repos, since, errors,
+# truncation, elapsed), per-repo fetch failures, page views, and exports.
+
+ACTIVITY_LOG_PATH = os.path.join(DATA_DIR, "logs", "activity.log")
+
+
+def log_activity_event(event: str, **fields):
+    _append_log_event(ACTIVITY_LOG_PATH, event, fields)
+
+
+def tail_activity_log(n: int = 100) -> list[dict]:
+    return _tail_log(ACTIVITY_LOG_PATH, n)
+
+
 # --- Session Cost Tracking ---
 
 class SessionCost:
