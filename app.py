@@ -50,6 +50,7 @@ import components
 import portfolio
 import docs_explorer
 import activity
+import nextup
 import md_render
 import program
 
@@ -1797,6 +1798,130 @@ def yesterday_summarize_one(token):
 # checked). A ?raw=1 toggle shows the source instead.
 
 # --- START [S24-E] Do next + Weekly review (routes) ---
+#
+# Do next ranks everything actionable across the portfolio (In Flight cache +
+# Tracker P0/P1 actions + Projects planned steps) into one list; the Weekly
+# review adds what shipped in the last 7 days and what went quiet, from the
+# same cached Stats read. Neither page calls GitHub for the list itself, so
+# they open instantly; freshness is the In Flight cache age (REFRESH re-reads
+# and comes back here). Every view and export logs to data/logs/nextup.log.
+
+def _do_next_data(scan: dict | None, active_group: str, groups: dict):
+    all_repos = list(scan.get("repos", []) if scan else [])
+    scoped = _filter_by_group(all_repos, active_group, groups)
+    cached = models.get_inflight()
+    items = (cached or {}).get("items") or []
+    result = nextup.build_do_next(items, models.list_trackers(),
+                                  models.get_project_summaries(), scoped)
+    return cached, items, scoped, all_repos, result
+
+
+def _inflight_age(cached: dict | None):
+    return inflight.age_days((cached or {}).get("gathered_at", "")) if cached else None
+
+
+@app.route("/next")
+@_require_auth
+def do_next():
+    scan = _scan_results
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups)
+    ctx = dict(groups=groups, active_group=active_group, scan_results=scan,
+               is_monday=activity._local_now().weekday() == 0)
+    if not scan:
+        return render_template("next.html", all_repos_count=0, **ctx)
+    t0 = time.monotonic()
+    cached, _items, _scoped, all_repos, result = _do_next_data(scan, active_group, groups)
+    gathered_at = (cached or {}).get("gathered_at", "")
+    markdown = nextup.compose_do_next_markdown(result, session.get("github_user", ""),
+                                               gathered_at, active_group)
+    models.log_nextup_event(
+        "view_do_next", group=active_group, total=result["total"], tiers=result["counts"],
+        inflight_cached=bool(cached), inflight_age_days=_inflight_age(cached),
+        elapsed_ms=int((time.monotonic() - t0) * 1000))
+    return render_template(
+        "next.html", result=result, cached=cached, markdown=markdown,
+        gathered_age_days=_inflight_age(cached), all_repos_count=len(all_repos), **ctx)
+
+
+@app.route("/next/export.md")
+@_require_auth
+def do_next_export():
+    scan = _scan_results
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups, persist=False)
+    if not scan:
+        flash("No scan data yet — run a scan first.", "error")
+        return redirect(url_for("do_next"))
+    cached, _items, _scoped, _all, result = _do_next_data(scan, active_group, groups)
+    models.log_nextup_event("export_do_next", group=active_group, total=result["total"])
+    return Response(
+        nextup.compose_do_next_markdown(result, session.get("github_user", ""),
+                                        (cached or {}).get("gathered_at", ""), active_group),
+        mimetype="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="do-next.md"'},
+    )
+
+
+def _review_data(scan: dict, active_group: str, groups: dict):
+    cached, items, scoped, all_repos, dn = _do_next_data(scan, active_group, groups)
+    week_rng, _ = activity.resolve_range({"range": "week"})
+    quarter_rng, _ = activity.resolve_range({"range": "quarter"})
+    # Both ranges come from the same 90-day Stats read (one cache).
+    result = _activity_data(_get_github_client(), scan, quarter_rng)
+    week = quarter = None
+    if result is not None:
+        week = _stats_report(scan, result, active_group, groups, week_rng)
+        quarter = _stats_report(scan, result, active_group, groups, quarter_rng)
+    review = nextup.build_review(week, quarter, dn, items, scoped)
+    return cached, all_repos, week_rng, result, review
+
+
+@app.route("/review")
+@_require_auth
+def weekly_review():
+    scan = _scan_results
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups)
+    ctx = dict(groups=groups, active_group=active_group, scan_results=scan)
+    if not scan:
+        return render_template("review.html", all_repos_count=0, **ctx)
+    t0 = time.monotonic()
+    cached, all_repos, week_rng, result, review = _review_data(scan, active_group, groups)
+    markdown = nextup.compose_review_markdown(review, session.get("github_user", ""),
+                                              active_group, week_rng.dates_label)
+    t = ((review.get("week") or {}).get("totals") or {})
+    models.log_nextup_event(
+        "view_review", group=active_group, shipped_repos=len(review["shipped"]),
+        commits=t.get("commits"), waiting=len(review["waiting"]), quiet=len(review["quiet"]),
+        stale=len(review["stale"]), next=review["next_total"],
+        github_read=result is not None, cache_hit=(result or {}).get("cache_hit"),
+        elapsed_ms=int((time.monotonic() - t0) * 1000))
+    return render_template(
+        "review.html", review=review, week_rng=week_rng, markdown=markdown,
+        fetched_at=(result or {}).get("fetched_at"), stale_read=(result or {}).get("stale"),
+        cached=cached, gathered_age_days=_inflight_age(cached),
+        all_repos_count=len(all_repos), **ctx)
+
+
+@app.route("/review/export.md")
+@_require_auth
+def weekly_review_export():
+    scan = _scan_results
+    groups = models.get_groups()
+    active_group = _resolve_active_group(groups, persist=False)
+    if not scan:
+        flash("No scan data yet — run a scan first.", "error")
+        return redirect(url_for("weekly_review"))
+    _cached, _all, week_rng, _result, review = _review_data(scan, active_group, groups)
+    models.log_nextup_event("export_review", group=active_group)
+    filename = f"weekly-review-{week_rng.end_date.isoformat()}.md"
+    return Response(
+        nextup.compose_review_markdown(review, session.get("github_user", ""),
+                                       active_group, week_rng.dates_label),
+        mimetype="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 # --- END [S24-E] ---
 
 
@@ -1865,10 +1990,10 @@ def inflight_refresh():
     client = _get_github_client()
     if not _scan_results:
         flash("No scan data yet — run a scan first.", "error")
-        return redirect(url_for("inflight_view"))
+        return redirect(_safe_next() or url_for("inflight_view"))
     if not client:
         flash(NOT_CONNECTED_REMEDY, "error")
-        return redirect(url_for("inflight_view"))
+        return redirect(_safe_next() or url_for("inflight_view"))
     t0 = time.monotonic()
     # Always gather the whole portfolio so the cache is complete; the view
     # scopes to the active group afterwards.
@@ -1889,7 +2014,7 @@ def inflight_refresh():
     if data["failed_repos"]:
         msg += f" Couldn't read {len(data['failed_repos'])} repo(s): {', '.join(data['failed_repos'][:5])}."
     flash(msg, "success" if not data["failed_repos"] else "error")
-    return redirect(url_for("inflight_view"))
+    return redirect(_safe_next() or url_for("inflight_view"))
 
 
 @app.route("/inflight/export.md")

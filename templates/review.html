@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% from "_macros.html" import next_up_subnav, group_filter_bar, do_next_item, category_badge with context %}
+{% block title %}RepoDoctor — Weekly review{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Next Up</h1>
+    <div class="page-actions">
+        {% if review %}
+        <button type="button" class="btn btn-primary" id="copy-review-btn">COPY FOR CLAUDE</button>
+        <a href="{{ url_for('weekly_review_export', group=active_group or None) }}" class="btn btn-secondary">DOWNLOAD .MD</a>
+        {% endif %}
+    </div>
+</div>
+
+{{ next_up_subnav('review') }}
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first.</p>
+    </div>
+</div>
+{% else %}
+{% set t = (review.week.totals if review.week else {}) %}
+
+<p class="stats-range-caption">
+    <strong>Weekly review</strong> · {{ week_rng.dates_label }}
+    {% if fetched_at %}<span class="stats-asof {% if stale_read %}is-stale{% endif %}">· commits read {{ fetched_at|central_time }}{% if stale_read %} (offline){% endif %}</span>{% endif %}
+</p>
+
+{{ group_filter_bar('weekly_review', all_repos_count) }}
+
+{# 1. Shipped ------------------------------------------------------------ #}
+<section class="rv-section" aria-labelledby="rv-shipped">
+    <div class="rv-head">
+        <h2 id="rv-shipped">Shipped this week</h2>
+        <a href="{{ url_for('stats', range='week', group=active_group or None) }}" class="rv-more">Full detail in Stats →</a>
+    </div>
+    {% if review.week is none %}
+    <p class="rv-empty">Not read from GitHub: the app restarted since you logged in. <a href="{{ url_for('login', next=request.full_path.rstrip('?')) }}">Reconnect</a> to see what shipped.</p>
+    {% else %}
+    <div class="stats-kpis">
+        <div class="stats-kpi"><div class="stats-kpi-label">Repos updated</div>
+            <div class="stats-kpi-value">{{ t.repos_updated }}<span class="stats-kpi-of"> of {{ t.read if t.errors else t.repos_total }}{% if t.errors %} read{% endif %}</span></div></div>
+        <div class="stats-kpi"><div class="stats-kpi-label">Commits</div><div class="stats-kpi-value">{{ "{:,}".format(t.commits) }}</div></div>
+        <div class="stats-kpi"><div class="stats-kpi-label">PRs merged</div><div class="stats-kpi-value">{{ "{:,}".format(t.prs_merged) }}</div></div>
+        <div class="stats-kpi"><div class="stats-kpi-label">Active days</div><div class="stats-kpi-value">{{ t.active_days }}<span class="stats-kpi-of"> of {{ t.days }}</span></div></div>
+    </div>
+    {% if review.failed %}
+    <div class="flash flash-error stats-notice">GitHub couldn't be read for {% for r in review.failed %}{{ r.name }}{% if not loop.last %}, {% endif %}{% endfor %}, so {{ 'it is' if review.failed|length == 1 else 'they are' }} left out.</div>
+    {% endif %}
+    {% if review.shipped %}
+    <ul class="rv-shipped">
+        {% for s in review.shipped %}
+        <li>
+            <div class="rv-shipped-head">
+                <a href="{{ url_for('repo_detail', owner=s.owner, name=s.repo) }}" class="dn-repo">{{ s.repo }}</a>
+                {{ category_badge(s.repo) }}
+                <span class="rv-count">{{ s.commits }} commit{{ 's' if s.commits != 1 }}{% if s.prs %} · {{ s.prs }} PR{{ 's' if s.prs != 1 }} merged{% elif s.merges %} · {{ s.merges }} merge{{ 's' if s.merges != 1 }}{% endif %}</span>
+            </div>
+            <ul class="rv-titles">
+                {% for title in s.titles %}<li>{{ title }}</li>{% endfor %}
+                {% if s.more %}<li class="rv-more-items"><a href="{{ url_for('stats', range='week', group=active_group or None) }}">+{{ s.more }} more</a></li>{% endif %}
+            </ul>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="rv-empty">Nothing landed on a default branch this week{% if active_group %} in {{ active_group }}{% endif %}.</p>
+    {% endif %}
+    {% endif %}
+</section>
+
+{# 2. Waiting on you ----------------------------------------------------- #}
+<section class="rv-section" aria-labelledby="rv-waiting">
+    <div class="rv-head">
+        <h2 id="rv-waiting">Waiting on you <span class="rv-n">{{ review.waiting|length }}</span></h2>
+        <span class="rv-sub">{% if cached %}branches read {{ cached.gathered_at|central_time }}{% endif %}</span>
+    </div>
+    {% if not cached %}
+    <p class="rv-empty">Branches and PRs haven't been read yet.</p>
+    {% endif %}
+    {% if review.waiting %}
+    <ol class="dn-list">{% for x in review.waiting %}{{ do_next_item(x, show_rank=False) }}{% endfor %}</ol>
+    {% elif cached %}
+    <p class="rv-empty">Nothing to merge, finish, or confirm.</p>
+    {% endif %}
+    <form method="POST" action="{{ url_for('inflight_refresh') }}" class="inline-form rv-refresh">
+        <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
+        <button type="submit" class="btn btn-sm btn-outline" data-loading-text="READING…">{{ 'REFRESH BRANCHES' if cached else 'READ BRANCHES FROM GITHUB' }}</button>
+    </form>
+</section>
+
+{# 3. Gone quiet --------------------------------------------------------- #}
+<section class="rv-section" aria-labelledby="rv-quiet">
+    <div class="rv-head">
+        <h2 id="rv-quiet">Gone quiet <span class="rv-n">{{ review.quiet|length + review.stale|length }}</span></h2>
+        <span class="rv-sub">active in the last 90 days, nothing for 3+ weeks · stale branches</span>
+    </div>
+    {% if review.quiet or review.stale %}
+    <ul class="rv-quiet">
+        {% for q in review.quiet %}
+        <li>
+            <a href="{{ url_for('resume_view', owner=q.owner, name=q.repo) }}" class="dn-repo">{{ q.repo }}</a>
+            <span class="rv-count">no activity for {{ q.days }} days</span>
+            <span class="rv-sub">{{ q.commits }} commit{{ 's' if q.commits != 1 }}, {{ q.prs }} PR{{ 's' if q.prs != 1 }} in the last 90 days</span>
+        </li>
+        {% endfor %}
+        {% for i in review.stale %}
+        <li>
+            <a href="{{ url_for('resume_view', owner=i.owner, name=i.repo) }}" class="dn-repo">{{ i.repo }}</a>
+            <span class="session-branch">{{ i.branch }}</span>
+            <span class="rv-count">stale branch{% if i.age_days is not none %}, {{ i.age_days }} days{% endif %}</span>
+            {% if i.session_url %}<a href="{{ i.session_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-outline">OPEN SESSION ↗</a>{% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% elif review.week is none %}
+    <p class="rv-empty">Needs a GitHub read (see above).</p>
+    {% else %}
+    <p class="rv-empty">Nothing went quiet.</p>
+    {% endif %}
+</section>
+
+{# 4. Next up ------------------------------------------------------------- #}
+<section class="rv-section" aria-labelledby="rv-next">
+    <div class="rv-head">
+        <h2 id="rv-next">Next up <span class="rv-n">{{ review.next_total }}</span></h2>
+        <a href="{{ url_for('do_next', group=active_group or None) }}" class="rv-more">Full list in Do next →</a>
+    </div>
+    {% if review.next %}
+    <ol class="dn-list">{% for x in review.next %}{{ do_next_item(x, show_rank=False) }}{% endfor %}</ol>
+    {% else %}
+    <p class="rv-empty">Nothing queued. Generate <a href="{{ url_for('projects') }}">Projects</a> summaries or <a href="{{ url_for('tracker_index') }}">Tracker</a> next actions to fill this.</p>
+    {% endif %}
+</section>
+
+<textarea id="review-markdown" hidden readonly>{{ markdown }}</textarea>
+<script>
+(function () {
+    var copyBtn = document.getElementById('copy-review-btn');
+    var source = document.getElementById('review-markdown');
+    if (copyBtn && source) {
+        copyBtn.addEventListener('click', function () { window.copyToClipboard(source.value, copyBtn); });
+    }
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest && e.target.closest('.js-copy-prompt');
+        if (btn) window.copyToClipboard(btn.getAttribute('data-prompt'), btn);
+    });
+})();
+</script>
+{% endif %}
+{% endblock %}

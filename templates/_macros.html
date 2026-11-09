@@ -32,12 +32,15 @@
 {% endif %}
 {%- endmacro %}
 
-{# Sub-navigation for the three "where do I pick back up?" screens that share
-   the Next Up tab: Recent sessions (time window), In flight (every unmerged
-   branch), Resume (one project's context packet). `current` is one of
-   'sessions' | 'inflight' | 'resume'. #}
+{# Sub-navigation for the "where do I pick back up?" screens that share the
+   Next Up tab: Do next (one ranked list), Weekly review, Recent sessions
+   (time window), In flight (every unmerged branch), Resume (one project's
+   context packet). `current` is one of
+   'next' | 'review' | 'sessions' | 'inflight' | 'resume'. #}
 {% macro next_up_subnav(current) -%}
 <div class="subnav" role="tablist" aria-label="Next Up views">
+    <a href="{{ url_for('do_next') }}" class="subnav-link {% if current == 'next' %}active{% endif %}">Do next</a>
+    <a href="{{ url_for('weekly_review') }}" class="subnav-link {% if current == 'review' %}active{% endif %}">Weekly review</a>
     <a href="{{ url_for('yesterday_view') }}" class="subnav-link {% if current == 'sessions' %}active{% endif %}">Recent sessions</a>
     <a href="{{ url_for('inflight_view') }}" class="subnav-link {% if current == 'inflight' %}active{% endif %}">In flight</a>
     <a href="{{ url_for('resume_index') }}" class="subnav-link {% if current == 'resume' %}active{% endif %}">Resume a project</a>
@@ -53,4 +56,35 @@
     <a href="{{ url_for('portfolio_view', tab='infra') }}" class="subnav-link {% if current == 'infra' %}active{% endif %}">Infrastructure</a>
     <a href="{{ url_for('components_view') }}" class="subnav-link {% if current == 'components' %}active{% endif %}">Components scan</a>
 </div>
+{%- endmacro %}
+
+
+{# One ranked Do next row (nextup.build_do_next item). Used by Do next and
+   the Weekly review. `x.prompt` is copied with the shared copyToClipboard via
+   the delegated .js-copy-prompt handler on each page. #}
+{% macro do_next_item(x, show_rank=True) -%}
+<li class="dn-item dn-tier-{{ x.tier }}">
+    {% if show_rank %}<span class="dn-rank" aria-hidden="true">{{ x.rank }}</span>{% endif %}
+    <div class="dn-body">
+        <div class="dn-head">
+            <span class="chip dn-chip dn-chip-{{ x.tier }}">{{ x.label }}</span>
+            {% if x.repo %}<a href="{{ url_for('resume_view', owner=x.owner, name=x.repo) }}" class="dn-repo" title="Resume packet for {{ x.repo }}">{{ x.repo }}</a>{% endif %}
+            <span class="dn-title">{{ x.title }}</span>
+        </div>
+        {% if x.why %}<p class="dn-why">{{ x.why }}</p>{% endif %}
+        <div class="dn-actions">
+            {% for link in x.links %}
+            <a href="{{ link.url }}" class="btn btn-sm {{ 'btn-primary' if link.primary else 'btn-outline' }}"
+               {% if link.external %}target="_blank" rel="noopener"{% endif %}>{{ link.label }}{% if link.external %} ↗{% endif %}</a>
+            {% endfor %}
+            {% if x.prompt %}
+            <button type="button" class="btn btn-sm btn-outline js-copy-prompt" data-prompt="{{ x.prompt }}"
+                    title="Copy a ready-to-paste prompt for a fresh Claude Code session">COPY PROMPT</button>
+            {% endif %}
+            {% if x.age_days is not none and x.tier in ('merge', 'finish', 'open_pr', 'decide') %}
+            <span class="dn-age">{{ 'today' if x.age_days == 0 else (x.age_days ~ ' day' ~ ('' if x.age_days == 1 else 's') ~ ' ago') }}</span>
+            {% endif %}
+        </div>
+    </div>
+</li>
 {%- endmacro %}

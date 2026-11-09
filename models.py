@@ -1013,4 +1013,13 @@ def tail_portfolio_log(n: int = 100) -> list[dict]:
 # (spacer)
 
 # --- START [S24-E] Do next + Weekly review ---
+NEXTUP_LOG_PATH = os.path.join(DATA_DIR, "logs", "nextup.log")
+
+
+def log_nextup_event(event: str, **fields):
+    _append_log_event(NEXTUP_LOG_PATH, event, fields)
+
+
+def tail_nextup_log(n: int = 100) -> list[dict]:
+    return _tail_log(NEXTUP_LOG_PATH, n)
 # --- END [S24-E] ---

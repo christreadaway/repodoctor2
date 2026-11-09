@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% from "_macros.html" import next_up_subnav, group_filter_bar, do_next_item with context %}
+{% block title %}RepoDoctor — Do next{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Next Up</h1>
+    <div class="page-actions">
+        {% if result and result.total %}
+        <button type="button" class="btn btn-primary" id="copy-next-btn">COPY FOR CLAUDE</button>
+        <a href="{{ url_for('do_next_export', group=active_group or None) }}" class="btn btn-secondary">DOWNLOAD .MD</a>
+        {% endif %}
+    </div>
+</div>
+
+{{ next_up_subnav('next') }}
+
+{% if not scan_results %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>No scan data yet.</h2>
+        <p>Go to <a href="{{ url_for('dashboard') }}">My Repos</a> and run a scan first.</p>
+    </div>
+</div>
+{% else %}
+
+{% if is_monday %}
+<div class="dn-monday">
+    <span>It's Monday.</span> Start with the <a href="{{ url_for('weekly_review', group=active_group or None) }}">Weekly review</a>: what shipped, what's waiting on you, what went quiet.
+</div>
+{% endif %}
+
+<p class="projects-hint">
+    One ranked list of what to work on, across every repo: PRs to <strong>merge</strong>, work to <strong>finish</strong>,
+    tracker <strong>P0/P1</strong> actions, branches that need a <strong>PR</strong> or a <strong>decision</strong>, then planned steps.
+    <strong>COPY PROMPT</strong> gives you an opening line for a fresh Claude Code session; <strong>OPEN SESSION</strong> jumps back into the one that made the branch.
+</p>
+
+<div class="dn-freshness {% if not cached or (gathered_age_days or 0) >= 1 %}is-stale{% endif %}">
+    {% if cached %}
+    <span>Branches and PRs read from GitHub {{ cached.gathered_at|central_time }}{% if gathered_age_days %} ({{ gathered_age_days }} day{{ 's' if gathered_age_days != 1 }} ago){% endif %}. Tracker actions and planned steps are live.</span>
+    {% else %}
+    <span>Branches and PRs haven't been read from GitHub yet, so MERGE / FINISH / OPEN A PR items are missing below.</span>
+    {% endif %}
+    <form method="POST" action="{{ url_for('inflight_refresh') }}" class="inline-form">
+        <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
+        <button type="submit" class="btn btn-sm btn-outline" data-loading-text="READING…">{{ 'REFRESH FROM GITHUB' if cached else 'READ FROM GITHUB' }}</button>
+    </form>
+</div>
+
+{{ group_filter_bar('do_next', all_repos_count) }}
+
+{% if result.total %}
+<div class="dn-tierbar" aria-label="Items by kind">
+    {% for key, label, n in result.tiers %}
+    <a href="#tier-{{ key }}" class="chip dn-chip dn-chip-{{ key }}">{{ label }} <strong>{{ n }}</strong></a>
+    {% endfor %}
+</div>
+
+{% set ns = namespace(tier=None) %}
+<ol class="dn-list">
+    {% for x in result['items'] %}
+    {% if x.tier != ns.tier %}{% set ns.tier = x.tier %}<li class="dn-anchor" id="tier-{{ x.tier }}" aria-hidden="true"></li>{% endif %}
+    {{ do_next_item(x) }}
+    {% endfor %}
+</ol>
+
+{% if result.planned_more or result.hidden_low_priority %}
+<p class="stats-footnote">
+    {% if result.planned_more %}{{ result.planned_more }} more planned step{{ 's' if result.planned_more != 1 }} on <a href="{{ url_for('projects') }}">Projects</a>.{% endif %}
+    {% if result.hidden_low_priority %}{{ result.hidden_low_priority }} lower-priority (P2/P3) tracker action{{ 's' if result.hidden_low_priority != 1 }} in <a href="{{ url_for('tracker_index') }}">Tracker</a>.{% endif %}
+</p>
+{% endif %}
+
+<textarea id="next-markdown" hidden readonly>{{ markdown }}</textarea>
+{% else %}
+<div class="onboarding">
+    <div class="onboarding-welcome">
+        <h2>Nothing waiting{% if active_group %} in {{ active_group }}{% endif %}.</h2>
+        <p>{% if cached %}Every branch is merged and no P0/P1 tracker actions are open.{% else %}Read branches from GitHub above to see PRs and work in flight.{% endif %}
+        Generate <a href="{{ url_for('projects') }}">Projects</a> summaries or <a href="{{ url_for('tracker_index') }}">Tracker</a> next actions to queue planned work here.</p>
+    </div>
+</div>
+{% endif %}
+
+<script>
+(function () {
+    var copyBtn = document.getElementById('copy-next-btn');
+    var source = document.getElementById('next-markdown');
+    if (copyBtn && source) {
+        copyBtn.addEventListener('click', function () { window.copyToClipboard(source.value, copyBtn); });
+    }
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest && e.target.closest('.js-copy-prompt');
+        if (btn) window.copyToClipboard(btn.getAttribute('data-prompt'), btn);
+    });
+})();
+</script>
+{% endif %}
+{% endblock %}

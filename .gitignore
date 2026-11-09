@@ -58,3 +58,6 @@ dist/
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Claude Code agent worktrees (local only)
+.claude/worktrees/
