@@ -12,8 +12,8 @@
         {% if snapshot_ready %}
         <form method="POST" action="{{ url_for('snapshot_publish') }}" class="inline-form">
             <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
-            <button type="submit" class="btn btn-secondary" data-loading-text="PUBLISHING…"
-                    title="Re-encrypt and publish the phone snapshot to Netlify">PUBLISH TO PHONE</button>
+            <button type="submit" class="btn btn-secondary snapshot-publish-btn" data-loading-text="PUBLISHING…"
+                    title="Re-encrypt and publish the phone snapshot to Netlify. It always covers all your repos, not just this group.">PUBLISH TO PHONE</button>
         </form>
         {% endif %}
     </div>

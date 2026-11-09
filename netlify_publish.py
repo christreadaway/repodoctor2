@@ -438,14 +438,17 @@ class NetlifyClient:
             "error_message": self._scrub(error_message)[:300] if error_message else None,
         }
 
-    def delete_site(self, site_id: str) -> None:
-        """Delete the site. A 404 means it's already gone: not an error."""
+    def delete_site(self, site_id: str) -> str:
+        """Delete the site. A 404 means it's already gone (or this token's
+        account can't see it): not an error. Returns "deleted" or
+        "already_gone"."""
         sid = self._check_site_id(site_id)
         t0 = self._clock()
         resp = self._call("DELETE", f"/sites/{sid}", action="delete_site", allow=(404,))
-        self._emit("delete_site", site_id=sid, status=resp.status_code,
-                   outcome="already_gone" if resp.status_code == 404 else "deleted",
+        outcome = "already_gone" if resp.status_code == 404 else "deleted"
+        self._emit("delete_site", site_id=sid, status=resp.status_code, outcome=outcome,
                    elapsed_ms=self._ms(t0))
+        return outcome
 
     # --- HTTP plumbing ----------------------------------------------------------
 

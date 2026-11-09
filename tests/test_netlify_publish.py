@@ -277,7 +277,7 @@ class WireTests(NetlifyTestBase):
                           side_effect=fake_request):
             client = nf.NetlifyClient(TOKEN, log_event=self._record)
             self.assertIsInstance(client._session, requests.Session)
-            self.assertIsNone(client.delete_site(SITE_ID))
+            self.assertEqual(client.delete_site(SITE_ID), "deleted")
             client.close()
         method, url, headers = calls[0]
         self.assertEqual((method, url), ("DELETE", f"{API}/sites/{SITE_ID}"))
@@ -674,14 +674,14 @@ class DeployTests(NetlifyTestBase):
 class DeleteTests(NetlifyTestBase):
     def test_204_deleted(self):
         c = self.client(resp(204))
-        self.assertIsNone(c.delete_site(SITE_ID))
+        self.assertEqual(c.delete_site(SITE_ID), "deleted")
         call = self.session.calls[0]
         self.assertEqual((call["method"], call["url"]), ("DELETE", f"{API}/sites/{SITE_ID}"))
         self.assertEqual(self.events_named("delete_site")[0]["outcome"], "deleted")
 
     def test_404_counts_as_already_gone(self):
         c = self.client(resp(404, {"message": "Not Found"}))
-        self.assertIsNone(c.delete_site(SITE_ID))
+        self.assertEqual(c.delete_site(SITE_ID), "already_gone")
         self.assertEqual(self.events_named("delete_site")[0]["outcome"], "already_gone")
         self.assertEqual(self.events_named("http_error"), [])
 
@@ -820,7 +820,7 @@ class RetryAndStatusTests(NetlifyTestBase):
 
     def test_no_callback_is_fine(self):
         c = self.client(resp(204), log_event=None)
-        self.assertIsNone(c.delete_site(SITE_ID))
+        self.assertEqual(c.delete_site(SITE_ID), "deleted")
 
 
 # --- the token never leaks ----------------------------------------------------------

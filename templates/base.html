@@ -57,10 +57,19 @@
             </form>
         </div>
         {% endif %}
+        {# Phone-snapshot messages ("snapshot-<category>") render inside the
+           Settings card where its redirect lands (snapshot_inline_flash);
+           anywhere else they show here like any other message. #}
         {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
+        {% set top_messages = [] %}
+        {% for category, message in messages %}
+            {% if not (snapshot_inline_flash and category.startswith('snapshot-')) %}
+            {% set _ = top_messages.append((category[9:] if category.startswith('snapshot-') else category, message)) %}
+            {% endif %}
+        {% endfor %}
+        {% if top_messages %}
         <div class="flash-messages">
-            {% for category, message in messages %}
+            {% for category, message in top_messages %}
             <div class="flash flash-{{ category }}">{{ message }}</div>
             {% endfor %}
         </div>

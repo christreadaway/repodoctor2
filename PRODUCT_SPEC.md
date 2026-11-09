@@ -440,19 +440,39 @@ Commits made by Claude Code carry a `Claude-Session: https://claude.ai/code/sess
 
 ### 4.7o Phone snapshot (Settings → Phone snapshot; Netlify)
 
-**Files:** `snapshot.py` (render, encrypt, shell, site files, zip), `templates/snapshot/` (body, parts, styles), `netlify_publish.py` (Netlify API client), `app.py` (`# --- Phone snapshot (Netlify)`: `_snapshot_data`, `/snapshot/setup`, `/snapshot/publish`, `/snapshot/preview`, `/snapshot/takedown`), `security.py` (`encrypt_snapshot_secrets` / `decrypt_snapshot_secrets`), `models.py` (snapshot state + log), `templates/settings.html`, `templates/review.html` (PUBLISH TO PHONE)
+**Files:** `snapshot.py` (render, encrypt, passphrase rules, shell, site files, zip), `templates/snapshot/` (body, parts, styles), `netlify_publish.py` (Netlify API client), `qr.py` (dependency-free QR code as inline SVG), `app.py` (`# --- Phone snapshot (Netlify)`: `_snapshot_data`, `/snapshot/setup`, `/snapshot/publish`, `/snapshot/recreate`, `/snapshot/check`, `/snapshot/unlock`, `/snapshot/preview`, `/snapshot/takedown`), `security.py` (`encrypt_snapshot_secrets` / `decrypt_snapshot_secrets`), `models.py` (snapshot state + log), `templates/settings.html` + `templates/_snapshot_unlock.html`, `templates/review.html` (PUBLISH TO PHONE), `templates/base.html` (snapshot messages)
 
 **Job:** read the dashboard on a phone without putting the app, its tokens, or readable data online (Session 25; option 1 of the Netlify choices).
 
-**What's in it (read-only):** Do next (first 40 items, COPY PROMPT, OPEN SESSION and PR links), Weekly review, What changed for Week / Month / Quarter / YTD (KPIs, overview paragraph, per repo counts + AI paragraph or top titles, 25 repos per range), Portfolio by theme with health grades. Links back into the app (Tracker, In Flight) are dropped; they can't work from a phone. Built from the same caches as the pages, with one Stats read widened to cover YTD.
+**What's in it (read-only):** Do next (first 40 items, COPY PROMPT, OPEN SESSION and PR links), Weekly review, What changed for Week / Month / Quarter / YTD (KPIs, overview paragraph, per repo counts + AI paragraph or top titles, 25 repos per range), Portfolio by theme with health grades. It always covers all repos (the group filter on the page you publish from doesn't apply). Links back into the app (Tracker, In Flight) are dropped; they can't work from a phone. Built from the same caches as the pages, with one Stats read widened to cover YTD. The build time (to the second, Central) is the only plaintext.
 
-**Privacy model:** the Mac renders the HTML, then encrypts it with AES-256-GCM using a key from PBKDF2-HMAC-SHA256 (600,000 iterations, 16-byte random salt, 12-byte random nonce, fresh every publish) and the owner's snapshot passphrase (12+ characters, normalized identically in Python and the browser). The published files are `index.html` (a lock screen + the ciphertext envelope + one inline script that decrypts with WebCrypto), `_headers` and `robots.txt`; none contains readable data; the only plaintext is the build time. A hash-pinned Content-Security-Policy (in `_headers` and a meta tag) lets only that one script run; the decrypted HTML is injected without scripts, images or inline handlers, outbound links use `rel="noopener noreferrer"`, and pages send `noindex`, `no-referrer`, `no-store`. "Remember on this device" (opt-in, labeled for your own phone) keeps the passphrase in that browser's localStorage; FORGET clears it.
+**Privacy model:** the Mac renders the HTML, pads it to a 32 KB boundary (so the file size doesn't reveal how much changed), then encrypts it with AES-256-GCM using a key from PBKDF2-HMAC-SHA256 (600,000 iterations, 16-byte random salt, 12-byte random nonce, fresh every publish) and the owner's snapshot passphrase. The published files are `index.html` (a lock screen + the ciphertext envelope + one inline script that decrypts with WebCrypto), `_headers` and `robots.txt`; none contains readable data. A hash-pinned Content-Security-Policy (in `_headers` and a meta tag) lets only that one script run; the decrypted HTML is injected without scripts, images or inline handlers, outbound links use `rel="noopener noreferrer"`, and pages send `noindex`, `no-referrer`, `no-store`. The phone trims spaces at the ends of what you type and normalizes it the same way Python does.
 
-**Netlify flow:** a personal access token is verified, a site named `repodoctor-snapshot-<random>` is created (or the existing one reused), and each publish uploads the zip (`POST /sites/{id}/deploys`, `application/zip`) and waits until the deploy is ready (90 s cap). Errors become plain-English messages (bad token, no access, site deleted on Netlify → run setup again, rate limit, Netlify down, deploy failed / still processing); the token is scrubbed from every message and log line. Site creation never retries after a gateway error (it may already exist). TAKE DOWN deletes the site and forgets the token and passphrase.
+**Passphrase rules (`snapshot.check_passphrase`):** the encrypted file is public, so it can be guessed at offline. 12+ characters, no spaces at the ends, no invisible characters, enough variety, not built on a common password / keyboard row / sequence / repeat (they're stripped in a loop and only what's left is scored, 60-bit floor), and never the app password. Four random words or Settings' SUGGEST (4 groups of 4 from an unambiguous alphabet, about 79 bits) pass.
 
-**Secrets:** the Netlify token and the passphrase are stored only on the Mac, encrypted with the app password in `config/snapshot.enc` (gitignored, atomic writes), unlocked into memory at login and cleared at logout; after an app restart publishing is locked until you log in again. Non-secret state (site id, URL, last publish, last error) is in `~/.repodoctor/snapshot.json`. Everything (setup, publish, preview, takedown, Netlify calls) is logged to `data/logs/snapshot.log`, never a secret or any data text.
+**Remember on this device (phone, opt-in):** stores a non-extractable PBKDF2 key in that browser's IndexedDB (never the passphrase itself; an older version's localStorage copy is migrated and removed). FORGET deletes it and locks the page. PREVIEW on the Mac never offers Remember.
 
-**PREVIEW** serves the exact encrypted page from the Mac under the same CSP, to try unlocking before publishing.
+**Netlify flow:** a personal access token is verified, a site with a random 24-character name (no label that says what it holds) is created, and each publish uploads the zip (`POST /sites/{id}/deploys`, `application/zip`) and waits until the deploy is ready (90 s cap). Errors become plain-English messages (bad token, no access, rate limit, Netlify down, deploy failed); the token is scrubbed from every message and log line. Site creation never retries after a gateway error (it may already exist).
+
+**Setup and changes (Settings card):**
+- First time: four steps (where to make the token, which expiration to pick), then token + passphrase (or SUGGEST) + app password → SET UP & PUBLISH.
+- Afterwards the form says "leave blank to keep": a blank token keeps the saved one (Netlify shows a token only once), a blank passphrase keeps the current one.
+- **The phone link stays the same** for a re-run or a new token on the same account (`get_site` with the new token). **A new passphrase gets a new site**, because Netlify keeps every old deploy at its own address. So does a site the new token can't reach, or setup after a credential reset (the old passphrase is unknown).
+- **Replacing is create-first:** the new site is created and published, and only then is the old one deleted (with the previous token first, then the new one). If the create fails, nothing changed. If the publish fails, the old site stays queued in `retire` and the card says "Your previous phone link (…) is still online"; the next successful publish deletes it. A delete that fails temporarily (network, 429, 5xx) stays queued; one the token can't do (401/403) names the site and where to delete it in Netlify.
+
+**Status and recovery (Settings card):**
+- **Messages show inside the card.** Every snapshot message is flashed with a `snapshot-` category; Settings renders them at the top of the card (where the `#snapshot` redirect lands, with `scroll-margin-top` clearing the sticky nav), and `base.html` skips them there. On other pages (PUBLISH TO PHONE on Weekly review) they show at the top as usual. A setup problem reopens the form (`?snapshot_form=1`).
+- **Getting it onto the phone:** the Site line has COPY LINK, and "Open it on your phone" shows a QR code with the three steps. It opens by itself until the first publish and right after a new link (`?snapshot_new=1`).
+- **Site deleted on Netlify:** a publish that gets `site_gone` clears the site, keeps `gone_url` and explains it in the card. **CREATE NEW SITE & PUBLISH** makes a new one with the saved token and passphrase, without re-typing anything.
+- **Slow deploy:** a publish still processing after 90 s is stored as `pending_deploy` (not an error). The card offers **CHECK**, which asks Netlify how that deploy ended (ready → published, error → reason, still working → try again in a minute).
+- **After an app restart:** the card has an app-password **UNLOCK** field (`/snapshot/unlock`), so there's no need to log out and back in. Publish, PREVIEW and TAKE DOWN say which case applies: locked after a restart, cleared by a credential reset, or not set up / taken down.
+- **TAKE DOWN** needs the per-boot form token (a stale tab is told nothing was deleted). It deletes the site and any queued old sites, then forgets the token and passphrase.
+
+**Secrets:** the Netlify token and the passphrase are stored only on the Mac, encrypted with the app password in `config/snapshot.enc` (gitignored, atomic writes), unlocked into memory at login (or with UNLOCK in the card) and cleared at logout. A credential reset deletes them (they were encrypted with the old password) and marks the snapshot as needing setup. Non-secret state is in `~/.repodoctor/snapshot.json`: site id, URL, last publish, last error, `pending_deploy`, `retire`, `gone_url`. Everything is logged to `data/logs/snapshot.log` and never a secret or any data text: setup, publish, recreate, check, unlock, preview, takedown, site_retired and Netlify calls.
+
+**Request guard:** every snapshot POST is refused when the Origin is `null` or foreign, or `Sec-Fetch-Site` is anything but same-origin / none. PREVIEW refuses cross-site loads.
+
+**PREVIEW** serves the exact encrypted page from the Mac under the same CSP (one `Content-Type`), to try unlocking before publishing.
 
 ### 4.8 Settings & Preferences
 
@@ -491,7 +511,7 @@ All data stored as local JSON files — no database dependency.
 | Stats activity log | `data/logs/activity.log` | Append-only; one JSON event per line |
 | What we shipped paragraphs | `data/activity_summaries.json` | Newest 500 per section; keyed by content fingerprint |
 | Phone snapshot secrets (Netlify token + passphrase) | `config/snapshot.enc` (encrypted with the app password) | Until TAKE DOWN or a new setup |
-| Phone snapshot state | `~/.repodoctor/snapshot.json` | Site id / URL / last publish / last error |
+| Phone snapshot state | `~/.repodoctor/snapshot.json` | Site id / URL / last publish / last error / pending deploy / sites waiting to be deleted |
 | Phone snapshot log | `data/logs/snapshot.log` | Append-only; one JSON event per line |
 | Health log / Do next + Review log | `data/logs/health.log`, `data/logs/nextup.log` | Append-only; one JSON event per line |
 
@@ -612,10 +632,13 @@ Flask Application (app.py)
 | GET | `/next/export.md` | Active | Do next as Markdown |
 | GET | `/review` | Active | Weekly review — shipped / waiting / gone quiet / next up (`?group=`) |
 | GET | `/review/export.md` | Active | Weekly review as Markdown |
-| POST | `/snapshot/setup` | Active | Phone snapshot: verify the Netlify token, reuse or create the site, save token + passphrase encrypted, publish |
+| POST | `/snapshot/setup` | Active | Phone snapshot: verify the Netlify token, keep or create the site (blank fields keep the saved token / passphrase), save encrypted, publish, then delete a replaced site |
 | POST | `/snapshot/publish` | Active | Re-render, re-encrypt and upload the phone snapshot (`next` returns to the page it was pressed on) |
+| POST | `/snapshot/recreate` | Active | Site deleted on Netlify: make a new one with the saved token + passphrase and publish |
+| POST | `/snapshot/check` | Active | Ask Netlify how a publish that outlasted the 90 s wait ended |
+| POST | `/snapshot/unlock` | Active | Unlock the snapshot secrets with the app password after a restart |
 | GET | `/snapshot/preview` | Active | The exact encrypted phone page, served locally under its CSP |
-| POST | `/snapshot/takedown` | Active | Delete the Netlify site and forget the snapshot secrets |
+| POST | `/snapshot/takedown` | Active | Delete the Netlify site (and any queued old site) and forget the snapshot secrets (needs the per-boot form token) |
 | POST | `/api/stats/summarize/<owner>/<name>` | Active | Write / refresh one repo's "What we shipped" paragraph for a range (JSON) |
 | POST | `/api/stats/summarize-portfolio` | Active | Write / refresh the range's overview paragraph (JSON) |
 | POST | `/inflight/refresh` | Active | Regather In Flight from GitHub and cache it |

@@ -114,26 +114,65 @@
     <!-- Phone snapshot (Netlify) -->
     <div class="settings-card settings-card-wide" id="snapshot">
         <h2>Phone snapshot</h2>
+        {% set snap_msgs = [] %}
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            {% if category.startswith('snapshot-') %}{% set _ = snap_msgs.append((category[9:], message)) %}{% endif %}
+        {% endfor %}
+        {% if snap_msgs %}
+        <div class="snapshot-messages" role="status" aria-live="polite">
+            {% for category, message in snap_msgs %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
         <p class="text-secondary">Read Do next, Weekly review, What changed (Week, Month, Quarter, YTD) and Portfolio on your phone.
-            Your Mac builds a read-only copy, <strong>encrypts it with a passphrase only you know</strong>, and publishes it to a free
+            Your Mac builds a read-only copy of all your repos, <strong>encrypts it with a passphrase only you know</strong>, and publishes it to a free
             Netlify site. Netlify only ever stores scrambled text, and nothing on the phone can change anything here.
             Publishing again replaces the copy.</p>
         {% set st = snapshot_state or {} %}
+        {% set form_open = request.args.get('snapshot_form') %}
         {% if st.site_id %}
         <div class="credential-status">
             <div class="cred-item"><span class="status-ok">&#10003;</span>
-                <span>Site: <a href="{{ st.url }}" target="_blank" rel="noopener">{{ st.url }}</a></span></div>
+                <span class="snapshot-site">Site: <a href="{{ st.url }}" target="_blank" rel="noopener" id="snapshot-url">{{ st.url }}</a></span>
+                {% if st.url %}<button type="button" class="btn btn-secondary btn-sm snapshot-copy" data-copy="{{ st.url }}">COPY LINK</button>{% endif %}</div>
             <div class="cred-item"><span class="{{ 'status-ok' if st.last_published_at else 'text-secondary' }}">{{ '&#10003;'|safe if st.last_published_at else '–' }}</span>
                 <span>{% if st.last_published_at %}Last published {{ st.last_published_at|central_time }}{% if st.last_bytes %} ({{ (st.last_bytes / 1024)|round|int }} KB){% endif %}{% else %}Not published yet{% endif %}</span></div>
+            {% if st.pending_deploy %}
+            <div class="cred-item"><span class="status-warn">&#8635;</span>
+                <span>Netlify was still processing the publish from {{ st.pending_deploy.started_at|central_time }}. It usually finishes on its own; CHECK asks Netlify how it ended.</span></div>
+            {% endif %}
             {% if st.last_error %}
             <div class="cred-item"><span class="status-warn">&#9888;</span><span>Last attempt failed: {{ st.last_error }}</span></div>
             {% endif %}
+            {% for old in st.retire or [] %}
+            <div class="cred-item"><span class="status-warn">&#9888;</span>
+                <span class="snapshot-site">Your previous phone link ({{ old.url or 'old site' }}) is still online. It's deleted after the next successful publish.</span></div>
+            {% endfor %}
         </div>
+        {% if st.url %}
+        <details class="snapshot-phone mt-sm" {% if request.args.get('snapshot_new') or not st.last_published_at %}open{% endif %}>
+            <summary>Open it on your phone</summary>
+            <div class="snapshot-phone-body">
+                {% if snapshot_qr %}<div class="snapshot-qr">{{ snapshot_qr }}</div>{% endif %}
+                <ol class="snapshot-steps">
+                    <li>{% if snapshot_qr %}Point your phone's camera at this code{% else %}COPY LINK and send it to yourself{% endif %}, or type the link above.</li>
+                    <li>Type your snapshot passphrase and tap UNLOCK.</li>
+                    <li>Tick <strong>Remember on this device</strong> so it opens straight away next time, and add it to your home screen.</li>
+                </ol>
+            </div>
+        </details>
+        {% endif %}
         {% if snapshot_unlocked %}
         <div class="snapshot-actions">
             <form method="POST" action="{{ url_for('snapshot_publish') }}" class="inline-form">
                 <button type="submit" class="btn btn-primary" data-loading-text="PUBLISHING…">PUBLISH NOW</button>
             </form>
+            {% if st.pending_deploy %}
+            <form method="POST" action="{{ url_for('snapshot_check') }}" class="inline-form">
+                <button type="submit" class="btn btn-secondary" data-loading-text="CHECKING…">CHECK</button>
+            </form>
+            {% endif %}
             <a href="{{ url_for('snapshot_preview') }}" class="btn btn-secondary" target="_blank" rel="noopener"
                title="Opens the exact encrypted page your phone gets, served from this Mac">PREVIEW</a>
             <form method="POST" action="{{ url_for('snapshot_takedown') }}" class="inline-form"
@@ -147,41 +186,63 @@
             Run setup again below (with the same Netlify account the old site is replaced), or delete the old site in
             {% if st.admin_url %}<a href="{{ st.admin_url }}" target="_blank" rel="noopener">Netlify</a>{% else %}Netlify{% endif %}.</p>
         {% else %}
-        <p class="text-secondary">The app restarted, so publishing is locked. Log out and back in to unlock it.
-            If it stays locked after logging in, run setup again below.</p>
+        {% include "_snapshot_unlock.html" %}
         {% endif %}
-        <details class="mt-sm" {% if st.needs_setup or not snapshot_configured %}open{% endif %}>
+        <details class="mt-sm" {% if st.needs_setup or not snapshot_configured or form_open %}open{% endif %}>
             <summary class="text-secondary">Change the Netlify token or passphrase</summary>
+        {% else %}
+        {% if st.last_error or st.gone_url %}
+        <div class="credential-status">
+            <div class="cred-item"><span class="status-warn">&#9888;</span><span>{{ st.last_error or 'The phone site no longer exists on Netlify.' }}</span></div>
+        </div>
+        {% endif %}
+        {% if snapshot_configured and snapshot_unlocked %}
+        <p class="text-secondary mt-sm">Your Netlify token and passphrase are still saved. Make a new site with them and publish
+            (the phone link changes; open the new one on your phone).</p>
+        <div class="snapshot-actions">
+            <form method="POST" action="{{ url_for('snapshot_recreate') }}" class="inline-form">
+                <button type="submit" class="btn btn-primary" data-loading-text="CREATING…">CREATE NEW SITE &amp; PUBLISH</button>
+            </form>
+        </div>
+        <details class="mt-sm" {% if form_open %}open{% endif %}>
+            <summary class="text-secondary">Use a different token or passphrase</summary>
+        {% elif snapshot_configured %}
+        {% include "_snapshot_unlock.html" %}
+        <details class="mt-sm" {% if form_open %}open{% endif %}>
+            <summary class="text-secondary">Use a different token or passphrase</summary>
         {% else %}
         <ol class="snapshot-steps">
             <li>Sign in at <strong>app.netlify.com</strong> (a free account is enough).</li>
             <li>Click your avatar (top right) → <strong>User settings</strong> → <strong>Applications</strong> →
-                <strong>Personal access tokens</strong> → <strong>New access token</strong>. Name it "RepoDoctor", generate it, and copy it.</li>
-            <li>Paste it below, pick a passphrase you'll type on your phone ({{ snapshot_min_len }}+ characters), enter your app password, and click <strong>SET UP &amp; PUBLISH</strong>.</li>
-            <li>Open the link it shows on your phone, type the passphrase, and tick <strong>Remember on this device</strong>.</li>
+                <strong>Personal access tokens</strong> → <strong>New access token</strong>. Name it "RepoDoctor". If it asks for an
+                expiration, pick the longest option (when it expires, paste a new token here; the phone link stays the same). Generate it and copy it.</li>
+            <li>Paste it below, pick a passphrase you'll type on your phone ({{ snapshot_min_len }}+ characters, or click SUGGEST), enter your app password, and click <strong>SET UP &amp; PUBLISH</strong>.</li>
+            <li>Scan the QR code it shows with your phone, type the passphrase, and tick <strong>Remember on this device</strong>.</li>
         </ol>
         <div>
         {% endif %}
+        {% endif %}
+            {% set keep = snapshot_configured %}
             <form method="POST" action="{{ url_for('snapshot_setup') }}" autocomplete="off" class="mt-sm">
                 <div class="form-group">
                     <label for="netlify_token">Netlify personal access token</label>
-                    <input type="password" id="netlify_token" name="netlify_token" required autocomplete="off"
-                           placeholder="Paste the token from Netlify">
-                    <span class="form-hint">Stored on this Mac only, encrypted with your app password.</span>
+                    <input type="password" id="netlify_token" name="netlify_token" {% if not keep %}required{% endif %} autocomplete="off"
+                           placeholder="{{ 'Leave blank to keep the saved token' if keep else 'Paste the token from Netlify' }}">
+                    <span class="form-hint">Stored on this Mac only, encrypted with your app password.{% if keep %} A new token from the same Netlify account keeps your phone link.{% endif %}</span>
                 </div>
                 <div class="form-group">
-                    <label for="snapshot_passphrase">Snapshot passphrase</label>
+                    <label for="snapshot_passphrase">{{ 'New snapshot passphrase' if keep else 'Snapshot passphrase' }}</label>
                     <div class="snapshot-pass-row">
-                        <input type="password" id="snapshot_passphrase" name="passphrase" required minlength="{{ snapshot_min_len }}"
-                               autocomplete="off" placeholder="{{ snapshot_min_len }}+ characters, not your app password">
+                        <input type="password" id="snapshot_passphrase" name="passphrase" {% if not keep %}required{% endif %} minlength="{{ snapshot_min_len }}"
+                               autocomplete="off" placeholder="{{ 'Leave blank to keep the current one' if keep else snapshot_min_len ~ '+ characters, not your app password' }}">
                         <button type="button" class="btn btn-secondary btn-sm" id="snapshot-suggest"
                                 title="Fill in a strong random passphrase you can type on a phone">SUGGEST</button>
                     </div>
-                    <span class="form-hint">You'll type this on your phone (once, if you tick Remember there). It never leaves your devices; without it the snapshot is unreadable, even to Netlify. Avoid common words and keyboard runs: the encrypted file is public, so weak passphrases are refused.</span>
+                    <span class="form-hint">You'll type this on your phone (once, if you tick Remember there). It never leaves your devices; without it the snapshot is unreadable, even to Netlify. Avoid common words and keyboard runs: the encrypted file is public, so weak passphrases are refused.{% if keep %} A new passphrase gets a new phone link, and the old site is deleted once the new one is live.{% endif %}</span>
                 </div>
                 <div class="form-group">
                     <label for="snapshot_passphrase_confirm">Passphrase again</label>
-                    <input type="password" id="snapshot_passphrase_confirm" name="passphrase_confirm" required
+                    <input type="password" id="snapshot_passphrase_confirm" name="passphrase_confirm" {% if not keep %}required{% endif %}
                            minlength="{{ snapshot_min_len }}" autocomplete="off">
                 </div>
                 <div class="form-group">
@@ -189,9 +250,9 @@
                     <input type="password" id="snapshot_password" name="password" required autocomplete="current-password"
                            placeholder="The password you unlock RepoDoctor with">
                 </div>
-                <button type="submit" class="btn btn-primary" data-loading-text="SETTING UP…">SET UP &amp; PUBLISH</button>
+                <button type="submit" class="btn btn-primary snapshot-submit" data-loading-text="SETTING UP…">{{ 'SAVE &amp; PUBLISH'|safe if keep else 'SET UP &amp; PUBLISH'|safe }}</button>
             </form>
-        {% if st.site_id %}
+        {% if st.site_id or snapshot_configured %}
         </details>
         {% else %}
         </div>
@@ -269,6 +330,12 @@
         b = document.getElementById("snapshot_passphrase_confirm");
     a.value = pass; b.value = pass; a.type = "text"; b.type = "text";
     a.focus(); a.select();
+  });
+})();
+(function () {
+  // COPY LINK: the phone link, to send to yourself.
+  document.querySelectorAll(".snapshot-copy").forEach(function (b) {
+    b.addEventListener("click", function () { copyToClipboard(b.getAttribute("data-copy"), b); });
   });
 })();
 (function () {
