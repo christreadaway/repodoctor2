@@ -1351,6 +1351,19 @@ def _stats_report(scan: dict, result: dict, active_group: str, groups: dict, rng
     return activity.build_report(scoped, result["data"], result["errors"], rng)
 
 
+def _stats_attach_ai(report: dict, active_group: str, model: str) -> None:
+    """Attach cached "What we shipped" paragraphs (fresh or STALE) to the
+    report. An unreadable summaries file must never take the Stats page down:
+    log it and show the page as if nothing was summarized yet."""
+    try:
+        store = models.get_activity_summaries()
+    except Exception as e:  # noqa: BLE001 - the page matters more than the cache
+        logger.warning("stats: could not read activity summaries: %s", e)
+        models.log_activity_event("summaries_load_error", error=f"{type(e).__name__}: {str(e)[:200]}")
+        store = {"repos": {}, "portfolio": {}}
+    activity.attach_summaries(report, store, model, active_group)
+
+
 def _stats_markdown(report: dict, active_group: str) -> str:
     return activity.compose_markdown(
         report, session.get("github_user", ""), active_group,
@@ -1387,6 +1400,8 @@ def stats():
         return render_template("stats.html", not_connected=True, **ctx)
 
     report = _stats_report(scan, result, active_group, groups, rng)
+    model = models.get_ai_model()
+    _stats_attach_ai(report, active_group, model)
     chart_rows = [{
         "name": r["name"], "html_url": r["html_url"], "commits": r["commit_count"],
         "prs": r["pr_count"], "code_size_bytes": r["code_size_bytes"],
@@ -1402,7 +1417,9 @@ def stats():
         "stats.html", report=report, chart_rows=chart_rows,
         markdown=_stats_markdown(report, active_group),
         fetched_at=result["fetched_at"], stale=result["stale"],
-        card_commit_limit=activity.CARD_COMMIT_LIMIT, **ctx)
+        card_commit_limit=activity.CARD_COMMIT_LIMIT,
+        ai_cost_each=ai.estimate_cost(*_STATS_AI_TYPICAL_TOKENS, model=model),
+        ai_model_label=_stats_model_label(model), **ctx)
 
 
 @app.route("/stats/export.md")
@@ -1422,6 +1439,7 @@ def stats_export():
         flash(NOT_CONNECTED_REMEDY, "error")
         return redirect(back)
     report = _stats_report(scan, result, active_group, groups, rng)
+    _stats_attach_ai(report, active_group, models.get_ai_model())
     models.log_activity_event("export", range=rng.key, group=active_group,
                               updated=report["totals"]["repos_updated"])
     filename = f"what-changed-{rng.start_date.isoformat()}-to-{rng.end_date.isoformat()}.md"
@@ -1430,6 +1448,203 @@ def stats_export():
         mimetype="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# --- Stats → What we shipped (on-demand AI paragraphs) ---
+#
+# SUMMARIZE on the Stats page posts once per updated repo, then once for the
+# overview, so progress is visible and one failure never sinks the batch.
+# Both endpoints read the SAME cached GitHub data the page shows
+# (_activity_data — no new fetching), re-check the content fingerprint so a
+# current paragraph is never paid for twice (unless force), add the cost to
+# the session total, and log every generation, skip and failure to
+# data/logs/activity.log. The API key is never logged.
+
+# Typical tokens for one repo paragraph (in, out), for the page's cost hint:
+# ~$0.005 each on Haiku.
+_STATS_AI_TYPICAL_TOKENS = (3500, 250)
+
+
+def _stats_model_label(model: str) -> str:
+    """'Haiku 4.5' from the Settings model list, for the cost hint."""
+    for model_id, label in ai.MODEL_CHOICES:
+        if model_id == model:
+            return label.split(" — ")[0]
+    return model
+
+
+def _stats_ai_error(e: Exception) -> str:
+    """A sentence the SUMMARIZE overlay can show for an AI failure."""
+    if isinstance(e, anthropic.AuthenticationError):
+        return ("Anthropic rejected the API key (401). Log out, then use Reset Credentials "
+                "on the login page to enter a working key.")
+    if isinstance(e, anthropic.PermissionDeniedError):
+        return ("Anthropic refused the request (403); the key may not have access to this "
+                "model. Pick another model in Settings and retry.")
+    if isinstance(e, anthropic.NotFoundError):
+        return "Anthropic doesn't recognize the model chosen in Settings (404). Pick another and retry."
+    if isinstance(e, anthropic.RateLimitError):
+        return ("Anthropic's rate limit was hit (429). Wait a minute and press SUMMARIZE "
+                "again; finished paragraphs are kept.")
+    if isinstance(e, anthropic.APIConnectionError):
+        return "Couldn't reach Anthropic. Check your connection and retry."
+    if isinstance(e, anthropic.BadRequestError):
+        # Retrying won't fix a 400; Anthropic's own reason is the useful part.
+        return f"Anthropic rejected the request (400): {str(getattr(e, 'message', e))[:160]}"
+    if isinstance(e, anthropic.APIStatusError):
+        return f"Anthropic returned an error ({e.status_code}). Retry in a minute."
+    if isinstance(e, ValueError):
+        return str(e)[:300]
+    return f"{type(e).__name__}: {str(e)[:200]}"
+
+
+def _stats_redact(text: str, creds: dict) -> str:
+    """Belt and braces: an exception string must never carry the API key
+    into the log file."""
+    key = (creds or {}).get("anthropic_key") or ""
+    return text.replace(key, "[redacted]") if len(key) >= 8 else text
+
+
+def _stats_ai_context():
+    """Shared setup for both SUMMARIZE endpoints: (ctx, None) on success, or
+    (None, (json response, status)) when there's no scan (404), no API key or
+    GitHub data (503 — the app restarted since login)."""
+    scan = _scan_results  # one snapshot for the whole request
+    if not scan:
+        return None, (jsonify({"error": "No scan data yet. Run a scan from My Repos first."}), 404)
+    creds = _get_credentials()
+    if not creds or not creds.get("anthropic_key"):
+        return None, (jsonify({"error": NOT_CONNECTED_REMEDY}), 503)
+    body = request.get_json(silent=True)
+    body = body if isinstance(body, dict) else {}
+    args = {k: str(body[k]) for k in ("range", "from", "to") if body.get(k) not in (None, "")}
+    rng, _notice = activity.resolve_range(args)
+    groups = models.get_groups()
+    if "group" in body:
+        group = body["group"] if isinstance(body["group"], str) and body["group"] in groups else ""
+    else:
+        group = _resolve_active_group(groups, persist=False)
+    result = _activity_data(_get_github_client(), scan, rng)
+    if result is None:
+        return None, (jsonify({"error": NOT_CONNECTED_REMEDY}), 503)
+    return {"scan": scan, "creds": creds, "rng": rng, "groups": groups, "group": group,
+            "force": body.get("force") in (True, 1, "1", "true"), "result": result,
+            "model": models.get_ai_model()}, None
+
+
+def _stats_ms(t0: float) -> int:
+    return int((time.monotonic() - t0) * 1000)
+
+
+@app.route("/api/stats/summarize/<owner>/<name>", methods=["POST"])
+@_require_auth_api
+def stats_summarize_repo(owner, name):
+    """Write (or reuse) ONE repo's plain-English paragraph for the range in
+    the JSON body ({range, from, to, group, force})."""
+    t0 = time.monotonic()
+    ctx, err = _stats_ai_context()
+    if err:
+        return err
+    full = f"{owner}/{name}"
+    rng, model = ctx["rng"], ctx["model"]
+    repo = next((r for r in ctx["scan"].get("repos", []) if _repo_full_name(r) == full), None)
+    if not repo:
+        return jsonify({"error": f"{full} isn't in the latest scan. Run a scan, then reload Stats."}), 404
+    row = activity.build_report([repo], ctx["result"]["data"], ctx["result"]["errors"], rng)["rows"][0]
+    if row["error"]:
+        models.log_activity_event("summarize_error", repo=full, range=rng.key, model=model,
+                                  error=f"GitHub read failed: {row['error']}", elapsed_ms=_stats_ms(t0))
+        return jsonify({"error": f"GitHub couldn't be read for {name} ({row['error'][:120]}), so "
+                                 f"there's nothing to summarize yet. Try again in a few minutes."}), 502
+    if not row["updated"]:
+        return jsonify({"ok": True, "skipped": "nothing"})
+    fp = activity.repo_fingerprint(row, model)
+    if not ctx["force"]:
+        hit = models.get_activity_summaries()["repos"].get(fp)
+        if hit and hit.get("text") and hit.get("repo") == full:
+            models.log_activity_event("summarize_skip", repo=full, range=rng.key, fingerprint=fp,
+                                      reason="fresh")
+            return jsonify({"ok": True, "skipped": "fresh", "fingerprint": fp})
+    try:
+        out = activity.summarize_repo(ctx["creds"]["anthropic_key"], row, model=model)
+    except Exception as e:  # noqa: BLE001 - any AI failure is a 502 with a readable message
+        models.log_activity_event(
+            "summarize_error", repo=full, range=rng.key, fingerprint=fp, model=model,
+            forced=ctx["force"], elapsed_ms=_stats_ms(t0),
+            error=_stats_redact(f"{type(e).__name__}: {str(e)[:300]}", ctx["creds"]))
+        return jsonify({"error": _stats_ai_error(e)}), 502
+
+    usage = out.pop("_usage", None) or {}
+    in_tok, out_tok = usage.get("input_tokens", 0), usage.get("output_tokens", 0)
+    cost = ai.estimate_cost(in_tok, out_tok, model=model)
+    _session_cost.add(in_tok, out_tok, cost)
+    try:
+        models.save_activity_repo_summary(fp, {
+            "repo": full, "slot": activity.range_slot(rng), "range_key": rng.key, "model": model,
+            "text": out["text"], "items": out["items"], "total_items": out["total_items"],
+            "capped": out["capped"], "input_tokens": in_tok, "output_tokens": out_tok, "cost": cost,
+        })
+    except OSError as e:
+        models.log_activity_event("summarize_error", repo=full, range=rng.key, fingerprint=fp,
+                                  error=f"save failed: {e}", elapsed_ms=_stats_ms(t0))
+        return jsonify({"error": f"The paragraph was written but couldn't be saved ({e})."}), 500
+    models.log_activity_event(
+        "summarize", repo=full, range=rng.key, fingerprint=fp, model=model, forced=ctx["force"],
+        items=out["items"], total_items=out["total_items"], capped=out["capped"],
+        input_tokens=in_tok, output_tokens=out_tok, cost=cost, elapsed_ms=_stats_ms(t0))
+    return jsonify({"ok": True, "repo": full, "fingerprint": fp, "cost": cost})
+
+
+@app.route("/api/stats/summarize-portfolio", methods=["POST"])
+@_require_auth_api
+def stats_summarize_portfolio():
+    """Write (or reuse) the overview paragraph for the range + group in the
+    JSON body, built from each repo's current paragraph (else its titles)."""
+    t0 = time.monotonic()
+    ctx, err = _stats_ai_context()
+    if err:
+        return err
+    rng, model, group = ctx["rng"], ctx["model"], ctx["group"]
+    report = _stats_report(ctx["scan"], ctx["result"], group, ctx["groups"], rng)
+    if not report["updated"]:
+        return jsonify({"ok": True, "skipped": "nothing"})
+    _stats_attach_ai(report, group, model)
+    fp = report["ai_targets"]["fingerprint"]
+    if report["ai_targets"]["portfolio_fresh"] and not ctx["force"]:
+        models.log_activity_event("summarize_skip", repo="(overview)", group=group, range=rng.key,
+                                  fingerprint=fp, reason="fresh")
+        return jsonify({"ok": True, "skipped": "fresh", "fingerprint": fp})
+    notes, total = activity.portfolio_inputs(report)
+    from_paragraphs = sum(1 for n in notes if n.get("summary"))
+    try:
+        out = activity.summarize_portfolio(ctx["creds"]["anthropic_key"], notes, total, group, model=model)
+    except Exception as e:  # noqa: BLE001
+        models.log_activity_event(
+            "summarize_error", repo="(overview)", group=group, range=rng.key, fingerprint=fp,
+            model=model, forced=ctx["force"], elapsed_ms=_stats_ms(t0),
+            error=_stats_redact(f"{type(e).__name__}: {str(e)[:300]}", ctx["creds"]))
+        return jsonify({"error": _stats_ai_error(e)}), 502
+
+    usage = out.pop("_usage", None) or {}
+    in_tok, out_tok = usage.get("input_tokens", 0), usage.get("output_tokens", 0)
+    cost = ai.estimate_cost(in_tok, out_tok, model=model)
+    _session_cost.add(in_tok, out_tok, cost)
+    try:
+        models.save_activity_portfolio_summary(fp, {
+            "group": group, "slot": activity.range_slot(rng), "range_key": rng.key, "model": model,
+            "text": out["text"], "repos": total, "listed": len(notes),
+            "from_paragraphs": from_paragraphs, "input_tokens": in_tok, "output_tokens": out_tok,
+            "cost": cost,
+        })
+    except OSError as e:
+        models.log_activity_event("summarize_error", repo="(overview)", group=group, range=rng.key,
+                                  fingerprint=fp, error=f"save failed: {e}", elapsed_ms=_stats_ms(t0))
+        return jsonify({"error": f"The overview was written but couldn't be saved ({e})."}), 500
+    models.log_activity_event(
+        "summarize_portfolio", group=group, range=rng.key, fingerprint=fp, model=model,
+        forced=ctx["force"], repos=total, listed=len(notes), from_paragraphs=from_paragraphs,
+        input_tokens=in_tok, output_tokens=out_tok, cost=cost, elapsed_ms=_stats_ms(t0))
+    return jsonify({"ok": True, "fingerprint": fp, "cost": cost})
 
 
 # --- What's Next (aggregated across repos) ---
