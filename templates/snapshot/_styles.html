@@ -48,7 +48,7 @@
 /* Widths follow the labels (flex-basis auto) so "PORTFOLIO" never breaks
    mid-word; the four fit a 320px screen with room to spare. */
 .sn-nav a {
-  flex: 1 1 auto; min-width: 0; min-height: 40px; padding: 4px 6px;
+  flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 4px 6px;
   display: flex; align-items: center; justify-content: center; text-align: center;
   font-size: 12px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; line-height: 1.2;
   white-space: nowrap; overflow-wrap: normal; word-break: normal;
@@ -58,7 +58,9 @@
 @media (max-width: 359px) { .sn-nav { gap: 4px; } .sn-nav a { padding: 4px 4px; font-size: 11px; letter-spacing: 0; } }
 
 /* Sections */
-.sn-section { margin-top: 26px; scroll-margin-top: 64px; }
+/* scroll-margin clears the sticky nav (8 + 44 + 8 + 2 borders = 62px) with
+   6px to spare, so a jumped-to heading never sits under it. */
+.sn-section { margin-top: 26px; scroll-margin-top: 68px; }
 .sn-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding-bottom: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--sn-border); }
 .sn-head h2 { color: var(--sn-green); font-size: 16px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; min-width: 0; }
 .sn-h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin: 20px 0 10px; color: var(--sn-green-fg); font-size: 14px; font-weight: 600; }
@@ -66,6 +68,9 @@
 .sn-sub { color: var(--sn-dim); font-size: 12px; }
 .sn-empty { margin: 0 0 10px; color: var(--sn-dim); font-size: 13.5px; }
 .sn-more { margin-top: 10px; color: var(--sn-dim); font-size: 12.5px; }
+/* An in-text link ("+3 more in Do next"): a 44px tap target whose negative
+   margins keep the line exactly as tall as the text around it. */
+.sn .sn-more a { display: inline-flex; align-items: center; min-height: 44px; margin: -12px 0; vertical-align: baseline; }
 .sn-note { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--sn-amber-bd); border-radius: 5px; background: var(--sn-amber-bg); color: var(--sn-amber-fg); font-size: 13px; }
 
 /* Chips */
@@ -83,11 +88,13 @@
 .sn-chip-planned { background: var(--sn-green-bg);  color: var(--sn-green-fg);  border-color: var(--sn-green-bd); }
 .sn-chip-blocked { background: transparent;         color: var(--sn-red-fg);    border-color: var(--sn-red-bd); }
 .sn-chip-stale   { background: var(--sn-amber-bg);  color: var(--sn-amber-fg);  border-color: var(--sn-amber-bd); font-size: 10px; padding: 0 7px; vertical-align: 1px; }
-.sn-tally { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+/* align-items: center keeps a plain (non-link) chip at its own height next
+   to the 44px link chips. */
+.sn-tally { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 4px; }
 .sn-tally .sn-chip strong { margin-left: 5px; }
-.sn .sn-tally a.sn-chip { min-height: 32px; padding: 2px 11px; text-decoration: none; }
+.sn .sn-tally a.sn-chip { min-height: 44px; padding: 2px 11px; text-decoration: none; }
 .sn .sn-tally a.sn-chip:hover { filter: brightness(1.2); }
-.sn-tier-anchor { scroll-margin-top: 64px; }
+.sn-tier-anchor { scroll-margin-top: 68px; }
 
 /* Do next items */
 .sn-list { list-style: none; display: flex; flex-direction: column; gap: 10px; }
@@ -109,7 +116,7 @@
 .sn-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .sn-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-  max-width: 100%; min-height: 40px; padding: 6px 12px;
+  max-width: 100%; min-height: 44px; padding: 6px 12px;
   font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; line-height: 1.2; text-align: center;
   color: var(--sn-text); background: transparent; border: 1px solid var(--sn-border-2); border-radius: 5px;
   cursor: pointer; text-decoration: none; -webkit-tap-highlight-color: transparent;

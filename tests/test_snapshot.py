@@ -304,6 +304,17 @@ class TestCrypto(unittest.TestCase):
         p = snapshot.encrypt("accent", composed)
         self.assertEqual(snapshot.decrypt(p, decomposed), "accent")
 
+    def test_encrypt_derives_the_key_from_the_nfc_form(self):
+        """The phone's script NFC-normalizes before deriving; the Mac must
+        too, or an accent typed one way on the phone and the other way on the
+        Mac would never unlock. Checked with raw primitives over NFC bytes."""
+        composed, decomposed = "café au lait demain", "café au lait demain"
+        p = snapshot.encrypt("nfc body", decomposed)
+        key = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=base64.b64decode(p["salt"]),
+                         iterations=p["iter"]).derive(composed.encode("utf-8"))
+        plain = AESGCM(key).decrypt(base64.b64decode(p["iv"]), base64.b64decode(p["ct"]), None)
+        self.assertTrue(plain.decode("utf-8").startswith("nfc body<!--"))
+
     def test_encrypt_refuses_weak_passphrase(self):
         with self.assertRaises(ValueError) as cm:
             snapshot.encrypt("body", "short")
@@ -319,10 +330,88 @@ class TestCrypto(unittest.TestCase):
 class TestPassphrase(unittest.TestCase):
 
     def test_good_passphrases(self):
-        for p in (PASS, "correct horse battery staple", "Tr0ub4dor&3xyz", "café au lait demain"):
+        for p in (PASS, "correct horse battery staple", "Tr0ub4dor&3xyz", "café au lait demain",
+                  "Tq7v-Lm2x!Zp", "k7mq-x2pd-9wtr-h4nb", "xkqvbnwtrplmzjhgfdsy",
+                  "violet harbor eleven candle", "Harbor-Candle-11-Violet", "MyDog Has 2 Fleas!",
+                  # A common word or a year among random words is a small penalty, not a refusal.
+                  "master candle eleven violet", "orchid 1984 tunnel marble",
+                  "remember banana orchard sky"):
             with self.subTest(p=p):
                 self.assertIsNone(snapshot.check_passphrase(p))
         self.assertEqual(snapshot.MIN_PASSPHRASE_LEN, 12)
+
+    def test_common_word_or_run_plus_filler_refused(self):
+        """Session 25 end-to-end review: each piece passed on its own because
+        the rest was 8+ characters, and the old estimate scored them ~80 bits."""
+        cases = {
+            "password12345678": 'built on "password"',
+            "iloveyou12345678": 'built on "iloveyou"',
+            "qwertyuiop123456": "keyboard row or a sequence",
+            "12345678abcdefgh": "keyboard row or a sequence",
+            "abc123abc123abc123": 'built on "abc123"',  # a repeated common word names the word
+            "aaaaaaaaaaab1234": "repeats",
+        }
+        for weak, expected in cases.items():
+            with self.subTest(weak=weak):
+                problem = snapshot.check_passphrase(weak)
+                self.assertIsNotNone(problem)
+                self.assertIn(expected, problem)
+                self.assertLess(snapshot._estimated_bits(weak), snapshot.MIN_PASSPHRASE_BITS)
+
+    def test_stripping_is_iterative_and_sees_through_disguises(self):
+        cases = {
+            "12password34": 'built on "password"',        # word out -> "1234" is a run
+            "pass word 1234": 'built on "password"',      # separators don't hide a word
+            "P@ssw0rd2024!!": 'built on "password"',      # symbol swaps + a year
+            "he11o-w0rld-2024": 'built on "hello"',
+            "passwordpasswordpassword": 'built on "password"',  # a repeat is one guess, not three
+            "xyz789 xyz789": "repeats",
+            "Summer2024!!": "too easy to guess",            # word + year + symbols
+            "dragon monkey master violet": 'built on "dragon"',
+            "!@#$%^&*()qwerty": "keyboard row or a sequence",
+            "7890123456789": "keyboard row or a sequence",  # digit runs wrap
+            "kxqvbnwtrplm": "too easy to guess",            # nothing guessable, just short
+        }
+        for weak, expected in cases.items():
+            with self.subTest(weak=weak):
+                problem = snapshot.check_passphrase(weak)
+                self.assertIsNotNone(problem)
+                self.assertIn(expected, problem)
+
+    def test_settings_suggest_format_always_accepted(self):
+        """SUGGEST in Settings: 4 groups of 4 from an unambiguous alphabet. A
+        random group can hold a short run ("abcd", "2345") or a repeat; that
+        costs a few bits, never the whole passphrase."""
+        import random
+        alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+        rng = random.Random(20261109)
+        for _ in range(2000):
+            p = "-".join("".join(rng.choice(alphabet) for _ in range(4)) for _ in range(4))
+            self.assertIsNone(snapshot.check_passphrase(p), p)
+        for p in ("abcd-k7mq-x2pd-9wtr", "k7mq-2345-x2pd-wxyz", "ghjk-x2pd-9wtr-5432",
+                  "k7ab-cdmq-x2pd-9wtr",   # a run across a dash
+                  "k7mq-aaa2-x2pd-9wtr", "x2x2-k7mq-9wtr-h4nb"):
+            with self.subTest(p=p):
+                self.assertTrue(snapshot._strength(p)["hits"], "the run / repeat is still noticed")
+                self.assertIsNone(snapshot.check_passphrase(p))
+
+    def test_long_random_lowercase_accepted(self):
+        # Holds a reversed keyboard run ("jhgfds"); 14 random letters remain.
+        self.assertIsNone(snapshot.check_passphrase("xkqvbnwtrplmzjhgfdsy"))
+        self.assertEqual(snapshot._strength("xkqvbnwtrplmzjhgfdsy")["rest"], "xkqvbnwtrplmzy")
+
+    def test_strength_check_is_fast_on_long_input(self):
+        import random
+        import time
+        rng = random.Random(5)
+        samples = ["password" * 128, "a1b2c3" * 170 + "zz", ("abcd-" * 205)[:1024],
+                   "".join(rng.choice("abcdefghijklmnopqrstuvwxyz0123456789!@#") for _ in range(1024)),
+                   "".join(w + "x7#" for w in ["password", "qwerty", "dragon", "monkey"] * 30)[:1024]]
+        for p in samples:
+            t0 = time.monotonic()
+            snapshot.check_passphrase(p)
+            self.assertLess(time.monotonic() - t0, 0.5, p[:30])
+        self.assertIsNotNone(snapshot.check_passphrase("password" * 128))
 
     def test_problems_are_plain_english(self):
         cases = {
@@ -365,6 +454,30 @@ class TestPassphrase(unittest.TestCase):
         preview = snapshot.build_shell(p, "now", allow_remember=False)
         self.assertNotIn('id="rd-remember"', preview)
         self.assertIn("nothing is remembered here", preview)
+
+    def test_preview_hint_lines_up_with_the_input(self):
+        """The preview hint has no checkbox to sit beside: no 30px indent, and
+        a gap above so it doesn't touch the input (Session 25 review)."""
+        preview = snapshot.build_shell(snapshot.encrypt("<p>x</p>", PASS), "now", allow_remember=False)
+        self.assertIn('<p class="rd-hint rd-hint-solo">Preview on your Mac', preview)
+        css = snapshot._SHELL_CSS
+        self.assertIn(".rd-hint-solo { margin: 10px 0 16px; }", css)
+        self.assertGreater(css.index(".rd-hint-solo"), css.index(".rd-hint {"))  # wins the cascade
+        # The Remember hint keeps its indent under the checkbox label.
+        self.assertIn('<p class="rd-hint">Skips this screen', snapshot.build_shell(snapshot.encrypt("x", PASS), "now"))
+
+    def test_typed_passphrase_is_trimmed_and_nfc_normalized(self):
+        """Setup refuses a passphrase with a leading / trailing space, so the
+        phone trims what's typed (a stray space from the keyboard used to fail
+        with "didn't unlock") and NFC-normalizes it like the Mac does."""
+        script = snapshot.SHELL_SCRIPT
+        clean = script[script.index("function clean(pass)"):]
+        clean = clean[:clean.index("\n  }\n")]
+        self.assertLess(clean.index('s.normalize("NFC")'), clean.index("s.trim()"))
+        self.assertIn("var pass = clean(input.value);", script)
+        self.assertIn("new TextEncoder().encode(clean(pass))", script)
+        self.assertIsNotNone(snapshot.check_passphrase(PASS + " "))
+        script.encode("ascii")  # the CSP hash is over these exact bytes
 
     def test_remember_stores_a_key_object_not_the_passphrase(self):
         script = snapshot.SHELL_SCRIPT
@@ -778,7 +891,56 @@ class TestBody(unittest.TestCase):
         self.assertEqual(snapshot.central_time("2026-07-04T17:05:00+00:00"), "Jul 04, 2026 12:05 PM CDT")
         self.assertEqual(snapshot.central_time("garbage"), "")
         self.assertEqual(snapshot.central_date("2026-11-03T18:00:00Z"), "Nov 3, 2026")
-        self.assertEqual(snapshot.make_built_label(NOW), "Nov 09, 2026 12:00 PM CST")
+        # The built label carries seconds (see test_make_built_label).
+        self.assertEqual(snapshot.make_built_label(NOW), "Nov 09, 2026 12:00:00 PM CST")
+
+    def test_make_built_label(self):
+        """To the second, so two publishes in the same minute look different
+        on the phone. Takes the aware UTC datetime app.py builds."""
+        at = datetime.datetime(2026, 11, 9, 20, 16, 5, tzinfo=UTC)
+        self.assertEqual(snapshot.make_built_label(at), "Nov 09, 2026 2:16:05 PM CST")
+        self.assertNotEqual(snapshot.make_built_label(at),
+                            snapshot.make_built_label(at + datetime.timedelta(seconds=30)))
+        self.assertEqual(snapshot.make_built_label(datetime.datetime(2026, 7, 4, 4, 0, 9, tzinfo=UTC)),
+                         "Jul 03, 2026 11:00:09 PM CDT")
+        self.assertEqual(snapshot.make_built_label(at.replace(tzinfo=None)), "Nov 09, 2026 2:16:05 PM CST")
+        self.assertEqual(snapshot.make_built_label(at.isoformat()), "Nov 09, 2026 2:16:05 PM CST")
+        label_re = r"^[A-Z][a-z]{2} \d{2}, \d{4} \d{1,2}:\d{2}:\d{2} [AP]M C[SD]T$"
+        self.assertRegex(snapshot.make_built_label(), label_re)
+        self.assertRegex(snapshot.make_built_label("garbage"), label_re)  # never blank
+        self.assertLessEqual(len(snapshot.make_built_label(at)), snapshot.LABEL_MAX_CHARS)
+
+    def test_built_label_reaches_lock_screen_and_page(self):
+        data = {k: v for k, v in realistic_data().items() if k != "built_label"}
+        page = snapshot.build_site(data, PASS)["index.html"].decode()
+        label = re.search(r'<p class="rd-built">Built ([^<]+)</p>', page).group(1)
+        self.assertRegex(label, r"^[A-Z][a-z]{2} \d{2}, \d{4} \d{1,2}:\d{2}:\d{2} [AP]M C[SD]T$")
+        payload = json.loads(re.search(r'id="rd-payload">(.*?)</script>', page, re.S).group(1))
+        self.assertIn(f"Snapshot built {label}", snapshot.decrypt(payload, PASS))
+        # The app's own label (make_built_label(built_at)) is used as given.
+        at = datetime.datetime(2026, 11, 9, 20, 16, 5, tzinfo=UTC)
+        page = snapshot.build_site({**data, "built_label": snapshot.make_built_label(at)}, PASS)["index.html"].decode()
+        self.assertIn("Built Nov 09, 2026 2:16:05 PM CST", page)
+
+    def test_tap_targets_are_at_least_44px(self):
+        """Every tappable thing on the phone page: the shell's controls and the
+        body's links, buttons, chips and expanders (Session 25 review)."""
+        body_css = re.search(r"<style>(.*?)</style>", snapshot.render_body({}), re.S).group(1)
+
+        def min_height(css, selector):
+            m = re.search(r"(?:^|\n)" + re.escape(selector) + r"\s*\{([^}]*)\}", css)
+            self.assertIsNotNone(m, selector)
+            return int(re.search(r"min-height:\s*(\d+)px", m.group(1)).group(1))
+
+        for selector in (".rd-input", ".rd-remember", ".rd-btn", ".rd-forget"):
+            with self.subTest(selector=selector):
+                self.assertGreaterEqual(min_height(snapshot._SHELL_CSS, selector), 44)
+        for selector in (".sn-nav a", ".sn .sn-tally a.sn-chip", ".sn-btn", ".sn-range > summary",
+                         ".sn-pf-row > summary", ".sn .sn-more a"):
+            with self.subTest(selector=selector):
+                self.assertGreaterEqual(min_height(body_css, selector), 44)
+        # Plain (non-link) tally chips keep their size next to the 44px ones.
+        self.assertRegex(body_css, r"\.sn-tally \{[^}]*align-items: center")
 
 
 if __name__ == "__main__":
