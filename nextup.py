@@ -35,6 +35,7 @@ import datetime
 import logging
 
 from briefing import _parse_ts, open_tracker_actions
+from sessions import safe_session_url
 
 logger = logging.getLogger(__name__)
 
@@ -133,9 +134,6 @@ def _links_for_inflight(i: dict) -> list[dict]:
         links.append({"label": f"PR #{pr.get('number')}", "url": pr["html_url"], "external": True})
     elif i.get("branch_url"):
         links.append({"label": "BRANCH", "url": i["branch_url"], "external": True})
-    if i.get("session_url"):
-        links.append({"label": "OPEN SESSION", "url": i["session_url"], "external": True,
-                      "primary": True})
     return links
 
 
@@ -180,7 +178,9 @@ def build_do_next(inflight_items: list[dict] | None, trackers: dict | None,
             "when": when,
             "age_days": _days_since(when, now),
             "links": _links_for_inflight(i),
-            "session_url": i.get("session_url") or "",
+            # In Flight items come back from data/inflight.json: re-check so a
+            # hand-edited or corrupted cache can't put a non-session URL in an href.
+            "session_url": safe_session_url(i.get("session_url")),
             "prompt": _prompt_for_inflight(tier, i),
         })
 
@@ -319,6 +319,8 @@ def compose_do_next_markdown(result: dict, owner_login: str = "", gathered_at: s
         for link in x["links"]:
             if link.get("external"):
                 lines.append(f"   - {link['label']}: {link['url']}")
+        if x.get("session_url"):
+            lines.append(f"   - Claude Code session: {x['session_url']}")
         if x["prompt"]:
             lines.append(f"   - Prompt: {x['prompt']}")
         lines.append("")
@@ -369,7 +371,8 @@ def build_review(week_report: dict | None, quarter_report: dict | None, do_next:
                 "titles": [t for t in titles if t][:REVIEW_SHIPPED_TITLES],
                 "more": max(0, r["pr_count"] + r["commit_count"] - REVIEW_SHIPPED_TITLES),
             })
-    stale = [i for i in (inflight_items or [])
+    stale = [{**i, "session_url": safe_session_url(i.get("session_url"))}
+             for i in (inflight_items or [])
              if i.get("kind") == "stale" and _full(i.get("owner", ""), i.get("repo", "")) in scope]
     stale.sort(key=lambda i: i.get("last_activity_at") or "")
     waiting = [x for x in do_next["items"] if x["tier"] in WAITING_TIERS]

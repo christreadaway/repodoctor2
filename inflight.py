@@ -35,6 +35,7 @@ from briefing import _parse_ts
 from sessions import (
     _normalize_commit, _looks_unfinished, branch_topic, _pr_view,
     _local_time_label, MAX_BRANCH_COMPARES,
+    session_link, safe_session_url, count_session_links,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,10 +126,16 @@ def classify(item: dict, now: datetime.datetime | None = None) -> tuple[str, str
 
 
 def _build_item(repo: dict, branch: str, pr: dict | None, comp: dict | None,
-                now: datetime.datetime | None = None, merged_pr: dict | None = None) -> dict:
+                now: datetime.datetime | None = None, merged_pr: dict | None = None,
+                pr_body: str | None = None) -> dict:
+    """pr_body is the raw body of the branch's open (or merged) PR, the
+    fallback source of the OPEN SESSION link when no commit carries one."""
     raw_commits = (comp or {}).get("commits") or []
     commits = [_normalize_commit(c) for c in raw_commits]
     commits.sort(key=lambda c: c["date"], reverse=True)
+    # The session link is picked from EVERY commit on the branch, before the
+    # MAX_COMMITS cap: on a long branch the trailer may only be on old commits.
+    link = session_link(raw_commits, pr_body)
     commits = commits[:MAX_COMMITS]
     dates = [c["date"] for c in commits if c["date"]]
     last_commit = max(dates) if dates else ""
@@ -152,6 +159,11 @@ def _build_item(repo: dict, branch: str, pr: dict | None, comp: dict | None,
         # is "unknown", never reported as "0 commits, keep going".
         "compare_failed": comp is None,
         "merged_pr": merged_pr,
+        # CONTRACT (read by other screens): always a str, "" when none.
+        # Items cached in data/inflight.json before this key existed lack it,
+        # so readers must use .get("session_url").
+        "session_url": link["session_url"],
+        "session_count": link["session_count"],
     }
     item["age_days"] = age_days(last_activity, now)
     kind, text = classify(item, now)
@@ -176,20 +188,26 @@ def gather_repo_inflight(client, repo: dict, now: datetime.datetime | None = Non
     branches = client.get_branches(owner, name)
     pulls = client.get_pulls(owner, name, state="open")
     pr_by_head = {}
+    # Raw PR bodies stay out of the cached item (they can be long); only the
+    # session link parsed from them is kept.
+    body_by_head: dict[str, str] = {}
     for pr_raw in pulls:
         head = (pr_raw.get("head") or {}).get("ref")
         if head:
             pr_by_head[head] = _pr_view_with_draft(pr_raw)
+            body_by_head[head] = pr_raw.get("body") or ""
     # Squash/rebase merges leave the branch "ahead" forever with a closed PR,
     # so ahead_by == 0 never fires. The newest page of closed PRs tells us
     # which heads were merged; only counts when the branch tip is still the
     # merged PR's head (nothing new pushed since).
     merged_by_head: dict[str, dict] = {}
+    merged_body_by_head: dict[str, str] = {}
     for pr_raw in client.get_pulls(owner, name, state="closed", sort="updated",
                                    direction="desc", max_pages=1):
         head = (pr_raw.get("head") or {}).get("ref")
         if head and pr_raw.get("merged_at") and head not in merged_by_head:
             merged_by_head[head] = _pr_view_with_draft(pr_raw)
+            merged_body_by_head[head] = pr_raw.get("body") or ""
 
     # Branches with an open PR first, and never capped: the compare cap must
     # not hide work that is waiting on a merge.
@@ -208,10 +226,13 @@ def gather_repo_inflight(client, repo: dict, now: datetime.datetime | None = Non
         tip = (b.get("commit") or {}).get("sha")
         if merged and not has_pr and tip and tip == merged.get("head_sha"):
             out.append(_build_item(repo, bn, None, {"ahead_by": None, "behind_by": None, "commits": []},
-                                   now, merged_pr=merged))
+                                   now, merged_pr=merged, pr_body=merged_body_by_head.get(bn)))
             continue
         comp = client.compare_branches(owner, name, default, bn)
-        out.append(_build_item(repo, bn, pr_by_head.get(bn), comp, now))
+        # An open PR's body first; a merged PR on the same head (new commits
+        # pushed after the merge) still names the session that started it.
+        out.append(_build_item(repo, bn, pr_by_head.get(bn), comp, now,
+                               pr_body=body_by_head.get(bn) or merged_body_by_head.get(bn)))
     skipped = len(named) - len(out)
     if skipped:
         logger.warning("inflight: branch-compare cap (%d) reached for %s/%s — %d branch(es) not listed",
@@ -280,6 +301,8 @@ def summarize_counts(items: list[dict]) -> dict:
         "stale": by_kind.get("stale", 0),
         "unknown": by_kind.get("unknown", 0),
         "complete": by_kind.get("complete", 0),
+        # Cached items from before session links existed simply count as 0.
+        "session_links": count_session_links(items),
     }
 
 
@@ -327,6 +350,10 @@ def compose_markdown(items: list[dict], owner_login: str, gathered_at: str) -> s
             lines.append(f"### {i['repo']}: {i['topic']}")
             lines.append(f"_branch `{i['branch']}`{pr_bit}{ahead}{age}_")
             lines.append("")
+            url = safe_session_url(i.get("session_url"))
+            if url:
+                lines.append(f"**Claude Code session:** {url}")
+                lines.append("")
             lines.append(f"**Next:** {i['text']}")
             if i.get("commits"):
                 lines.append("")

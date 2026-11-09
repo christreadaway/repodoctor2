@@ -14,7 +14,9 @@ Code or Claude chat session:
   5. Where the docs say we are — the head of PROJECT_STATUS.md and the most
      recent SESSION_NOTES.md entry, pulled straight from the default branch.
   6. Open tracker actions (P0 first) and planned next steps.
-  7. A suggested first prompt to paste into Claude Code.
+  7. A suggested first prompt to paste into Claude Code, next to an
+     OPEN SESSION link back into the most relevant existing Claude Code
+     session (primary_session) when a commit or PR names one.
 
 Every packet build is logged to data/logs/resume.log.
 """
@@ -154,8 +156,33 @@ def build_packet(client, repo: dict, *, summary: dict | None, brief: dict | None
         logger.warning("resume: docs failed for %s: %s", full_name, e)
         packet["errors"].append(f"Docs unavailable: {e}")
 
+    packet.update(primary_session(packet))
     packet["first_prompt"] = suggest_first_prompt(packet)
     return packet
+
+
+def primary_session(packet: dict) -> dict:
+    """The one Claude Code session to offer at the top of the packet.
+
+    Same priority as suggest_first_prompt, so the OPEN SESSION button and the
+    first prompt point at the same work whenever that work has a link:
+    unfinished branches (finish / needs PR) first, then PRs ready to merge,
+    then the newest recent session, then any other open branch (stale,
+    unknown, merged). Returns session_url / session_branch / session_topic,
+    all "" when nothing in the packet carries a link."""
+    inflight_items = packet.get("inflight") or []
+    candidates = (
+        [i for i in inflight_items if i.get("kind") in ("finish", "continue")]
+        + [i for i in inflight_items if i.get("kind") == "merge"]
+        + list(packet.get("recent_sessions") or [])
+        + [i for i in inflight_items if i.get("kind") not in ("finish", "continue", "merge")]
+    )
+    for c in candidates:
+        url = sessions.safe_session_url(c.get("session_url"))
+        if url:
+            return {"session_url": url, "session_branch": c.get("branch", ""),
+                    "session_topic": c.get("topic", "")}
+    return {"session_url": "", "session_branch": "", "session_topic": ""}
 
 
 def suggest_first_prompt(packet: dict) -> str:
@@ -167,9 +194,13 @@ def suggest_first_prompt(packet: dict) -> str:
             # A draft PR already exists: finishing means marking it ready.
             close = (f"then mark PR #{i['pr']['number']} ready for review"
                      if i.get("pr") else "and open a PR")
+            url = sessions.safe_session_url(i.get("session_url"))
+            # Names the session that started the branch, so the owner can
+            # reopen it instead of starting fresh (and Claude knows its origin).
+            origin = f" The branch came from Claude Code session {url}." if url else ""
             return (f"Pick up the `{i['branch']}` branch in {name} ({i['topic']}). "
                     f"Read PROJECT_STATUS.md and the latest SESSION_NOTES.md entry, "
-                    f"check the diff against {i['base']}, finish the work, {close}.")
+                    f"check the diff against {i['base']}, finish the work, {close}.{origin}")
     merges = [i for i in packet.get("inflight", []) if i["kind"] == "merge"]
     if merges:
         prs = ", ".join(f"PR #{i['pr']['number']}" for i in merges if i.get("pr"))
@@ -198,6 +229,10 @@ def compose_markdown(packet: dict, owner_login: str = "") -> str:
         "",
     ]
     facts = [f"Repo: {repo.get('html_url') or packet['full_name']}"]
+    primary_url = sessions.safe_session_url(packet.get("session_url"))
+    if primary_url:
+        on = f" (branch `{packet['session_branch']}`)" if packet.get("session_branch") else ""
+        facts.append(f"Claude Code session to reopen: {primary_url}{on}")
     if packet.get("category"):
         facts.append(f"Category: {packet['category']}")
     if packet.get("groups"):
@@ -225,7 +260,9 @@ def compose_markdown(packet: dict, owner_login: str = "") -> str:
             pr = i.get("pr")
             pr_bit = f" · PR #{pr['number']}{' (draft)' if pr.get('draft') else ''}" if pr else ""
             age = f" · {i['age_days']}d old" if i.get("age_days") is not None else ""
-            lines.append(f"- **{i['label']}** `{i['branch']}` — {i['topic']}{pr_bit}{age}. {i['text']}")
+            url = sessions.safe_session_url(i.get("session_url"))
+            sess = f" Session: {url}" if url else ""
+            lines.append(f"- **{i['label']}** `{i['branch']}` — {i['topic']}{pr_bit}{age}. {i['text']}{sess}")
     else:
         lines.append("- Nothing unmerged — every branch is in the default branch.")
     lines.append("")
@@ -235,7 +272,9 @@ def compose_markdown(packet: dict, owner_login: str = "") -> str:
         for s in packet["recent_sessions"]:
             pr = s.get("pr")
             pr_bit = f" · PR #{pr['number']} ({'merged' if pr.get('merged') else pr.get('state')})" if pr else ""
-            lines.append(f"- `{s['branch']}` — {s['topic']}{pr_bit} · {s['commit_count']} commit(s) · {s['next_label']}")
+            url = sessions.safe_session_url(s.get("session_url"))
+            sess = f" · session: {url}" if url else ""
+            lines.append(f"- `{s['branch']}` — {s['topic']}{pr_bit} · {s['commit_count']} commit(s) · {s['next_label']}{sess}")
             for c in s.get("commits", [])[:3]:
                 lines.append(f"    - {c['summary']}")
     else:

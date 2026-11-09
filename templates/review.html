@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import next_up_subnav, group_filter_bar, do_next_item, category_badge with context %}
+{% from "_macros.html" import next_up_subnav, group_filter_bar, do_next_item, category_badge, open_session with context %}
 {% block title %}RepoDoctor — Weekly review{% endblock %}
 {% block content %}
 <div class="page-header">
@@ -112,7 +112,7 @@
             <a href="{{ url_for('resume_view', owner=i.owner, name=i.repo) }}" class="dn-repo">{{ i.repo }}</a>
             <span class="session-branch">{{ i.branch }}</span>
             <span class="rv-count">stale branch{% if i.age_days is not none %}, {{ i.age_days }} days{% endif %}</span>
-            {% if i.session_url %}<a href="{{ i.session_url }}" target="_blank" rel="noopener" class="btn btn-sm btn-outline">OPEN SESSION ↗</a>{% endif %}
+            {{ open_session(i.session_url) }}
         </li>
         {% endfor %}
     </ul>

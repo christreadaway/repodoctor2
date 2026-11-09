@@ -110,11 +110,17 @@ class TestBuildDoNext(unittest.TestCase):
         url = "https://claude.ai/code/session_01ABC"
         res = self.build(items=[item("a", "merge", pr=pr(7), session_url=url), item("b", "continue")])
         merge, open_pr = res["items"]
-        labels = [l["label"] for l in merge["links"]]
-        self.assertEqual(labels, ["PR #7", "OPEN SESSION"])
-        self.assertTrue(merge["links"][1]["primary"])
-        self.assertEqual(merge["session_url"], url)
+        self.assertEqual([l["label"] for l in merge["links"]], ["PR #7"])
+        self.assertEqual(merge["session_url"], url)  # rendered by the shared OPEN SESSION chip
         self.assertEqual([l["label"] for l in open_pr["links"]], ["BRANCH"])
+
+    def test_tampered_cached_session_url_is_dropped(self):
+        for bad in ("javascript:alert(1)", "https://claude.ai.evil.com/code/session_01X",
+                    'https://claude.ai/code/session_01X" onmouseover="x', 12345):
+            res = self.build(items=[item("a", "merge", pr=pr(1), session_url=bad)])
+            self.assertEqual(res["items"][0]["session_url"], "", bad)
+            md = nextup.compose_do_next_markdown(res)
+            self.assertNotIn("Claude Code session:", md)
 
     def test_cached_items_without_session_url_are_fine(self):
         it = item("a", "finish")
@@ -157,7 +163,7 @@ class TestBuildDoNext(unittest.TestCase):
         self.assertIn("the **Church** group", md)
         self.assertIn("## MERGE", md)
         self.assertIn("1. **a**: a merge topic", md)
-        self.assertIn(f"OPEN SESSION: {url}", md)
+        self.assertIn(f"Claude Code session: {url}", md)
         self.assertIn("Prompt: In a, PR #7", md)
         self.assertIn("1 lower-priority (P2/P3)", md)
 
@@ -287,6 +293,20 @@ class TestRoutes(unittest.TestCase):
         self.assertIn('class="subnav-link active">Do next', body)
         r, body = self.get("/yesterday")
         self.assertIn('href="/next" class="nav-link active"', body)
+
+    def test_tampered_cache_never_reaches_an_href(self):
+        bad = "javascript:alert(document.cookie)"
+        models.save_inflight({"gathered_at": "2026-11-09T00:00:00+00:00", "items": [
+            item("alpha", "merge", pr=pr(5), session_url=bad),
+            item("beta", "stale", days=30, session_url=bad)]})
+        for url in ("/next", "/review"):
+            r, body = self.get(url)
+            self.assertEqual(r.status_code, 200)
+            self.assertNotIn("javascript:", body, url)
+
+    def test_do_next_markdown_carries_the_session_link(self):
+        md = self.client.get("/next/export.md").data.decode()
+        self.assertIn("Claude Code session: https://claude.ai/code/session_01XYZ", md)
 
     def test_do_next_without_inflight_cache(self):
         models.save_inflight({})

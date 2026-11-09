@@ -1,7 +1,14 @@
 {% extends "base.html" %}
-{% from "_macros.html" import category_badge, group_filter_bar, next_up_subnav with context %}
+{% from "_macros.html" import category_badge, group_filter_bar, next_up_subnav, open_session with context %}
 {% block title %}RepoDoctor — In Flight{% endblock %}
 {% block content %}
+{# OPEN SESSION -> the Claude Code session behind a branch. The URL comes from
+   commit trailers / PR bodies (attacker-controlled text), already reduced to
+   the canonical https://claude.ai/code/session_<id> form by
+   sessions.claude_session_url; the prefix is re-checked here because items
+   are read back from data/inflight.json. Cached items from before session
+   links existed have no session_url key: Undefined is not a string, so no
+   link renders. #}
 <div class="page-header">
     <div class="page-header-title">
         <h1>In Flight</h1>
@@ -119,6 +126,7 @@
             {% if i.pr %}
             <a href="{{ i.pr.html_url }}" target="_blank" rel="noopener" class="session-pr session-pr-open">PR #{{ i.pr.number }}{% if i.pr.draft %} · draft{% endif %}</a>
             {% endif %}
+            {{ open_session(i.session_url, i.session_count) }}
             {% if i.ahead_by is not none %}<span class="session-count" title="commits ahead / behind {{ i.base }}">+{{ i.ahead_by }} / &minus;{{ i.behind_by }}</span>{% endif %}
             {% if i.last_activity_at %}<span class="session-when">last {{ i.last_activity_at|central_time }}</span>{% endif %}
             {% if i.age_days is not none %}<span class="session-when {% if i.age_days >= 14 %}inflight-old{% endif %}">{{ i.age_days }}d old</span>{% endif %}

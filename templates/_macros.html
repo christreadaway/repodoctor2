@@ -73,6 +73,7 @@
         </div>
         {% if x.why %}<p class="dn-why">{{ x.why }}</p>{% endif %}
         <div class="dn-actions">
+            {{ open_session(x.session_url) }}
             {% for link in x.links %}
             <a href="{{ link.url }}" class="btn btn-sm {{ 'btn-primary' if link.primary else 'btn-outline' }}"
                {% if link.external %}target="_blank" rel="noopener"{% endif %}>{{ link.label }}{% if link.external %} ↗{% endif %}</a>
@@ -87,4 +88,18 @@
         </div>
     </div>
 </li>
+{%- endmacro %}
+
+
+{# OPEN SESSION ↗: one click back into the Claude Code session that made a
+   branch. Renders nothing unless `url` is a canonical session URL (callers
+   also pass values through sessions.safe_session_url / claude_session_url).
+   `count` > 1 says the newest of several sessions opens; `extra` adds a class
+   (e.g. session-open-lg); `scope` words the tooltip ("on this branch" /
+   "in this card"). #}
+{% macro open_session(url, count=0, extra='', scope='on this branch') -%}
+{%- if url is string and url.startswith('https://claude.ai/code/session_') -%}
+<a href="{{ url }}" target="_blank" rel="noopener" class="session-open{% if extra %} {{ extra }}{% endif %}"
+   title="{% if count and count > 1 %}Opens the newest of the {{ count }} Claude Code sessions {{ scope }} (new tab){% else %}Open this Claude Code session in a new tab{% endif %}">OPEN SESSION <span aria-hidden="true">↗</span></a>
+{%- endif -%}
 {%- endmacro %}

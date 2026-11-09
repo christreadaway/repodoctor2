@@ -73,6 +73,107 @@ _WIP_RE = re.compile(
 # "claude/yesterday-work-summary-zqlr51" -> drop "-zqlr51".
 _CLAUDE_SUFFIX_RE = re.compile(r"-[a-z0-9]{6}$")
 
+# --- Claude Code session links ----------------------------------------------
+# Commits made by Claude Code on the web carry a trailer
+#   Claude-Session: https://claude.ai/code/session_01Mko4TBU32FYhCyL3w1dYFV
+# (and its PR bodies often end with the bare URL on its own line). Every card
+# that shows a branch offers OPEN SESSION -> that URL, so it lands in href
+# attributes: the text it comes from (commit messages, PR bodies) is written
+# by whoever can push to the repo, so treat it as hostile. Only the canonical
+# shape below is ever returned — https only, exactly claude.ai, exactly
+# /code/session_<id> — never a lookalike host, another scheme, or anything
+# glued onto the id (quotes, paths, query strings).
+SESSION_URL_PREFIX = "https://claude.ai/code/session_"
+_SESSION_URL_CANONICAL_RE = re.compile(r"https://claude\.ai/code/session_[A-Za-z0-9_-]{1,128}")
+_SESSION_URL_RE = re.compile(
+    # Starts a token (or follows an opening wrapper such as "(", "<", a quote,
+    # a backtick, "*" or a table pipe) — never glued onto a longer URL like
+    # https://evil.example/?u=https://claude.ai/... A ":" is let through here
+    # only so claude_session_url can accept "Claude-Session:<url>"; any other
+    # label glued on (javascript:<url>) is rejected there.
+    r"(?<![^\s(<\[\"'`*|:])"
+    r"(https://claude\.ai/code/session_[A-Za-z0-9_-]{1,128})"
+    # Ends a token: only closing wrappers / sentence punctuation may follow
+    # before whitespace or the end. Rejects session_x"onmouseover=...,
+    # session_x.evil.com, session_x/../.., session_x?y=z.
+    r"(?=[)\]}>\"'`*|.,;:!?]*(?:\s|$))"
+)
+_SESSION_TRAILER_LABEL = "claude-session:"
+_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+
+
+def safe_session_url(value) -> str:
+    """value when it is exactly a canonical Claude Code session URL, else "".
+    Re-checks values read back from caches before they reach a page/export."""
+    if isinstance(value, str) and _SESSION_URL_CANONICAL_RE.fullmatch(value):
+        return value
+    return ""
+
+
+def claude_session_url(text) -> str:
+    """The Claude Code session URL in a commit message or PR body, or "".
+
+    A `Claude-Session:` trailer wins over a bare URL elsewhere in the text
+    (a message may cite an earlier session in its body); among several of the
+    same kind the last one wins (trailers sit at the end). The result always
+    matches ^https://claude\\.ai/code/session_[A-Za-z0-9_-]+$."""
+    if not isinstance(text, str) or SESSION_URL_PREFIX not in text:
+        return ""
+    trailer = bare = ""
+    for m in _SESSION_URL_RE.finditer(text):
+        url = m.group(1)
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        label = text[line_start:m.start()].strip().lower()
+        if m.start() > 0 and text[m.start() - 1] == ":" and label != _SESSION_TRAILER_LABEL:
+            continue  # javascript:https://..., x:https://... — not a token of its own
+        if label == _SESSION_TRAILER_LABEL:
+            trailer = url
+        else:
+            bare = url
+    return safe_session_url(trailer or bare)
+
+
+def _commit_message(c: dict) -> str:
+    """Full message of a raw GitHub commit or a _normalize_commit() dict."""
+    if "commit" in c:
+        return ((c.get("commit") or {}).get("message")) or ""
+    return c.get("message") or ""
+
+
+def session_link(commits: list[dict] | None, pr_body: str | None = None) -> dict:
+    """{"session_url", "session_count"} for one branch / card.
+
+    Looks at EVERY commit given (callers pass the list before any MAX_COMMITS
+    truncation): the newest commit that carries a link wins; session_count is
+    how many distinct sessions the commits span. Raw GitHub commits and
+    normalized ones both work. Only when no commit has a link does the PR
+    body (if any) supply it."""
+    dated = []
+    for idx, c in enumerate(commits or []):
+        date = _commit_date(c) if "commit" in c else (c.get("date") or "")
+        # GitHub lists compare/PR commits oldest-first; equal timestamps keep
+        # that order, so the later index is the newer commit.
+        dated.append((_parse_ts(date) or _EPOCH, idx, c))
+    dated.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    url = ""
+    seen: set[str] = set()
+    for _, _, c in dated:
+        found = claude_session_url(_commit_message(c))
+        if found:
+            url = url or found
+            seen.add(found)
+    if not url and pr_body:
+        url = claude_session_url(pr_body)
+        if url:
+            seen.add(url)
+    return {"session_url": url, "session_count": len(seen)}
+
+
+def count_session_links(items: list[dict]) -> int:
+    """How many cards/items carry an OPEN SESSION link (for the gather logs)."""
+    return sum(1 for i in items or [] if safe_session_url(i.get("session_url")))
+
+
 # "what's next" kinds -> chip color family (see style.css tk-* tokens).
 NEXT_KIND_LABELS = {
     "merge": "MERGE TO MAIN",
@@ -190,9 +291,10 @@ def _normalize_commit(raw: dict) -> dict:
     }
 
 
-def _commits_in_window(raw_commits: list[dict], window: Window,
-                       drop_merges: bool = False) -> list[dict]:
-    """Normalized commits whose date falls in the window, newest-first."""
+def _all_commits_in_window(raw_commits: list[dict], window: Window,
+                           drop_merges: bool = False) -> list[dict]:
+    """Every normalized commit whose date falls in the window, newest-first,
+    NOT truncated (the session link must see commits past MAX_COMMITS)."""
     out = []
     for raw in raw_commits or []:
         if drop_merges and len(raw.get("parents") or []) > 1:
@@ -201,7 +303,13 @@ def _commits_in_window(raw_commits: list[dict], window: Window,
             continue
         out.append(_normalize_commit(raw))
     out.sort(key=lambda c: c["date"], reverse=True)
-    return out[:MAX_COMMITS]
+    return out
+
+
+def _commits_in_window(raw_commits: list[dict], window: Window,
+                       drop_merges: bool = False) -> list[dict]:
+    """Normalized commits whose date falls in the window, newest-first."""
+    return _all_commits_in_window(raw_commits, window, drop_merges)[:MAX_COMMITS]
 
 
 def branch_topic(branch: str) -> str:
@@ -320,11 +428,31 @@ def _repo_touched_since(repo: dict, since: datetime.datetime,
     return pushed >= since
 
 
+def _pick_link(window_commits: list[dict], branch_commits: list[dict] | None = None,
+               pr_body: str | None = None) -> dict:
+    """The OPEN SESSION link for one Recent-sessions card.
+
+    A card is one branch's activity inside the window, so the newest in-window
+    commit with a link wins (a branch picked up again in a later session still
+    links each day's card to that day's session). If no in-window commit has
+    one (e.g. a merge/close-only card, or hand-made commits), fall back to the
+    newest linked commit anywhere on the branch, then to the PR body."""
+    link = session_link(window_commits)
+    if link["session_url"]:
+        return link
+    return session_link(branch_commits or [], pr_body)
+
+
 def _build_session(repo: dict, branch: str, is_default: bool, commits: list[dict],
                    window: Window, pr: dict | None,
-                   ahead_by: int | None, behind_by: int | None) -> dict:
+                   ahead_by: int | None, behind_by: int | None,
+                   link: dict | None = None) -> dict:
+    """commits may be the full in-window list; it is capped at MAX_COMMITS
+    here, after the caller has picked the session link from all of them."""
     owner = repo["owner"]
     name = repo["name"]
+    commits = commits[:MAX_COMMITS]
+    link = link or {}
     topic = (pr or {}).get("title") or branch_topic(branch)
     dates = [c["date"] for c in commits if c["date"]]
     session = {
@@ -346,6 +474,9 @@ def _build_session(repo: dict, branch: str, is_default: bool, commits: list[dict
         "last_sha": commits[0]["sha"] if commits else (pr or {}).get("head_sha", ""),
         "token": session_token(name, branch),
         "recap_key": recap_key(name, branch, window.key),
+        # CONTRACT (read by other screens): always a str, "" when none.
+        "session_url": safe_session_url(link.get("session_url")),
+        "session_count": int(link.get("session_count") or 0),
     }
     kind, text = classify_next(session)
     session["next_kind"] = kind
@@ -373,7 +504,11 @@ def _pr_view(pr: dict) -> dict:
     }
 
 
-def _session_from_pr(client, repo: dict, pr_raw: dict, window: Window) -> dict | None:
+def _session_from_pr(client, repo: dict, pr_raw: dict, window: Window,
+                     covered: set[str] | None = None) -> dict | None:
+    """covered (optional) collects the sha of EVERY in-window commit of the
+    session, not just the MAX_COMMITS shown, so none of them reappears as a
+    direct-to-main commit."""
     owner, name = repo["owner"], repo["name"]
     head = (pr_raw.get("head") or {}).get("ref")
     if not head:
@@ -382,7 +517,7 @@ def _session_from_pr(client, repo: dict, pr_raw: dict, window: Window) -> dict |
     pr = _pr_view(pr_raw)
 
     raw_commits = client.get_pull_commits(owner, name, number)
-    commits = _commits_in_window(raw_commits, window)
+    commits = _all_commits_in_window(raw_commits, window)
 
     merged = pr["merged"]
     # A PR is a session for this window if it has commits in-window OR it was
@@ -398,20 +533,28 @@ def _session_from_pr(client, repo: dict, pr_raw: dict, window: Window) -> dict |
         if comp:
             ahead_by = comp.get("ahead_by")
             behind_by = comp.get("behind_by")
-    return _build_session(repo, head, False, commits, window, pr, ahead_by, behind_by)
+    link = _pick_link(commits, raw_commits, pr_raw.get("body"))
+    if covered is not None:
+        covered.update(c["sha"] for c in commits)
+    return _build_session(repo, head, False, commits, window, pr, ahead_by, behind_by, link)
 
 
-def _session_from_branch(client, repo: dict, branch: str, window: Window) -> dict | None:
+def _session_from_branch(client, repo: dict, branch: str, window: Window,
+                         covered: set[str] | None = None) -> dict | None:
     owner, name = repo["owner"], repo["name"]
     default = repo.get("default_branch", "main")
     comp = client.compare_branches(owner, name, default, branch)
     if not comp:
         return None
-    commits = _commits_in_window(comp.get("commits") or [], window)
+    raw_commits = comp.get("commits") or []
+    commits = _all_commits_in_window(raw_commits, window)
     if not commits:
         return None
+    link = _pick_link(commits, raw_commits)
+    if covered is not None:
+        covered.update(c["sha"] for c in commits)
     return _build_session(repo, branch, False, commits, window, None,
-                          comp.get("ahead_by", 0), comp.get("behind_by", 0))
+                          comp.get("ahead_by", 0), comp.get("behind_by", 0), link)
 
 
 _PR_REF_SUFFIX_RE = re.compile(r"\(#(\d+)\)\s*$")
@@ -439,12 +582,18 @@ def _session_from_default(client, repo: dict, window: Window,
     raw = client.get_commits_since(owner, name, window.since_iso, ref=default,
                                    until_iso=window.until_iso)
     covered_prs = covered_prs or set()
-    commits = [c for c in _commits_in_window(raw, window, drop_merges=True)
+    # Drop covered commits BEFORE the MAX_COMMITS cap: capping first let a
+    # busy day of PR landings push the real direct-to-main commits off the
+    # list (and the session link with them).
+    commits = [c for c in _all_commits_in_window(raw, window, drop_merges=True)
                if c["sha"] not in covered_shas
                and not _is_pr_landing_commit(c, covered_prs)]
     if not commits:
         return None
-    return _build_session(repo, default, True, commits, window, None, 0, 0)
+    # Only this card's own commits: the PR-covered ones belong to other cards
+    # (and other sessions), so there is no branch-wide or PR-body fallback.
+    return _build_session(repo, default, True, commits, window, None, 0, 0,
+                          session_link(commits))
 
 
 def _gather_repo_sessions(client, repo: dict, window: Window) -> list[dict]:
@@ -467,11 +616,10 @@ def _gather_repo_sessions(client, repo: dict, window: Window) -> list[dict]:
         # window opened, no later PR can be either — stop paging through them.
         if not _at_or_after(pr_raw.get("updated_at"), window.since):
             break
-        sess = _session_from_pr(client, repo, pr_raw, window)
+        sess = _session_from_pr(client, repo, pr_raw, window, covered_shas)
         if sess:
             out.append(sess)
             covered_branches.add(sess["branch"])
-            covered_shas.update(c["sha"] for c in sess["commits"])
             pr = sess.get("pr") or {}
             if pr.get("merge_commit_sha"):
                 covered_shas.add(pr["merge_commit_sha"])
@@ -493,10 +641,9 @@ def _gather_repo_sessions(client, repo: dict, window: Window) -> list[dict]:
             )
             break
         compared += 1
-        sess = _session_from_branch(client, repo, bn, window)
+        sess = _session_from_branch(client, repo, bn, window, covered_shas)
         if sess:
             out.append(sess)
-            covered_shas.update(c["sha"] for c in sess["commits"])
 
     direct = _session_from_default(client, repo, window, covered_shas, covered_prs)
     if direct:
@@ -728,6 +875,9 @@ def compose_markdown(sessions: list[dict], owner_login: str, window_label: str) 
         lines.append(f"_branch `{s['branch']}`{pr_bit} · "
                      f"{s['commit_count']} commit(s) this period_")
         lines.append("")
+        url = safe_session_url(s.get("session_url"))
+        if url:
+            lines += [f"**Claude Code session:** {url}", ""]
         recap = s.get("recap")
         if recap:
             if recap.get("what_you_did"):
@@ -760,4 +910,5 @@ def summarize_counts(sessions: list[dict]) -> dict:
         "needs_merge": by_kind.get("merge", 0),
         "in_progress": by_kind.get("continue", 0) + by_kind.get("finish", 0),
         "done": by_kind.get("complete", 0),
+        "session_links": count_session_links(sessions),
     }

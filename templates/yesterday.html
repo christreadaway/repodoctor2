@@ -1,7 +1,10 @@
 {% extends "base.html" %}
-{% from "_macros.html" import category_badge, next_up_subnav with context %}
+{% from "_macros.html" import category_badge, next_up_subnav, open_session with context %}
 {% block title %}RepoDoctor — Next Up{% endblock %}
 {% block content %}
+{# OPEN SESSION -> the Claude Code session behind this card. The URL is
+   already canonical (sessions.claude_session_url); the prefix is re-checked
+   so nothing but a claude.ai session link can ever reach the href. #}
 <div class="page-header">
     <h1>Next Up</h1>
     <div class="page-actions">
@@ -113,6 +116,7 @@
                class="session-pr session-pr-{{ 'merged' if s.pr.merged else s.pr.state }}">
                PR #{{ s.pr.number }} · {{ 'merged' if s.pr.merged else s.pr.state }}</a>
             {% endif %}
+            {{ open_session(s.session_url, s.session_count, scope='in this card') }}
             <span class="session-count">{{ s.commit_count }} commit{% if s.commit_count != 1 %}s{% endif %}</span>
             {% if s.last_commit_at %}<span class="session-when">last {{ s.last_commit_at|central_time }}</span>{% endif %}
         </div>

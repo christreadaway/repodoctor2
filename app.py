@@ -1650,7 +1650,8 @@ def yesterday_view():
         session_list, session.get("github_user", ""), window.label)
     models.log_sessions_event(
         "view", range=window.key, sessions=len(session_list),
-        repos=counts["repos"], elapsed_ms=int((time.monotonic() - t0) * 1000),
+        repos=counts["repos"], session_links=counts.get("session_links", 0),
+        elapsed_ms=int((time.monotonic() - t0) * 1000),
     )
 
     return render_template(
@@ -2005,6 +2006,7 @@ def inflight_refresh():
     counts = inflight.summarize_counts(data["items"])
     models.log_inflight_event(
         "refresh", items=counts["total"], repos=counts["repos"],
+        session_links=counts.get("session_links", 0),
         repos_checked=data["repos_checked"], repos_skipped=data["repos_skipped"],
         failed=data["failed_repos"], elapsed_ms=int((time.monotonic() - t0) * 1000),
     )
@@ -2182,6 +2184,7 @@ def _build_resume_packet(owner: str, name: str):
     models.log_resume_event(
         "build", repo=f"{owner}/{name}", inflight=len(packet["inflight"]),
         sessions=len(packet["recent_sessions"]), errors=packet["errors"],
+        session_links=sessions.count_session_links(packet["inflight"] + packet["recent_sessions"]),
         elapsed_ms=int((time.monotonic() - t0) * 1000),
     )
     return packet, None
