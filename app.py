@@ -2547,14 +2547,14 @@ def _snapshot_publish_now(scan: dict) -> bool:
         models.save_snapshot_state({**state, "last_error": msg})
         flash(f"Snapshot not published ({msg}). Details are in data/logs/snapshot.log.", "error")
         return False
-    url = dep.get("url") or state.get("url") or ""
+    url = state.get("url") or dep.get("site_url") or dep.get("url") or ""
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    models.save_snapshot_state({**state, "url": state.get("url") or url, "last_published_at": now,
+    models.save_snapshot_state({**state, "url": url, "last_published_at": now,
                                 "last_bytes": built["bytes"], "last_deploy_id": dep.get("deploy_id", ""),
                                 "last_error": ""})
     models.log_snapshot_event("publish", site_id=state["site_id"], deploy_id=dep.get("deploy_id"),
                               bytes=built["bytes"], elapsed_ms=int((time.monotonic() - t0) * 1000))
-    flash(f"Snapshot published: {state.get('url') or url} (open it on your phone and enter your passphrase).",
+    flash(f"Snapshot published: {url} (open it on your phone and enter your passphrase).",
           "success")
     return True
 
