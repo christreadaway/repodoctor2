@@ -2478,8 +2478,10 @@ def _snapshot_data(scan: dict) -> dict:
     if view["untagged"]:
         portfolio_sections.append({"tag": "Untagged", "rows": [prow(r) for r in view["untagged"]]})
 
+    built_at = datetime.datetime.now(datetime.timezone.utc)
     return {
-        "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "built_at": built_at.isoformat(),
+        "built_label": _central_time(built_at.isoformat()),
         "owner": session.get("github_user", ""),
         "do_next": dn,
         "review": review,
@@ -2497,7 +2499,7 @@ def _snapshot_build(scan: dict, passphrase: str) -> dict:
     data = _snapshot_data(scan)
     body = snap.render_body(data)
     payload = snap.encrypt(body, passphrase)
-    shell = snap.build_shell(payload, _central_time(data["built_at"]))
+    shell = snap.build_shell(payload, data["built_label"])
     files = snap.site_files(shell)
     blob = snap.build_zip(files)
     return {"files": files, "zip": blob, "bytes": len(blob), "body_chars": len(body)}
