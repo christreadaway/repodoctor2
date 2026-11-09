@@ -1796,6 +1796,10 @@ def yesterday_summarize_one(token):
 # the dependency-free md_render (every line escaped before markup, link schemes
 # checked). A ?raw=1 toggle shows the source instead.
 
+# --- START [S24-E] Do next + Weekly review (routes) ---
+# --- END [S24-E] ---
+
+
 # --- In Flight: every unmerged branch / open PR across repos -----------------
 # Window-independent counterpart to Next Up: "what have I kicked off that is
 # still running or waiting on me?" Cached in data/inflight.json so the page

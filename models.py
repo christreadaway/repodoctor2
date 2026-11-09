@@ -995,3 +995,22 @@ def log_portfolio_event(event: str, **fields):
 
 def tail_portfolio_log(n: int = 100) -> list[dict]:
     return _tail_log(PORTFOLIO_LOG_PATH, n)
+
+
+# ======================================================================
+# Session 24 feature blocks. Each feature adds code ONLY between its own
+# START and END markers, so parallel work merges cleanly.
+# ======================================================================
+
+# --- START [S24-C] Health grade ---
+# --- END [S24-C] ---
+
+# (spacer)
+
+# --- START [S24-D] Stats AI summaries ---
+# --- END [S24-D] ---
+
+# (spacer)
+
+# --- START [S24-E] Do next + Weekly review ---
+# --- END [S24-E] ---

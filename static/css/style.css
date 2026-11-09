@@ -6244,3 +6244,31 @@ a.session-branch:hover { border-color: var(--tk-cyan-fg); }
   .pf-tags { justify-content: flex-start; flex-basis: auto; }
   .pf-section-links { margin-left: 0; }
 }
+
+/* ================================================================
+   Session 24 feature blocks. Each feature adds its CSS ONLY between
+   its own START and END markers, so parallel work merges cleanly.
+   ================================================================ */
+
+/* --- START [S24-A] Scan + Anthropic key check --- */
+/* --- END [S24-A] --- */
+
+/* (spacer) */
+
+/* --- START [S24-B] Claude Code session links --- */
+/* --- END [S24-B] --- */
+
+/* (spacer) */
+
+/* --- START [S24-C] Health grade --- */
+/* --- END [S24-C] --- */
+
+/* (spacer) */
+
+/* --- START [S24-D] Stats: what we shipped (AI) --- */
+/* --- END [S24-D] --- */
+
+/* (spacer) */
+
+/* --- START [S24-E] Do next + Weekly review --- */
+/* --- END [S24-E] --- */
