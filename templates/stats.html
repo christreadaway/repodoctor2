@@ -51,8 +51,8 @@
     </form>
 </div>
 
-<p class="stats-range-caption" id="stats-range-caption">
-    <strong>{{ rng.name }}</strong> · {{ rng.dates_label }} · {{ rng.days }} day{% if rng.days != 1 %}s{% endif %}
+<p class="stats-range-caption" id="stats-range-caption" aria-live="polite">
+    <strong>{{ rng.name }}</strong> · {{ rng.dates_label }} · {{ "{:,}".format(rng.days) }} day{% if rng.days != 1 %}s{% endif %}
     {% if fetched_at %}
     <span class="stats-asof {% if stale %}is-stale{% endif %}">· data as of {{ fetched_at|central_time }}{% if stale %} (offline — reconnect to refresh){% endif %}</span>
     {% endif %}
@@ -95,7 +95,7 @@
 <div class="stats-kpis">
     <div class="stats-kpi">
         <div class="stats-kpi-label">Repos updated</div>
-        <div class="stats-kpi-value">{{ t.repos_updated }}<span class="stats-kpi-of"> of {{ t.repos_total }}</span></div>
+        <div class="stats-kpi-value">{{ t.repos_updated }}<span class="stats-kpi-of"> of {{ t.read if t.errors else t.repos_total }}{% if t.errors %} read{% endif %}</span></div>
     </div>
     <div class="stats-kpi">
         <div class="stats-kpi-label">Commits</div>
@@ -107,7 +107,7 @@
     </div>
     <div class="stats-kpi">
         <div class="stats-kpi-label">Active days</div>
-        <div class="stats-kpi-value">{{ t.active_days }}<span class="stats-kpi-of"> of {{ t.days }}</span></div>
+        <div class="stats-kpi-value">{{ "{:,}".format(t.active_days) }}<span class="stats-kpi-of"> of {{ "{:,}".format(t.days) }}</span></div>
     </div>
 </div>
 
@@ -115,7 +115,14 @@
 <div class="flash flash-error stats-notice">
     GitHub couldn't be read for {{ report.failed|length }} repo{% if report.failed|length != 1 %}s{% endif %}
     ({% for r in report.failed %}<span title="{{ r.error }}">{{ r.name }}</span>{% if not loop.last %}, {% endif %}{% endfor %}),
-    so the numbers above leave {{ 'it' if report.failed|length == 1 else 'them' }} out. They're retried on your next visit; details are in data/logs/activity.log.
+    so the numbers above leave {{ 'it' if report.failed|length == 1 else 'them' }} out. They're retried automatically after a few minutes; details are in data/logs/activity.log.
+</div>
+{% endif %}
+{% if report.incomplete %}
+<div class="flash flash-warning stats-notice">
+    {% for r in report.incomplete %}{{ r.name }}{% if not loop.last %}, {% endif %}{% endfor %}
+    {{ 'has' if report.incomplete|length == 1 else 'have' }} more history than one read covers (5,000 commits / 1,000 closed PRs),
+    so the oldest work in this range may be missing. A shorter range reads {{ 'it' if report.incomplete|length == 1 else 'them' }} fully.
 </div>
 {% endif %}
 
@@ -125,15 +132,15 @@
 <div class="stats-chart stats-timeline">
     <div class="stats-chart-heading">
         <h2 class="stats-chart-title">Commits per {{ tl.unit }}</h2>
-        <span class="stats-chart-subtitle">Peak {{ tl.peak }} · hover or tab to a {{ tl.unit }} for its numbers</span>
+        <span class="stats-chart-subtitle">Peak {{ tl.peak }} · hover, or tab in and use the arrow keys, for each {{ tl.unit }}'s numbers</span>
     </div>
-    <div class="stats-timeline-plot" role="list" aria-label="Commits per {{ tl.unit }}, {{ rng.dates_label }}">
+    <div class="stats-timeline-plot" id="stats-timeline-plot" role="list" aria-label="Commits per {{ tl.unit }}, {{ rng.dates_label }}. Use the arrow keys to move between {{ tl.unit }}s.">
         {% for b in tl.buckets %}
         {# Any non-zero bucket gets at least a 3% sliver so "1 commit" never reads as zero. #}
         {% set height = ([b.commits / tl.peak * 100, 3]|max) if b.commits else 0 %}
         {% set tip = b.label ~ ': ' ~ b.commits ~ ' commit' ~ ('' if b.commits == 1 else 's') ~ (', ' ~ b.prs ~ ' PR' ~ ('' if b.prs == 1 else 's') ~ ' merged' if b.prs else '') %}
         {% set pos = loop.index0 / tl.buckets|length %}
-        <div class="stats-tl-col {{ 'tip-end' if pos >= 0.66 else ('tip-mid' if pos >= 0.33 else '') }}" role="listitem" tabindex="0" aria-label="{{ tip }}" data-tip="{{ tip }}">
+        <div class="stats-tl-col {{ 'tip-end' if pos >= 0.66 else ('tip-mid' if pos >= 0.33 else '') }}" role="listitem" tabindex="{{ '0' if loop.first else '-1' }}" aria-label="{{ tip }}" data-tip="{{ tip }}">
             <div class="stats-tl-bar" style="height: {{ '%.1f'|format(height) }}%"></div>
         </div>
         {% endfor %}
@@ -173,13 +180,14 @@
                 </div>
                 <div class="change-counts">
                     <span><strong>{{ r.commit_count }}</strong> commit{% if r.commit_count != 1 %}s{% endif %}</span>
-                    {% if r.pr_count %}<span><strong>{{ r.pr_count }}</strong> PR{% if r.pr_count != 1 %}s{% endif %} merged</span>{% endif %}
+                    {% if r.pr_count %}<span><strong>{{ r.pr_count }}</strong> PR{% if r.pr_count != 1 %}s{% endif %} merged</span>
+                    {% elif r.merge_count %}<span><strong>{{ r.merge_count }}</strong> merge{% if r.merge_count != 1 %}s{% endif %}</span>{% endif %}
                 </div>
             </header>
             <div class="change-meta">
                 {% if r.last_at %}<span>last update {{ r.last_at|central_time }}</span>{% endif %}
                 <span>{{ r.active_days }} active day{% if r.active_days != 1 %}s{% endif %}</span>
-                {% if r.truncated %}<span class="change-warn" title="GitHub returned the maximum this app reads for one repo; the oldest items in the range may be missing.">partial — very busy repo</span>{% endif %}
+                {% if r.incomplete %}<span class="change-warn" title="GitHub returned the maximum this app reads for one repo; the oldest work in this range may be missing.">partial — very busy repo</span>{% endif %}
             </div>
 
             {% if r.prs %}
@@ -209,6 +217,21 @@
             </div>
             {% endif %}
 
+            {% if r.merges and not r.prs %}
+            <div class="change-section">
+                <div class="change-section-label">Merges (no PR)</div>
+                <ul class="change-list">
+                    {% for c in r.merges[:6] %}
+                    <li>
+                        {% if c.html_url %}<a href="{{ c.html_url }}" target="_blank" rel="noopener" class="change-item-text">{{ c.summary or '(no message)' }}</a>
+                        {% else %}<span class="change-item-text">{{ c.summary or '(no message)' }}</span>{% endif %}
+                        <span class="change-item-when">{{ c.date|central_time }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
             {% if r.commits %}
             <details class="change-section change-commits" {% if not r.prs %}open{% endif %}>
                 <summary>{{ r.commit_count }} commit{% if r.commit_count != 1 %}s{% endif %} on {{ r.default_branch }}</summary>
@@ -230,6 +253,16 @@
         </article>
         {% endfor %}
     </div>
+    {% elif report.failed or report.partial %}
+    <div class="onboarding">
+        <div class="onboarding-welcome">
+            <h2>No activity found in the repos GitHub could read.</h2>
+            <p>{{ t.read - report.partial|length }} of {{ t.repos_total }} repo{% if t.repos_total != 1 %}s were{% else %} was{% endif %} read fully with nothing in {{ rng.dates_label }}.
+            {% if report.failed %}{{ report.failed|length }} couldn't be read (see the warning above), so this is not a claim that nothing happened there.{% endif %}
+            {% if report.partial %}{{ report.partial|length }} {{ 'was' if report.partial|length == 1 else 'were' }} only partly read.{% endif %}
+            Try <a href="{{ url_for('stats', refresh=1, group=active_group or None, **range_args) }}" class="js-stats-nav">REFRESH</a> in a few minutes.</p>
+        </div>
+    </div>
     {% else %}
     <div class="onboarding">
         <div class="onboarding-welcome">
@@ -239,6 +272,17 @@
             Unmerged branch work shows in <a href="{{ url_for('inflight_view') }}">Next Up → In flight</a>.</p>
         </div>
     </div>
+    {% endif %}
+
+    {% if report.partial %}
+    <details class="changes-idle" open>
+        <summary>Only partly read ({{ report.partial|length }})</summary>
+        <div class="changes-idle-list">
+            {% for r in report.partial %}
+            <a href="{{ r.commits_url }}" target="_blank" rel="noopener" class="changes-idle-chip" title="Open this range's history on GitHub">{{ r.name }} ↗</a>
+            {% endfor %}
+        </div>
+    </details>
     {% endif %}
 
     {% if report.idle %}
@@ -384,8 +428,9 @@
             track.appendChild(fill);
             var val = document.createElement('div');
             val.className = 'stats-bar-value';
-            val.textContent = row.error ? 'n/a' : meta.fmt(row.value);
-            if (row.error) val.title = "GitHub couldn't be read for this repo";
+            var unread = row.error && state.view === 'commits';  // code size comes from the scan
+            val.textContent = unread ? 'n/a' : meta.fmt(row.value);
+            if (unread) val.title = "GitHub couldn't be read for this repo";
             rowEl.appendChild(label);
             rowEl.appendChild(track);
             rowEl.appendChild(val);
@@ -437,6 +482,24 @@
             renderChart();
         });
     });
+
+    // Timeline: one tab stop; arrow keys / Home / End move between buckets.
+    var plot = document.getElementById('stats-timeline-plot');
+    if (plot) {
+        plot.addEventListener('keydown', function (e) {
+            var cols = Array.prototype.slice.call(plot.querySelectorAll('.stats-tl-col'));
+            var i = cols.indexOf(document.activeElement);
+            if (i < 0) return;
+            var next = {ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1,
+                        Home: 0, End: cols.length - 1}[e.key];
+            if (next === undefined) return;
+            e.preventDefault();
+            next = Math.max(0, Math.min(cols.length - 1, next));
+            cols[i].tabIndex = -1;
+            cols[next].tabIndex = 0;
+            cols[next].focus();
+        });
+    }
 
     var copyBtn = document.getElementById('copy-activity-btn');
     var source = document.getElementById('activity-markdown');

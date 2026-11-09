@@ -177,26 +177,32 @@ class TestResolveRange(unittest.TestCase):
         self.assertFalse(rng.contains("garbage"))
         self.assertFalse(rng.contains(None))
 
-    def test_fetch_floor_covers_every_preset(self):
+    def test_default_floor_covers_rolling_presets_and_early_ytd(self):
         for now in (local(2026, 11, 9), local(2027, 1, 15), local(2026, 3, 31)):
-            floor = activity.fetch_floor(now.date())
-            for preset in activity.PRESET_KEYS:
+            floor = activity.default_floor(now.date())
+            for preset in ("week", "month", "quarter"):
                 rng, _ = activity.resolve_range({"range": preset}, now=now)
                 self.assertLessEqual(floor, rng.start_date, (now, preset))
-        # In January the 90-day quarter reaches into last year.
-        self.assertEqual(activity.fetch_floor(datetime.date(2027, 1, 15)).year, 2026)
+        # YTD rides the same read from January through March...
+        for now in (local(2027, 1, 15), local(2026, 3, 31)):
+            rng, _ = activity.resolve_range({"range": "ytd"}, now=now)
+            self.assertLessEqual(activity.default_floor(now.date()), rng.start_date)
+        # ...and later in the year it needs a wider read (app widens once).
+        rng, _ = activity.resolve_range({"range": "ytd"}, now=local(2026, 11, 9))
+        self.assertGreater(activity.default_floor(datetime.date(2026, 11, 9)), rng.start_date)
+        self.assertEqual(activity.default_floor(datetime.date(2027, 1, 15)).year, 2026)
 
 
 # ----------------------------------------------------------------------
 # Strict GitHub pagination
 # ----------------------------------------------------------------------
 
-def _resp(status, payload):
+def _resp(status, payload, text="", headers=None):
     r = MagicMock()
     r.status_code = status
     r.json.return_value = payload
-    r.text = ""
-    r.headers = {}
+    r.text = text
+    r.headers = headers or {}
     return r
 
 
@@ -219,13 +225,23 @@ class TestStrictPagination(unittest.TestCase):
         self.assertIn("page 2", str(ctx.exception))
         self.assertIn("502", str(ctx.exception))
 
-    def test_rate_limit_and_not_found_hints(self):
-        c = self.client([_resp(403, {})])
-        with self.assertRaisesRegex(gh.GitHubFetchError, "rate limited"):
-            c.get_commits_range("o", "r", "x")
-        c = self.client([_resp(404, {})])
-        with self.assertRaisesRegex(gh.GitHubFetchError, "not found"):
-            c.get_commits_range("o", "r", "x")
+    def test_failure_hints_name_the_real_cause(self):
+        cases = [
+            (_resp(403, {}, headers={"X-RateLimit-Remaining": "0"}), "rate limited"),
+            (_resp(403, {}, text='{"message":"You have exceeded a secondary rate limit"}'), "rate limited"),
+            (_resp(429, {}), "rate limited"),
+            # A SAML / org-policy block is NOT a rate limit — different fix.
+            (_resp(403, {}, text='{"message":"Resource protected by organization SAML enforcement"}'), "access denied"),
+            (_resp(404, {}), "not found"),
+            (_resp(502, {}), "GitHub error"),
+        ]
+        for resp, needle in cases:
+            c = self.client([resp])
+            with self.assertRaises(gh.GitHubFetchError) as ctx:
+                c.get_commits_range("o", "r", "x")
+            self.assertIn(needle, str(ctx.exception), (resp.status_code, resp.text))
+            if needle == "access denied":
+                self.assertNotIn("rate limited", str(ctx.exception))
 
     def test_truncation_flag(self):
         full = [{"sha": str(i)} for i in range(100)]
@@ -253,7 +269,8 @@ class TestStrictPagination(unittest.TestCase):
                            updated_at="2026-10-05T00:00:00Z") for i in range(29)]
                  + [raw_pr(2000 + i, "old", "2026-08-01T00:00:00Z") for i in range(20)])
         c = self.client([_resp(200, page1), _resp(200, [raw_pr(1, "never fetched", "2026-10-20T00:00:00Z")])])
-        merged, truncated = c.get_merged_pulls_since("o", "r", since)
+        merged, truncated, reached = c.get_merged_pulls_since("o", "r", since)
+        self.assertEqual(reached, "2026-08-01T00:00:00Z")
         self.assertEqual(len(merged), 50)
         self.assertTrue(all(p["title"] == "in window" for p in merged))
         self.assertFalse(truncated)
@@ -265,7 +282,7 @@ class TestStrictPagination(unittest.TestCase):
         page1 = [raw_pr(i, "a", "2026-10-15T00:00:00Z") for i in range(100)]
         page2 = [raw_pr(200, "b", "2026-10-02T00:00:00Z")]
         c = self.client([_resp(200, page1), _resp(200, page2)])
-        merged, _ = c.get_merged_pulls_since("o", "r", "2026-10-01T00:00:00Z")
+        merged, _, _ = c.get_merged_pulls_since("o", "r", "2026-10-01T00:00:00Z")
         self.assertEqual(len(merged), 101)
 
 
@@ -282,7 +299,7 @@ class FakeClient:
         self.calls = []
 
     def get_commits_range(self, owner, name, since_iso, ref=None, until_iso=None, max_pages=50):
-        self.calls.append((name, since_iso))
+        self.calls.append((name, since_iso, until_iso))
         if name in self.auth_fail:
             raise gh.GitHubAuthError("401")
         if name in self.fail:
@@ -290,7 +307,7 @@ class FakeClient:
         return list(self.commits.get(name, [])), False
 
     def get_merged_pulls_since(self, owner, name, since_iso, max_pages=10):
-        return list(self.prs.get(name, [])), False
+        return list(self.prs.get(name, [])), False, ""
 
 
 class TestFetchAndGather(unittest.TestCase):
@@ -338,10 +355,11 @@ class TestBuildReport(unittest.TestCase):
     def setUp(self):
         self.rng, _ = activity.resolve_range({"range": "week"}, now=self.NOW)  # Nov 3-9
 
-    def data_for(self, commits=(), prs=(), truncated=False):
+    def data_for(self, commits=(), prs=(), truncated=False, reached=""):
         c = FakeClient(commits={"x": list(commits)}, prs={"x": list(prs)})
         d = activity.fetch_repo(c, repo("x"), "S")
         d["commits_truncated"] = truncated
+        d["commits_reached"] = reached
         return d
 
     def test_counts_exclude_merges_and_out_of_range(self):
@@ -392,16 +410,78 @@ class TestBuildReport(unittest.TestCase):
         self.assertEqual(rep["totals"]["active_days"], 2)  # Nov 4 + Nov 6 across repos
         self.assertEqual(rep["totals"]["commits"], 5)
 
-    def test_truncation_surfaces(self):
-        d = self.data_for(commits=[raw_commit("1", "a", utc_iso(local(2026, 11, 8)))], truncated=True)
+    def test_capped_read_that_reaches_past_the_range_is_complete(self):
+        # The cap was hit, but the read got back to Oct 1 — the week is whole.
+        d = self.data_for(commits=[raw_commit("1", "a", utc_iso(local(2026, 11, 8)))],
+                          truncated=True, reached=utc_iso(local(2026, 10, 1)))
         rep = activity.build_report([repo("x")], {"o/x": d}, {}, self.rng)
-        self.assertTrue(rep["rows"][0]["truncated"])
-        self.assertEqual(rep["totals"]["truncated"], 1)
+        self.assertFalse(rep["rows"][0]["incomplete"])
+        self.assertEqual(rep["incomplete"], [])
 
-    def test_missing_data_is_not_a_crash(self):
+    def test_capped_read_that_stops_inside_the_range_is_partial(self):
+        d = self.data_for(commits=[raw_commit("1", "a", utc_iso(local(2026, 11, 8)))],
+                          truncated=True, reached=utc_iso(local(2026, 11, 6)))
+        rep = activity.build_report([repo("x")], {"o/x": d}, {}, self.rng)
+        row = rep["rows"][0]
+        self.assertTrue(row["updated"])
+        self.assertTrue(row["incomplete"])
+        self.assertEqual(rep["totals"]["incomplete"], 1)
+        self.assertIn("**Partial:** x", activity.compose_markdown(rep))
+
+    def test_capped_read_that_never_reached_the_range_is_partial_not_idle(self):
+        # 5,000 newer commits used the whole cap; nothing seen in the range.
+        d = self.data_for(commits=[raw_commit("1", "newer", utc_iso(local(2026, 11, 20)))],
+                          truncated=True, reached=utc_iso(local(2026, 11, 15)))
+        rep = activity.build_report([repo("x")], {"o/x": d}, {}, self.rng)
+        self.assertEqual(rep["idle"], [])
+        self.assertEqual([r["name"] for r in rep["partial"]], ["x"])
+        md = activity.compose_markdown(rep)
+        self.assertNotIn("Nothing landed", md)
+
+    def test_capped_pr_read_is_range_aware(self):
+        d = self.data_for(prs=[raw_pr(1, "p", utc_iso(local(2026, 11, 8)))])
+        d["prs_truncated"], d["prs_reached"] = True, utc_iso(local(2026, 11, 5))
+        rep = activity.build_report([repo("x")], {"o/x": d}, {}, self.rng)
+        self.assertTrue(rep["rows"][0]["incomplete"])
+        d["prs_reached"] = utc_iso(local(2026, 11, 2))
+        rep = activity.build_report([repo("x")], {"o/x": d}, {}, self.rng)
+        self.assertFalse(rep["rows"][0]["incomplete"])
+
+    def test_fetch_repo_records_how_far_a_capped_read_reached(self):
+        class Capped(FakeClient):
+            def get_commits_range(self, *a, **k):
+                return [raw_commit("2", "b", "2026-11-08T00:00:00Z"),
+                        raw_commit("1", "a", "2026-11-06T00:00:00Z")], True
+
+            def get_merged_pulls_since(self, *a, **k):
+                return [], True, "2026-11-05T00:00:00Z"
+        d = activity.fetch_repo(Capped(), repo("x"), "S")
+        self.assertEqual(d["commits_reached"], "2026-11-06T00:00:00Z")
+        self.assertEqual(d["prs_reached"], "2026-11-05T00:00:00Z")
+        d = activity.fetch_repo(FakeClient(commits={"x": [raw_commit("1", "a", "2026-11-06T00:00:00Z")]}), repo("x"), "S")
+        self.assertEqual((d["commits_reached"], d["prs_reached"]), ("", ""))
+
+    def test_merge_without_pr_counts_as_updated(self):
+        # Branch commits predate the range; the merge (no PR) landed inside it.
+        d = self.data_for(commits=[
+            raw_commit("m1", "Merge branch 'feature'", utc_iso(local(2026, 11, 4, 9)), merge=True),
+            raw_commit("b1", "branch work", utc_iso(local(2026, 10, 30)))])
+        rep = activity.build_report([repo("x")], {"o/x": d}, {}, self.rng)
+        row = rep["rows"][0]
+        self.assertTrue(row["updated"])
+        self.assertEqual((row["commit_count"], row["merge_count"], row["active_days"]), (0, 1, 1))
+        self.assertEqual(rep["idle"], [])
+        md = activity.compose_markdown(rep)
+        self.assertIn("## x — 0 commits, 1 merge", md)
+        self.assertIn("Merges (no PR):", md)
+        self.assertIn("Merge branch 'feature'", md)
+
+    def test_repo_never_read_is_unknown_not_idle(self):
+        # e.g. a scan finished mid-read and added a repo the cache never saw
         rep = activity.build_report([repo("x")], {}, {}, self.rng)
         self.assertEqual(rep["totals"]["repos_updated"], 0)
-        self.assertEqual(len(rep["idle"]), 1)
+        self.assertEqual(rep["idle"], [])
+        self.assertIn("Not read yet", rep["failed"][0]["error"])
 
 
 class TestTimeline(unittest.TestCase):
@@ -436,6 +516,33 @@ class TestTimeline(unittest.TestCase):
         self.assertEqual(tl["buckets"][0]["label"], "Jan 2026")
         self.assertEqual(tl["buckets"][1]["commits"], 1)
         self.assertEqual(tl["buckets"][-1]["end"], "2026-11-09")
+
+    def test_quarters_then_years_for_long_ranges(self):
+        tl = self.report(local(2026, 11, 9), {"range": "custom", "from": "2023-02-15", "to": "2026-11-09"},
+                         [(2023, 3, 31), (2023, 4, 1), (2026, 11, 9)])
+        self.assertEqual(tl["unit"], "quarter")
+        labels = [b["label"] for b in tl["buckets"]]
+        self.assertEqual((labels[0], labels[1], labels[-1]), ("Q1 2023", "Q2 2023", "Q4 2026"))
+        self.assertEqual(tl["buckets"][0]["start"], "2023-02-15")
+        self.assertEqual((tl["buckets"][0]["commits"], tl["buckets"][1]["commits"]), (1, 1))
+        tl = self.report(local(2026, 11, 9), {"range": "custom", "from": "2008-01-01", "to": "2026-11-09"},
+                         [(2008, 1, 1), (2026, 11, 9)])
+        self.assertEqual(tl["unit"], "year")
+        self.assertEqual([b["label"] for b in tl["buckets"]][:2], ["2008", "2009"])
+        self.assertEqual(len(tl["buckets"]), 19)
+        self.assertEqual((tl["buckets"][0]["commits"], tl["buckets"][-1]["commits"]), (1, 1))
+
+    def test_no_range_makes_more_than_31_columns(self):
+        now = local(2026, 11, 9)
+        for start in ("2026-10-10", "2026-05-11", "2024-11-10", "2020-11-11", "2008-01-01",
+                      "2025-01-01", "2023-01-01", "2016-01-01"):
+            tl = self.report(now, {"range": "custom", "from": start, "to": "2026-11-09"}, [])
+            self.assertLessEqual(len(tl["buckets"]), 31, (start, tl["unit"], len(tl["buckets"])))
+            self.assertEqual(tl["buckets"][-1]["end"], "2026-11-09")
+            # Buckets tile the range with no gaps or overlaps.
+            for a, b in zip(tl["buckets"], tl["buckets"][1:]):
+                self.assertEqual(datetime.date.fromisoformat(a["end"]) + datetime.timedelta(days=1),
+                                 datetime.date.fromisoformat(b["start"]))
 
     def test_monthly_across_year_end_starts_mid_month(self):
         tl = self.report(local(2027, 2, 10),
@@ -520,11 +627,13 @@ class TestStatsRoutes(unittest.TestCase):
             prs={"alpha": [raw_pr(2, "Alpha PR", hour_ago)]})
         app_mod._github_client = self.fake
         app_mod._activity_cache = None
+        app_mod._activity_ranges = {}
         app_mod._scan_results = {"repos": [repo("alpha"), repo("beta"), repo("gamma")],
                                  "scanned_at": self.now.isoformat(), "total_branches": 3}
 
     def tearDown(self):
         (self.m._scan_results, self.m._github_client, self.m._activity_cache) = self._orig
+        self.m._activity_ranges = {}
         for p, v in self._paths.items():
             setattr(models, p, v)
 
@@ -553,34 +662,123 @@ class TestStatsRoutes(unittest.TestCase):
         self.assertIn("Beta work", body)
         self.assertIn("Commits per week", body)
 
-    def test_one_fetch_serves_every_preset(self):
-        for preset in ("week", "month", "quarter", "ytd"):
-            self.assertEqual(self.client.get(f"/stats?range={preset}").status_code, 200)
-        commit_calls = [c for c in self.fake.calls]
-        self.assertEqual(len(commit_calls), 3, "one fetch per repo, reused by every preset")
-        floor = activity.fetch_floor(activity._local_now().date())
-        self.assertTrue(all(c[1] == activity._local_midnight(floor).astimezone(datetime.timezone.utc).isoformat()
-                            for c in commit_calls))
+    def _iso_floor(self, d):
+        return activity._local_midnight(d).astimezone(datetime.timezone.utc).isoformat()
 
-    def test_earlier_custom_start_refetches_from_that_day(self):
+    def test_one_90_day_read_serves_rolling_presets_and_ytd_widens_once(self):
+        today = activity._local_now().date()
+        for preset in ("week", "month", "quarter"):
+            self.assertEqual(self.client.get(f"/stats?range={preset}").status_code, 200)
+        self.assertEqual(len(self.fake.calls), 3, "one read per repo serves Week, Month, Quarter")
+        self.assertTrue(all(c[1] == self._iso_floor(activity.default_floor(today)) for c in self.fake.calls))
+        self.fake.calls.clear()
+        self.client.get("/stats?range=ytd")
+        jan1 = datetime.date(today.year, 1, 1)
+        widened = jan1 < activity.default_floor(today)
+        self.assertEqual(len(self.fake.calls), 3 if widened else 0)
+        self.fake.calls.clear()
+        for preset in ("week", "month", "quarter", "ytd"):
+            self.client.get(f"/stats?range={preset}")
+        self.assertEqual(self.fake.calls, [], "after widening, every preset is a cache hit")
+
+    def test_past_custom_range_gets_its_own_bounded_read(self):
         self.client.get("/stats")
         self.fake.calls.clear()
         r, body = self.get("/stats?range=custom&from=2020-01-01&to=2020-12-31")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(len(self.fake.calls), 3)
         self.assertTrue(all(c[1].startswith("2020-01-01") for c in self.fake.calls))
-        # A later preset is now served from that bigger cache.
+        self.assertTrue(all(c[2] and c[2].startswith("2021-01-01") for c in self.fake.calls),
+                        "a past range is read with an `until`, so newer history can't crowd it out")
         self.fake.calls.clear()
-        self.client.get("/stats?range=ytd")
+        self.client.get("/stats?range=custom&from=2020-01-01&to=2020-12-31")
+        self.assertEqual(self.fake.calls, [], "same past range again is a cache hit")
+        # The main cache was not widened to 2020.
+        self.assertGreater(self.m._activity_cache["floor"], datetime.date(2020, 12, 31))
+
+    def test_custom_range_through_today_widens_the_main_cache(self):
+        today = activity._local_now().date().isoformat()
+        self.client.get(f"/stats?range=custom&from=2025-06-01&to={today}")
+        self.assertEqual(self.m._activity_cache["floor"], datetime.date(2025, 6, 1))
+        self.assertTrue(all(c[2] is None for c in self.fake.calls))
+        self.fake.calls.clear()
+        for preset in ("week", "ytd"):
+            self.client.get(f"/stats?range={preset}")
         self.assertEqual(self.fake.calls, [])
 
-    def test_failed_repo_shown_and_retried_next_view(self):
+    def test_bounded_reads_are_capped(self):
+        for year in range(2010, 2020):
+            self.client.get(f"/stats?range=custom&from={year}-01-01&to={year}-01-31")
+        self.assertLessEqual(len(self.m._activity_ranges), self.m._ACTIVITY_RANGE_SLOTS)
+        # Most recent stays.
+        self.assertIn(datetime.date(2019, 1, 1), [k[1] for k in self.m._activity_ranges])
+
+    def test_bounded_read_served_when_offline(self):
+        self.client.get("/stats?range=custom&from=2020-01-01&to=2020-12-31")
+        self.m._github_client = None
+        r, body = self.get("/stats?range=custom&from=2020-01-01&to=2020-12-31")
+        self.assertNotIn("Not connected to GitHub", body)
+        self.assertIn("Custom range", body)
+
+    def test_cache_is_keyed_by_the_request_snapshot(self):
+        scan_a = dict(self.m._scan_results)
+        # A scan finishing mid-request swaps the global; the cache must still
+        # be keyed (and read) by the snapshot the request started with.
+        self.m._scan_results = {**scan_a, "scanned_at": "2099-01-01T00:00:00+00:00",
+                                "repos": scan_a["repos"] + [repo("delta")]}
+        rng, _ = activity.resolve_range({"range": "week"})
+        self.m._activity_data(self.fake, scan_a, rng)
+        self.assertEqual(self.m._activity_cache["key"], self.m._activity_scan_key(scan_a))
+        self.assertNotIn("o/delta", self.m._activity_cache["data"])
+
+    def test_failed_repo_waits_out_its_backoff(self):
+        self.fake.fail = {"beta"}
+        self.client.get("/stats?range=quarter")
+        self.fake.calls.clear()
+        for preset in ("week", "month", "quarter", "week"):  # all served from the cache
+            self.client.get(f"/stats?range={preset}")
+        self.assertEqual(self.fake.calls, [], "a failed repo is not re-read on every click")
+        # Widening to YTD (when Jan 1 is outside the 90-day read) re-reads the
+        # healthy repos but carries beta's failure instead of hitting it again.
+        self.fake.calls.clear()
+        self.client.get("/stats?range=custom&from=2020-01-01&to=" + activity._local_now().date().isoformat())
+        self.assertEqual(sorted(c[0] for c in self.fake.calls), ["alpha", "gamma"])
+        self.assertIn("o/beta", self.m._activity_cache["errors"])
+        # REFRESH re-reads everything once; the GET it redirects to must not
+        # immediately retry the repo that just failed again.
+        self.fake.calls.clear()
+        self.client.get("/stats?range=quarter&refresh=1", follow_redirects=True)
+        self.assertEqual(sorted(c[0] for c in self.fake.calls), ["alpha", "beta", "gamma"])
+
+    def test_refresh_redirect_only_carries_known_args(self):
+        r = self.client.get("/stats?range=month&refresh=1&endpoint=x&_method=POST&_scheme=https&_external=1&group=")
+        self.assertEqual(r.status_code, 302)
+        loc = r.headers["Location"]
+        self.assertTrue(loc.startswith("/stats?"), loc)
+        for bad in ("endpoint", "_method", "_scheme", "_external", "https", "refresh"):
+            self.assertNotIn(bad, loc)
+        self.assertIn("range=month", loc)
+
+    def test_all_repos_failing_never_says_nothing_landed(self):
+        self.fake.fail = {"alpha", "beta", "gamma"}
+        r, body = self.get("/stats")
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn("Nothing landed in this range", body)
+        self.assertIn("No activity found in the repos GitHub could read", body)
+        self.assertIn("couldn&#39;t be read for 3 repos", body.replace("couldn't", "couldn&#39;t"))
+        self.assertIn('<span class="stats-kpi-of"> of 0 read</span>', body)
+        self.assertNotIn("Not updated in this range", body)
+        md = self.client.get("/stats/export.md").data.decode()
+        self.assertNotIn("Nothing landed", md)
+
+    def test_failed_repo_shown_and_retried_after_backoff(self):
         self.fake.fail = {"beta"}
         r, body = self.get("/stats?range=quarter")
         self.assertIn("couldn't be read for 1 repo", body)
         self.assertNotIn("Beta work", body)
         self.assertNotIn(">beta</a>", body.split("Not updated in this range")[-1])
         self.fake.fail = set()
+        self.m._activity_cache["retry_at"]["o/beta"] = 0  # backoff over
         self.fake.calls.clear()
         r, body = self.get("/stats?range=quarter")
         self.assertEqual([c[0] for c in self.fake.calls], ["beta"], "only the failed repo is re-read")

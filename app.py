@@ -536,8 +536,9 @@ def dashboard():
 @app.route("/scan", methods=["POST"])
 @_require_auth
 def scan():
-    global _scan_results, _activity_cache
+    global _scan_results, _activity_cache, _activity_ranges
     _activity_cache = None
+    _activity_ranges = {}
     client = _get_github_client()
     if not client:
         flash("Not authenticated with GitHub.", "error")
@@ -1204,86 +1205,149 @@ def generate_selector_blurb_one(owner, name):
 
 # --- Stats (commits, code size, and What changed — any date range) ---
 #
-# Every number on the Stats page comes from ONE cached GitHub read (see
-# activity.py): default-branch commits + merged PRs for every scanned repo,
-# fetched from a floor far enough back to cover every preset (Week / Month /
-# Quarter / YTD), then filtered locally per range. A custom range that starts
-# earlier refetches from its own start. The cache expires hourly (REFRESH
-# forces it), is dropped on every new scan, and repos whose read failed are
-# retried on the next view instead of being cached as "no activity".
+# Every number on the Stats page comes from cached GitHub reads (see
+# activity.py): default-branch commits + merged PRs for every scanned repo.
+#   - The MAIN cache reads back to activity.default_floor (90 days), so Week,
+#     Month and Quarter are local filters over one read. YTD later in the year
+#     and custom ranges that run through today widen it once.
+#   - A custom range that ends in the past and starts before the main cache
+#     gets its own BOUNDED read (since -> until), kept in a small LRU, so a
+#     busy repo's recent commits can't crowd the old range out of a capped read.
+# Caches are keyed by scan, expire hourly (REFRESH forces a re-read) and are
+# dropped on every scan. A repo whose read failed is retried on a later view,
+# but no sooner than ACTIVITY_RETRY_BACKOFF_SECONDS, so a rate-limited repo
+# can't stall every click behind GitHub's Retry-After.
 
 _activity_cache: dict | None = None
+_activity_ranges: dict = {}
+_ACTIVITY_RANGE_SLOTS = 6
 # Serializes fetches: a second tab (or a double-click) waits for the first
 # fetch and then reads its cache instead of doubling the GitHub calls.
 _activity_lock = threading.Lock()
 ACTIVITY_CACHE_TTL_SECONDS = 3600
+ACTIVITY_RETRY_BACKOFF_SECONDS = 300
+# The only query args /stats understands; REFRESH's redirect carries these
+# and nothing else (arbitrary args into url_for could 500 or redirect away).
+_STATS_ARGS = ("range", "from", "to", "group")
 
 
-def _activity_scan_key() -> str:
-    """Identity of the scan the cache was built from; a new scan changes it."""
-    if not _scan_results:
+def _activity_scan_key(scan: dict | None) -> str:
+    """Identity of the scan a cache was built from; a new scan changes it."""
+    if not scan:
         return ""
-    repos = _scan_results.get("repos", [])
+    repos = scan.get("repos", [])
     first = repos[0].get("full_name", "") if repos else ""
-    return f"{_scan_results.get('scanned_at', '')}|{len(repos)}|{first}"
+    return f"{scan.get('scanned_at', '')}|{len(repos)}|{first}"
 
 
 def _repo_full_name(r: dict) -> str:
     return r.get("full_name") or f"{r['owner']}/{r['name']}"
 
 
-def _activity_data(client, repos: list[dict], rng, force: bool = False) -> dict | None:
-    """Cached commits + merged PRs for `repos`, covering `rng`.
+def _activity_fresh(entry: dict | None) -> bool:
+    return bool(entry) and (time.time() - entry["fetched_ts"]) < ACTIVITY_CACHE_TTL_SECONDS
 
-    Returns {"data", "errors", "fetched_at", "cache_hit", "stale"} or None
-    when there is no usable cache and no GitHub client (app restarted)."""
+
+def _activity_fetch(client, repos: list[dict], key: str, since_date, until_iso=None,
+                    carry: dict | None = None) -> dict:
+    """Read `repos` from `since_date`. `carry` maps full_name -> (error,
+    retry_at) for repos still inside their retry backoff: they are not read
+    again (a rate-limited repo would stall this read behind Retry-After for
+    nothing) and keep their failure until the backoff ends."""
+    carry = carry or {}
+    since_iso = activity._local_midnight(since_date).astimezone(datetime.timezone.utc).isoformat()
+    todo = [r for r in repos if _repo_full_name(r) not in carry]
+    data, errors = activity.gather(client, todo, since_iso, models.log_activity_event,
+                                   until_iso=until_iso)
+    now = time.time()
+    retry_at = {k: now + ACTIVITY_RETRY_BACKOFF_SECONDS for k in errors}
+    for k, (err, at) in carry.items():
+        errors[k], retry_at[k] = err, at
+    return {
+        "key": key, "floor": since_date, "since_iso": since_iso, "until_iso": until_iso,
+        "fetched_ts": now,
+        "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "data": data, "errors": errors, "retry_at": retry_at,
+    }
+
+
+def _activity_heal(client, repos: list[dict], entry: dict) -> dict:
+    """Re-read only the repos whose last read failed, once their backoff has
+    passed. Returns a new entry (never mutates one another request reads)."""
+    now = time.time()
+    due = [r for r in repos if _repo_full_name(r) in entry["errors"]
+           and now >= entry["retry_at"].get(_repo_full_name(r), 0)]
+    if not due:
+        return entry
+    got, errs = activity.gather(client, due, entry["since_iso"], models.log_activity_event,
+                                until_iso=entry["until_iso"])
+    errors = {k: v for k, v in entry["errors"].items() if k not in got}
+    errors.update(errs)
+    retry_at = {k: v for k, v in entry["retry_at"].items() if k in errors}
+    retry_at.update({k: now + ACTIVITY_RETRY_BACKOFF_SECONDS for k in errs})
+    return {**entry, "data": {**entry["data"], **got}, "errors": errors, "retry_at": retry_at}
+
+
+def _activity_result(entry: dict, cache_hit: bool, stale: bool) -> dict:
+    return {"data": entry["data"], "errors": entry["errors"], "fetched_at": entry["fetched_at"],
+            "cache_hit": cache_hit, "stale": stale}
+
+
+def _activity_data(client, scan: dict, rng, force: bool = False) -> dict | None:
+    """Cached commits + merged PRs for every repo in `scan`, covering `rng`.
+
+    `scan` is the caller's one snapshot of _scan_results, used for both the
+    repo list and the cache key, so a scan finishing mid-request can't key a
+    cache that's missing its new repos. Returns {"data", "errors",
+    "fetched_at", "cache_hit", "stale"}, or None when there is no usable
+    cache and no GitHub client (app restarted)."""
     global _activity_cache
-    key = _activity_scan_key()
+    key = _activity_scan_key(scan)
+    repos = list(scan.get("repos", []))
     today = activity._local_now().date()
-    floor = min(activity.fetch_floor(today), rng.start_date)
-    log = models.log_activity_event
 
     with _activity_lock:
-        cache = _activity_cache
-        covers = bool(cache and cache["key"] == key and cache["floor"] <= rng.start_date)
-        fresh = covers and (time.time() - cache["fetched_ts"]) < ACTIVITY_CACHE_TTL_SECONDS
+        main = _activity_cache if (_activity_cache and _activity_cache["key"] == key) else None
+        main_covers = main is not None and main["floor"] <= rng.start_date
+
+        if rng.end_date < today and not main_covers:
+            rkey = (key, rng.start_date, rng.end_date)
+            entry = _activity_ranges.pop(rkey, None)
+            if not client:
+                if entry:
+                    _activity_ranges[rkey] = entry
+                    return _activity_result(entry, True, not _activity_fresh(entry))
+                return None
+            if force or not _activity_fresh(entry):
+                entry, hit = _activity_fetch(client, repos, key, rng.start_date, rng.until_iso), False
+            else:
+                entry, hit = _activity_heal(client, repos, entry), True
+            _activity_ranges[rkey] = entry  # most recently used goes last
+            while len(_activity_ranges) > _ACTIVITY_RANGE_SLOTS:
+                _activity_ranges.pop(next(iter(_activity_ranges)))
+            return _activity_result(entry, hit, False)
 
         if not client:
-            if covers:  # stale is better than nothing; the page says how old
-                return {**_activity_result(cache), "cache_hit": True, "stale": not fresh}
-            return None
+            return _activity_result(main, True, not _activity_fresh(main)) if main_covers else None
 
-        if fresh and not force:
-            if cache["errors"]:
-                # Self-heal: re-read only the repos that failed last time.
-                retry = [r for r in repos if _repo_full_name(r) in cache["errors"]]
-                if retry:
-                    got, errs = activity.gather(client, retry, cache["since_iso"], log)
-                    errors = {k: v for k, v in cache["errors"].items() if k not in got}
-                    errors.update(errs)
-                    cache = {**cache, "data": {**cache["data"], **got}, "errors": errors}
-                    _activity_cache = cache
-            return {**_activity_result(cache), "cache_hit": True, "stale": False}
+        if main_covers and _activity_fresh(main) and not force:
+            _activity_cache = _activity_heal(client, repos, main)
+            return _activity_result(_activity_cache, True, False)
 
-        since_iso = activity._local_midnight(floor).astimezone(datetime.timezone.utc).isoformat()
-        data, errors = activity.gather(client, repos, since_iso, log)
-        cache = {
-            "key": key, "floor": floor, "since_iso": since_iso,
-            "fetched_ts": time.time(),
-            "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "data": data, "errors": errors,
-        }
-        _activity_cache = cache
-        return {**_activity_result(cache), "cache_hit": False, "stale": False}
+        floor = min(activity.default_floor(today), rng.start_date)
+        carry = {}
+        if main is not None:
+            floor = min(floor, main["floor"])  # a re-read keeps the reach it had
+            if not force:  # REFRESH is an explicit "read everything now"
+                now = time.time()
+                carry = {k: (v, main["retry_at"][k]) for k, v in main["errors"].items()
+                         if main["retry_at"].get(k, 0) > now}
+        _activity_cache = _activity_fetch(client, repos, key, floor, carry=carry)
+        return _activity_result(_activity_cache, False, False)
 
 
-def _activity_result(cache: dict) -> dict:
-    return {"data": cache["data"], "errors": cache["errors"], "fetched_at": cache["fetched_at"]}
-
-
-def _stats_report(result: dict, active_group: str, groups: dict, rng):
-    all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
-    scoped = _filter_by_group(all_repos, active_group, groups)
+def _stats_report(scan: dict, result: dict, active_group: str, groups: dict, rng):
+    scoped = _filter_by_group(list(scan.get("repos", [])), active_group, groups)
     return activity.build_report(scoped, result["data"], result["errors"], rng)
 
 
@@ -1297,31 +1361,32 @@ def _stats_markdown(report: dict, active_group: str) -> str:
 @app.route("/stats")
 @_require_auth
 def stats():
+    scan = _scan_results  # one snapshot for the whole request
     groups = models.get_groups()
     active_group = _resolve_active_group(groups)
     rng, notice = activity.resolve_range(request.args)
     if notice:
         models.log_activity_event("range_adjusted", args=request.args.to_dict(), notice=notice)
-    all_repos = list(_scan_results.get("repos", []) if _scan_results else [])
+    all_repos = list(scan.get("repos", []) if scan else [])
     ctx = dict(groups=groups, active_group=active_group, rng=rng, notice=notice,
                presets=activity.PRESETS, today=activity._local_now().date().isoformat(),
-               all_repos_count=len(all_repos), scan_results=_scan_results)
+               all_repos_count=len(all_repos), scan_results=scan)
 
-    if not _scan_results:
+    if not scan:
         return render_template("stats.html", **ctx)
 
     t0 = time.monotonic()
     force = request.args.get("refresh") == "1"
-    result = _activity_data(_get_github_client(), all_repos, rng, force=force)
+    result = _activity_data(_get_github_client(), scan, rng, force=force)
     if force:
         # Post/Redirect/Get: a browser reload after REFRESH must not refetch.
-        args = request.args.to_dict()
-        args.pop("refresh", None)
-        return redirect(url_for("stats", **args))
+        # Carry only the args /stats understands.
+        keep = {k: request.args[k] for k in _STATS_ARGS if k in request.args}
+        return redirect(url_for("stats", **keep))
     if result is None:
         return render_template("stats.html", not_connected=True, **ctx)
 
-    report = _stats_report(result, active_group, groups, rng)
+    report = _stats_report(scan, result, active_group, groups, rng)
     chart_rows = [{
         "name": r["name"], "html_url": r["html_url"], "commits": r["commit_count"],
         "prs": r["pr_count"], "code_size_bytes": r["code_size_bytes"],
@@ -1332,7 +1397,7 @@ def stats():
         "view", range=rng.key, group=active_group, cache_hit=result["cache_hit"],
         stale=result["stale"], repos=t["repos_total"], updated=t["repos_updated"],
         commits=t["commits"], prs=t["prs_merged"], errors=t["errors"],
-        elapsed_ms=int((time.monotonic() - t0) * 1000))
+        incomplete=t["incomplete"], elapsed_ms=int((time.monotonic() - t0) * 1000))
     return render_template(
         "stats.html", report=report, chart_rows=chart_rows,
         markdown=_stats_markdown(report, active_group),
@@ -1344,18 +1409,19 @@ def stats():
 @_require_auth
 def stats_export():
     """The same document COPY FOR CLAUDE produces, as a .md download."""
+    scan = _scan_results
     rng, _notice = activity.resolve_range(request.args)
     groups = models.get_groups()
     active_group = _resolve_active_group(groups, persist=False)
     back = url_for("stats", group=active_group or None, **rng.query_args())
-    if not _scan_results:
+    if not scan:
         flash("No scan data yet — run a scan first.", "error")
         return redirect(back)
-    result = _activity_data(_get_github_client(), list(_scan_results.get("repos", [])), rng)
+    result = _activity_data(_get_github_client(), scan, rng)
     if result is None:
         flash(NOT_CONNECTED_REMEDY, "error")
         return redirect(back)
-    report = _stats_report(result, active_group, groups, rng)
+    report = _stats_report(scan, result, active_group, groups, rng)
     models.log_activity_event("export", range=rng.key, group=active_group,
                               updated=report["totals"]["repos_updated"])
     filename = f"what-changed-{rng.start_date.isoformat()}-to-{rng.end_date.isoformat()}.md"

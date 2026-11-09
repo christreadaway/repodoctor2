@@ -8,20 +8,24 @@ update in the last week / month / quarter / year-to-date / any custom range?"
 For every repo in the latest scan it reads, live from GitHub:
   - commits on the default branch (what actually landed), and
   - pull requests merged in the range (the human-readable "what").
-Merge commits ("Merge pull request #51 …") are counted separately and kept
-out of the commit list and totals: the branch commits they bring in are
-already counted, so including them would double-count the work.
+Merge commits ("Merge pull request #51 …") are kept out of the commit list
+and totals (the branch commits they bring in are usually counted already),
+but a merge that lands in the range still marks the repo as updated, since
+its branch commits may predate the range or there may be no PR at all.
 
 Ranges are whole local days (America/Chicago, same as Next Up), inclusive of
 both ends, so "Week" on a Monday means last Tuesday 00:00 through today
 23:59. Presets are rolling: Week = last 7 days, Month = last 30, Quarter =
 last 90, YTD = Jan 1 through today. Custom = any from/to pair.
 
-Fetching is the expensive part, so the app fetches ONE superset window (far
-enough back to cover every preset — see `fetch_floor`) and every preset is
-then a local filter over that cache. A custom range that starts earlier
-refetches from its own start. Every fetch, per-repo failure, and page view is
-logged to data/logs/activity.log (one JSON object per line) for paste-back
+Fetching is the expensive part, so the app fetches ONE window back to
+`default_floor` (90 days — Week, Month and Quarter, and YTD from January to
+March) and those presets are local filters over that cache. YTD later in the
+year, or a custom range that runs through today, widens that window once. A
+custom range that ENDS in the past and starts before the window gets its own
+bounded read (since → until), so a busy repo's recent history can't crowd the
+old range out of a capped read. Every fetch, per-repo failure, and page view
+is logged to data/logs/activity.log (one JSON object per line) for paste-back
 debugging, and through the root logger to data/logs/app.log.
 """
 
@@ -199,12 +203,12 @@ def resolve_range(args, now: datetime.datetime | None = None) -> tuple[DateRange
     return preset_range(preset or DEFAULT_PRESET, today), None
 
 
-def fetch_floor(today: datetime.date) -> datetime.date:
-    """The earliest day one fetch must reach so EVERY preset is served from
-    the same cache: Jan 1 (YTD) or 90 days back (Quarter), whichever is
-    earlier — in January the quarter reaches into last year."""
-    return min(datetime.date(today.year, 1, 1),
-               today - datetime.timedelta(days=89))
+def default_floor(today: datetime.date) -> datetime.date:
+    """How far back the first read goes: 90 days, so Week, Month and Quarter
+    (and YTD from January through March) all come from one cache without
+    reading a whole year on every hourly refresh. YTD later in the year
+    widens the cache once (see app._activity_data)."""
+    return today - datetime.timedelta(days=89)
 
 
 # ----------------------------------------------------------------------
@@ -222,18 +226,22 @@ def _normalize_pr(raw: dict) -> dict:
     }
 
 
-def fetch_repo(client, repo: dict, since_iso: str) -> dict:
-    """Default-branch commits + merged PRs since `since_iso` for one repo.
+def fetch_repo(client, repo: dict, since_iso: str, until_iso: str | None = None) -> dict:
+    """Default-branch commits + merged PRs since `since_iso` (and before
+    `until_iso` for a bounded past range) for one repo.
 
     Raises GitHubAuthError (dead PAT — the caller surfaces the remedy) and
     GitHubFetchError / requests errors (rate limit, 5xx, network) so a
     partial read is reported as a failure, never shown as "no activity".
+    When a read hits its page cap, `commits_reached` / `prs_reached` record
+    how far back it IS complete, so each range can tell whether it is fully
+    covered (see `_repo_row`).
     """
     owner, name = repo["owner"], repo["name"]
     ref = repo.get("default_branch") or None
     raw_commits, commits_truncated = client.get_commits_range(
-        owner, name, since_iso, ref=ref, max_pages=COMMIT_MAX_PAGES)
-    raw_prs, prs_truncated = client.get_merged_pulls_since(
+        owner, name, since_iso, ref=ref, until_iso=until_iso, max_pages=COMMIT_MAX_PAGES)
+    raw_prs, prs_truncated, prs_reached = client.get_merged_pulls_since(
         owner, name, since_iso, max_pages=PR_MAX_PAGES)
     commits = []
     for raw in raw_commits:
@@ -241,15 +249,19 @@ def fetch_repo(client, repo: dict, since_iso: str) -> dict:
         c.pop("message", None)  # summary is enough; keeps the cache small
         c["html_url"] = raw.get("html_url") or ""
         commits.append(c)
+    dates = [c["date"] for c in commits if c["date"]]
     return {
         "commits": commits,
         "prs": [_normalize_pr(p) for p in raw_prs],
         "commits_truncated": bool(commits_truncated),
         "prs_truncated": bool(prs_truncated),
+        "commits_reached": min(dates) if (commits_truncated and dates) else "",
+        "prs_reached": prs_reached if prs_truncated else "",
     }
 
 
-def gather(client, repos: list[dict], since_iso: str, log_event=None) -> tuple[dict, dict]:
+def gather(client, repos: list[dict], since_iso: str, log_event=None,
+           until_iso: str | None = None) -> tuple[dict, dict]:
     """Fetch every repo in parallel. Returns (data, errors), both keyed by
     full_name. A GitHubAuthError cancels the rest and propagates: one dead
     PAT means every repo would fail the same way."""
@@ -261,7 +273,7 @@ def gather(client, repos: list[dict], since_iso: str, log_event=None) -> tuple[d
     t0 = time.monotonic()
     pool = ThreadPoolExecutor(max_workers=MAX_WORKERS)
     try:
-        futures = {pool.submit(fetch_repo, client, r, since_iso): r for r in repos}
+        futures = {pool.submit(fetch_repo, client, r, since_iso, until_iso): r for r in repos}
         for fut in as_completed(futures):
             r = futures[fut]
             full = r.get("full_name") or f"{r['owner']}/{r['name']}"
@@ -279,7 +291,7 @@ def gather(client, repos: list[dict], since_iso: str, log_event=None) -> tuple[d
         # fail one by one before the page can respond.
         pool.shutdown(wait=True, cancel_futures=True)
     truncated = sorted(k for k, v in data.items() if v["commits_truncated"] or v["prs_truncated"])
-    log_event("fetch", since=since_iso, repos=len(repos), ok=len(data), errors=len(errors),
+    log_event("fetch", since=since_iso, until=until_iso, repos=len(repos), ok=len(data), errors=len(errors),
               truncated=truncated, commits=sum(len(v["commits"]) for v in data.values()),
               prs=sum(len(v["prs"]) for v in data.values()),
               elapsed_ms=int((time.monotonic() - t0) * 1000))
@@ -307,15 +319,37 @@ def github_commits_url(repo: dict, rng: DateRange) -> str:
     return f"{base}/commits/{branch}?{qs}"
 
 
+def _complete_for(d: dict, rng: DateRange) -> bool:
+    """False when a capped read stopped short of this range's start: the
+    oldest work in the range may be missing, so the repo must never be
+    called idle, and a busy repo's card says "partial" only for ranges the
+    cap actually cut."""
+    for flag, reached in (("commits_truncated", "commits_reached"),
+                          ("prs_truncated", "prs_reached")):
+        if d.get(flag):
+            at = _parse_ts(d.get(reached) or "")
+            if at is None or at > rng.since:
+                return False
+    return True
+
+
 def _repo_row(repo: dict, d: dict | None, error: str | None, rng: DateRange) -> dict:
+    if d is None and not error:
+        # In the repo list but never read (e.g. a scan finished mid-read).
+        # Unknown is not idle: say so instead of claiming no activity.
+        error = "Not read yet — press REFRESH"
     d = d or {}
     in_range = [c for c in d.get("commits", []) if rng.contains(c.get("date"))]
     commits = sorted((c for c in in_range if not c.get("is_merge")),
                      key=lambda c: c["date"], reverse=True)
-    merge_count = len(in_range) - len(commits)
+    merges = sorted((c for c in in_range if c.get("is_merge")),
+                    key=lambda c: c["date"], reverse=True)
     prs = sorted((p for p in d.get("prs", []) if rng.contains(p.get("merged_at"))),
                  key=lambda p: p["merged_at"], reverse=True)
-    stamps = [c["date"] for c in commits] + [p["merged_at"] for p in prs]
+    # A merge commit is real work landing in this range even when its branch
+    # commits are older (or there was no PR), so it counts toward "updated",
+    # active days and last update — just not toward the commit total.
+    stamps = [c["date"] for c in commits + merges] + [p["merged_at"] for p in prs]
     days = {_local_date(s) for s in stamps} - {None}
     authors = collections.Counter(c.get("author") or "Unknown" for c in commits)
     return {
@@ -327,7 +361,8 @@ def _repo_row(repo: dict, d: dict | None, error: str | None, rng: DateRange) -> 
         "code_size_bytes": repo.get("code_size_bytes") or 0,
         "commits": commits,
         "commit_count": len(commits),
-        "merge_count": merge_count,
+        "merges": merges,
+        "merge_count": len(merges),
         "prs": prs,
         "pr_count": len(prs),
         "active_days": len(days),
@@ -335,16 +370,26 @@ def _repo_row(repo: dict, d: dict | None, error: str | None, rng: DateRange) -> 
         "first_at": min(stamps) if stamps else "",
         "last_at": max(stamps) if stamps else "",
         "authors": authors.most_common(3),
-        "truncated": bool(d.get("commits_truncated") or d.get("prs_truncated")),
+        "incomplete": not error and not _complete_for(d, rng),
         "error": error,
-        "updated": bool(commits or prs),
+        "updated": bool(commits or prs or merges),
         "commits_url": github_commits_url(repo, rng),
     }
 
 
+def _next_period_start(d: datetime.date, months: int) -> datetime.date:
+    """First day of the calendar month/quarter/year after the one holding d."""
+    if months == 12:
+        return datetime.date(d.year + 1, 1, 1)
+    first = (d.month - 1) // months * months + 1  # 1, 4, 7, 10 for quarters
+    m = first + months
+    return datetime.date(d.year + (m > 12), (m - 1) % 12 + 1, 1)
+
+
 def _buckets(rng: DateRange) -> tuple[str, list[dict]]:
-    """Timeline buckets sized so the strip stays readable: days up to a month,
-    weeks up to ~6 months, then calendar months."""
+    """Timeline buckets sized so the strip never passes ~31 columns (readable
+    on a phone): days up to a month, weeks up to ~6 months, calendar months
+    up to 2 years, quarters up to 6 years, then years."""
     start, end = rng.start_date, rng.end_date
     out = []
     if rng.days <= 31:
@@ -361,10 +406,11 @@ def _buckets(rng: DateRange) -> tuple[str, list[dict]]:
             out.append({"start": d, "end": e})
             d = e + datetime.timedelta(days=1)
     else:
-        unit = "month"
+        unit, months = (("month", 1) if rng.days <= 730 else
+                        ("quarter", 3) if rng.days <= 2190 else ("year", 12))
         d = start
         while d <= end:
-            nxt = datetime.date(d.year + (d.month == 12), d.month % 12 + 1, 1)
+            nxt = _next_period_start(d, months)
             e = min(nxt - datetime.timedelta(days=1), end)
             out.append({"start": d, "end": e})
             d = nxt
@@ -373,6 +419,10 @@ def _buckets(rng: DateRange) -> tuple[str, list[dict]]:
         b["prs"] = 0
         if unit == "month":
             b["label"] = b["start"].strftime("%b %Y")
+        elif unit == "quarter":
+            b["label"] = f"Q{(b['start'].month - 1) // 3 + 1} {b['start'].year}"
+        elif unit == "year":
+            b["label"] = str(b["start"].year)
         else:
             b["label"] = span_label(b["start"], b["end"])
     return unit, out
@@ -421,9 +471,13 @@ def build_report(repos: list[dict], data: dict, errors: dict, rng: DateRange) ->
         full = repo.get("full_name") or f"{repo['owner']}/{repo['name']}"
         rows.append(_repo_row(repo, data.get(full), errors.get(full), rng))
     updated = [r for r in rows if r["updated"]]
-    # A repo GitHub couldn't read is "unknown", not "idle" — it goes in
-    # `failed` only, so the page never claims it had no activity.
-    idle = [r for r in rows if not r["updated"] and not r["error"]]
+    # Unknown is never idle: a repo GitHub couldn't read goes in `failed`,
+    # and one whose capped read stopped short of this range (with nothing
+    # found in it) goes in `partial` — so the page never claims no activity
+    # for a repo it didn't fully see.
+    failed = [r for r in rows if r["error"]]
+    partial = [r for r in rows if r["incomplete"] and not r["updated"]]
+    idle = [r for r in rows if not r["updated"] and not r["error"] and not r["incomplete"]]
     updated.sort(key=lambda r: (-r["commit_count"], -r["pr_count"], r["name"].lower()))
     idle.sort(key=lambda r: r["name"].lower())
     all_days = set()
@@ -436,15 +490,18 @@ def build_report(repos: list[dict], data: dict, errors: dict, rng: DateRange) ->
         "prs_merged": sum(r["pr_count"] for r in rows),
         "active_days": len(all_days),
         "days": rng.days,
-        "errors": sum(1 for r in rows if r["error"]),
-        "truncated": sum(1 for r in rows if r["truncated"]),
+        "errors": len(failed),
+        "incomplete": sum(1 for r in rows if r["incomplete"]),
+        "read": len(rows) - len(failed),
     }
     return {
         "range": rng,
         "rows": rows,
         "updated": updated,
         "idle": idle,
-        "failed": [r for r in rows if r["error"]],
+        "failed": failed,
+        "partial": partial,
+        "incomplete": [r for r in rows if r["incomplete"]],
         "totals": totals,
         "timeline": _timeline(updated, rng),
     }
@@ -476,17 +533,24 @@ def compose_markdown(report: dict, owner_login: str = "", group: str = "",
         f"**{t['repos_updated']} of {t['repos_total']} repos updated** · "
         f"{t['commits']} commit{'s' if t['commits'] != 1 else ''} · "
         f"{t['prs_merged']} PR{'s' if t['prs_merged'] != 1 else ''} merged · "
-        f"active on {t['active_days']} of {t['days']} day{'s' if t['days'] != 1 else ''}",
+        f"active on {t['active_days']:,} of {t['days']:,} day{'s' if t['days'] != 1 else ''}",
         "",
     ]
     if report["failed"]:
         lines += ["**Incomplete:** GitHub couldn't be read for "
                   + ", ".join(r["name"] for r in report["failed"])
                   + " — totals leave them out.", ""]
+    if report["incomplete"]:
+        lines += ["**Partial:** "
+                  + ", ".join(r["name"] for r in report["incomplete"])
+                  + " had more history than one read covers, so their oldest work in this "
+                    "range may be missing.", ""]
     for r in report["updated"]:
         bits = [f"{r['commit_count']} commit{'s' if r['commit_count'] != 1 else ''}"]
         if r["pr_count"]:
             bits.append(f"{r['pr_count']} PR{'s' if r['pr_count'] != 1 else ''} merged")
+        elif r["merge_count"]:
+            bits.append(f"{r['merge_count']} merge{'s' if r['merge_count'] != 1 else ''}")
         last = _local_date(r["last_at"])
         if last:
             bits.append(f"last {_day_label(last)}")
@@ -508,12 +572,19 @@ def compose_markdown(report: dict, owner_login: str = "", group: str = "",
             if more > 0:
                 lines.append(f"- …and {more} more: {r['commits_url']}")
             lines.append("")
-        if r["truncated"]:
+        if r["merges"] and not r["prs"]:
+            lines.append("Merges (no PR):")
+            for c in r["merges"][:commit_limit]:
+                d = _local_date(c["date"])
+                when = _day_label(d, with_year=False) if d else "?"
+                lines.append(f"- {when} · {_md_escape(c['summary'])} ({c['short']})")
+            lines.append("")
+        if r["incomplete"]:
             lines += ["_GitHub returned the maximum this app reads for this repo; "
-                      "the oldest commits in the range may be missing._", ""]
+                      "the oldest work in the range may be missing._", ""]
     if report["idle"]:
         lines += [f"## Not updated in this range ({len(report['idle'])})", "",
                   ", ".join(r["name"] for r in report["idle"]), ""]
-    if not report["updated"] and not report["failed"]:
+    if not report["updated"] and not report["failed"] and not report["partial"]:
         lines += ["Nothing landed on any default branch in this range.", ""]
     return "\n".join(lines).rstrip() + "\n"

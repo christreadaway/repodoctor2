@@ -13,6 +13,27 @@ GITHUB_API = "https://api.github.com"
 logger = logging.getLogger(__name__)
 
 
+def _failure_hint(resp) -> str:
+    """Plain-English reason for a failed read. A 403 is only called a rate
+    limit when GitHub says so; SAML / access blocks are a different fix."""
+    code = resp.status_code
+    body = ""
+    try:
+        body = (resp.text or "").lower()
+    except Exception:  # noqa: BLE001 - a hint must never raise
+        pass
+    remaining = (getattr(resp, "headers", None) or {}).get("X-RateLimit-Remaining")
+    if code == 429 or (code == 403 and (remaining == "0" or "rate limit" in body)):
+        return " (rate limited — try again in a few minutes)"
+    if code == 403:
+        return " (access denied — SAML sign-in, org policy, or token scope)"
+    if code == 404:
+        return " (not found — renamed, deleted, or no access)"
+    if code >= 500:
+        return " (GitHub error — usually temporary)"
+    return ""
+
+
 def _parse_iso(value: str) -> datetime.datetime | None:
     """GitHub ISO-8601 timestamp ('2026-11-09T15:50:00Z') -> aware datetime,
     or None. Naive input is read as UTC so comparisons never raise."""
@@ -529,12 +550,8 @@ class GitHubClient:
             if resp.status_code == 409:
                 return items, False
             if resp.status_code != 200:
-                hint = ""
-                if resp.status_code in (403, 429):
-                    hint = " (rate limited — try again in a few minutes)"
-                elif resp.status_code == 404:
-                    hint = " (not found — renamed, deleted, or no access)"
-                raise GitHubFetchError(f"{label} page {page}: HTTP {resp.status_code}{hint}")
+                raise GitHubFetchError(
+                    f"{label} page {page}: HTTP {resp.status_code}{_failure_hint(resp)}")
             batch = resp.json()
             if not isinstance(batch, list) or not batch:
                 return items, False
@@ -560,13 +577,15 @@ class GitHubClient:
         )
 
     def get_merged_pulls_since(self, owner: str, repo: str, since_iso: str,
-                               max_pages: int = 10) -> tuple[list[dict], bool]:
+                               max_pages: int = 10) -> tuple[list[dict], bool, str]:
         """Pull requests merged at or after `since_iso` (any base branch).
 
         Pages closed PRs newest-updated first and stops once a page reaches PRs
         last updated before the window: merging updates a PR, so nothing older
         can have merged inside it. Strict like get_commits_range. Returns
-        (merged_prs, truncated)."""
+        (merged_prs, truncated, reached): `reached` is the oldest updated_at
+        seen, so a truncated read still says how far back it is complete
+        (every PR merged at or after `reached` was seen)."""
         since = _parse_iso(since_iso)
 
         def older_than_window(batch):
@@ -584,7 +603,8 @@ class GitHubClient:
             at = _parse_iso(pr.get("merged_at") or "")
             if at is not None and (since is None or at >= since):
                 merged.append(pr)
-        return merged, truncated
+        reached = (raw[-1].get("updated_at") or "") if raw else ""
+        return merged, truncated, reached
 
     def branch_last_commit(self, owner: str, repo: str, branch: str,
                            comparison: dict) -> tuple[str | None, str | None]:

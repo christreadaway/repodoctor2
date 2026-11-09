@@ -1346,12 +1346,13 @@ class TestProjectsSortAndStatsFilter(unittest.TestCase):
 
         def get_merged_pulls_since(self, owner, repo, since_iso, max_pages=10):
             return [{"number": 7, "title": f"PR for {repo}", "merged_at": self.ts,
-                     "html_url": "", "user": {"login": "c"}, "base": {"ref": "main"}}], False
+                     "html_url": "", "user": {"login": "c"}, "base": {"ref": "main"}}], False, ""
 
     def _with_fake_client(self):
         self._orig_client = self.app_mod._github_client
         self.app_mod._github_client = self._FakeActivityClient()
         self.app_mod._activity_cache = None
+        self.app_mod._activity_ranges = {}
         self.addCleanup(setattr, self.app_mod, "_github_client", self._orig_client)
         self.addCleanup(setattr, self.app_mod, "_activity_cache", None)
 
