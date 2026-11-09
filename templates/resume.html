@@ -2,6 +2,15 @@
 {% from "_macros.html" import category_badge, group_filter_bar, next_up_subnav with context %}
 {% block title %}RepoDoctor — {% if packet %}Resume {{ packet.repo.name }}{% else %}Resume a project{% endif %}{% endblock %}
 {% block content %}
+{# OPEN SESSION -> a Claude Code session. URLs are already canonical
+   (sessions.claude_session_url); the prefix is re-checked so nothing but a
+   claude.ai session link can ever reach the href. #}
+{% macro open_session(url, count=0, extra='') -%}
+{%- if url is string and url.startswith('https://claude.ai/code/session_') -%}
+<a href="{{ url }}" target="_blank" rel="noopener" class="session-open{% if extra %} {{ extra }}{% endif %}"
+   title="{% if count and count > 1 %}Opens the newest of the {{ count }} Claude Code sessions on this branch (new tab){% else %}Open this Claude Code session in a new tab{% endif %}">OPEN SESSION <span aria-hidden="true">↗</span></a>
+{%- endif -%}
+{%- endmacro %}
 
 {% if packet %}
 {# ======================= ONE PROJECT'S PACKET ======================= #}
@@ -33,6 +42,12 @@
 {% endif %}
 
 <div class="resume-first-prompt">
+    {% if packet.session_url %}
+    <div class="resume-session-row">
+        {{ open_session(packet.session_url, 0, 'session-open-lg') }}
+        <span class="resume-session-for">Reopen the Claude Code session{% if packet.session_branch %} for <span class="session-branch">{{ packet.session_branch }}</span>{% endif %}{% if packet.session_topic %} · {{ packet.session_topic }}{% endif %}</span>
+    </div>
+    {% endif %}
     <div class="session-section-label session-label-next">Suggested first prompt for Claude Code</div>
     <pre class="resume-prompt-text" id="resume-first-prompt">{{ packet.first_prompt }}</pre>
     <button type="button" class="btn btn-sm btn-outline" id="copy-prompt-btn">COPY PROMPT</button>
@@ -70,6 +85,7 @@
                     <div class="session-meta">
                         {% if i.branch_url %}<a href="{{ i.branch_url }}" target="_blank" rel="noopener" class="session-branch">{{ i.branch }}</a>{% else %}<span class="session-branch">{{ i.branch }}</span>{% endif %}
                         {% if i.pr %}<a href="{{ i.pr.html_url }}" target="_blank" rel="noopener" class="session-pr session-pr-open">PR #{{ i.pr.number }}{% if i.pr.draft %} · draft{% endif %}</a>{% endif %}
+                        {{ open_session(i.session_url, i.session_count) }}
                         {% if i.ahead_by is not none %}<span class="session-count">+{{ i.ahead_by }} / &minus;{{ i.behind_by }}</span>{% endif %}
                         {% if i.age_days is not none %}<span class="session-when {% if i.age_days >= 14 %}inflight-old{% endif %}">{{ i.age_days }}d old</span>{% endif %}
                     </div>
@@ -90,7 +106,10 @@
                 <li>
                     <div class="resume-session-head">
                         <span class="session-branch">{{ s.branch }}</span>
-                        <span class="chip next-{{ s.next_kind }}">{{ s.next_label }}</span>
+                        <span class="session-open-group">
+                            {{ open_session(s.session_url, s.session_count) }}
+                            <span class="chip next-{{ s.next_kind }}">{{ s.next_label }}</span>
+                        </span>
                     </div>
                     <div class="resume-session-topic">{{ s.topic }} · {{ s.commit_count }} commit{{ 's' if s.commit_count != 1 }}{% if s.last_commit_at %} · {{ s.last_commit_at | central_time }}{% endif %}</div>
                     {% if s.commits %}<ul class="resume-commits">{% for c in s.commits[:3] %}<li>{{ c.summary }}</li>{% endfor %}</ul>{% endif %}

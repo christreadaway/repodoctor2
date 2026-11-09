@@ -6244,3 +6244,49 @@ a.session-branch:hover { border-color: var(--tk-cyan-fg); }
   .pf-tags { justify-content: flex-start; flex-basis: auto; }
   .pf-section-links { margin-left: 0; }
 }
+
+/* --- START [S24-B] OPEN SESSION: one click back into a Claude Code session --- */
+/* A link, not a status: cyan (the app's "go somewhere" accent) so it never
+   reads like the green/purple/red PR state chip sitting next to it. */
+.session-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 3px 9px;
+  border: 1px solid var(--tk-cyan-bd);
+  border-radius: 4px;
+  background: var(--tk-cyan-bg);
+  color: var(--tk-cyan-fg);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.session-open:hover { border-color: var(--tk-cyan-fg); background: rgba(64, 255, 208, 0.18); color: var(--tk-cyan-fg); }
+.session-open:focus-visible { outline: 2px solid var(--tk-cyan-fg); outline-offset: 2px; }
+.session-open-lg { min-height: 36px; padding: 6px 14px; font-size: 0.8rem; }
+.session-open-group { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Resume packet: the reopen link sits at the top of the first-prompt box,
+   so "go back into the session" and "start fresh with this prompt" are the
+   two choices side by side. */
+.resume-session-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.resume-session-for { min-width: 0; font-size: 0.8rem; color: var(--text-secondary); overflow-wrap: anywhere; }
+.resume-session-for .session-branch { font-size: 0.72rem; }
+/* The first prompt can now end with a session URL (one unbroken token);
+   global `pre` scrolls sideways, which cut it off at 375px. Wrap instead. */
+.resume-prompt-text { overflow-wrap: anywhere; }
+/* --- END [S24-B] --- */
