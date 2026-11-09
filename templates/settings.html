@@ -103,12 +103,89 @@
     <!-- Debug log -->
     <div class="settings-card settings-card-wide">
         <h2>Debug log</h2>
-        <p class="text-secondary">Everything the app logs (requests, warnings, errors) goes to <code>data/logs/app.log</code>, rotated at 2 MB. The last {{ app_log_tail|length }} lines are below. Hit a bug? Click COPY FOR CLAUDE CODE and paste it into your next session. Per-feature event logs (one JSON line per event) live beside it: tracker, briefing, sessions, summaries, selector, inflight, resume, components, activity (Stats), nextup (Do next + Weekly review), health.</p>
+        <p class="text-secondary">Everything the app logs (requests, warnings, errors) goes to <code>data/logs/app.log</code>, rotated at 2 MB. The last {{ app_log_tail|length }} lines are below. Hit a bug? Click COPY FOR CLAUDE CODE and paste it into your next session. Per-feature event logs (one JSON line per event) live beside it: tracker, briefing, sessions, summaries, selector, inflight, resume, components, activity (Stats), nextup (Do next + Weekly review), health, snapshot (phone snapshot).</p>
         <textarea id="app-log-tail" class="debug-log" rows="12" readonly spellcheck="false">{% if app_log_tail %}{{ app_log_tail|join('\n') }}{% else %}(no log lines yet){% endif %}</textarea>
         <div class="debug-log-actions">
             <button type="button" class="btn btn-secondary btn-sm" id="copy-app-log">COPY FOR CLAUDE CODE</button>
             <a href="{{ url_for('settings') }}" class="btn btn-outline btn-sm">REFRESH</a>
         </div>
+    </div>
+
+    <!-- Phone snapshot (Netlify) -->
+    <div class="settings-card settings-card-wide" id="snapshot">
+        <h2>Phone snapshot</h2>
+        <p class="text-secondary">Read Do next, Weekly review, What changed (Week, Month, Quarter, YTD) and Portfolio on your phone.
+            Your Mac builds a read-only copy, <strong>encrypts it with a passphrase only you know</strong>, and publishes it to a free
+            Netlify site. Netlify only ever stores scrambled text, and nothing on the phone can change anything here.
+            Publishing again replaces the copy.</p>
+        {% set st = snapshot_state or {} %}
+        {% if st.site_id %}
+        <div class="credential-status">
+            <div class="cred-item"><span class="status-ok">&#10003;</span>
+                <span>Site: <a href="{{ st.url }}" target="_blank" rel="noopener">{{ st.url }}</a></span></div>
+            <div class="cred-item"><span class="{{ 'status-ok' if st.last_published_at else 'text-secondary' }}">{{ '&#10003;'|safe if st.last_published_at else '–' }}</span>
+                <span>{% if st.last_published_at %}Last published {{ st.last_published_at|central_time }}{% if st.last_bytes %} ({{ (st.last_bytes / 1024)|round|int }} KB){% endif %}{% else %}Not published yet{% endif %}</span></div>
+            {% if st.last_error %}
+            <div class="cred-item"><span class="status-warn">&#9888;</span><span>Last attempt failed: {{ st.last_error }}</span></div>
+            {% endif %}
+        </div>
+        {% if snapshot_unlocked %}
+        <div class="snapshot-actions">
+            <form method="POST" action="{{ url_for('snapshot_publish') }}" class="inline-form">
+                <button type="submit" class="btn btn-primary" data-loading-text="PUBLISHING…">PUBLISH NOW</button>
+            </form>
+            <a href="{{ url_for('snapshot_preview') }}" class="btn btn-secondary" target="_blank" rel="noopener"
+               title="Opens the exact encrypted page your phone gets, served from this Mac">PREVIEW</a>
+            <form method="POST" action="{{ url_for('snapshot_takedown') }}" class="inline-form"
+                  data-confirm="Delete the Netlify site and forget the token and passphrase? The phone link stops working.">
+                <button type="submit" class="btn btn-danger" data-loading-text="TAKING DOWN…">TAKE DOWN</button>
+            </form>
+        </div>
+        {% else %}
+        <p class="text-secondary">The app restarted, so publishing is locked. Log out and back in to unlock it.</p>
+        {% endif %}
+        <details class="mt-sm">
+            <summary class="text-secondary">Change the Netlify token or passphrase</summary>
+        {% else %}
+        <ol class="snapshot-steps">
+            <li>Sign in at <strong>app.netlify.com</strong> (a free account is enough).</li>
+            <li>Click your avatar (top right) → <strong>User settings</strong> → <strong>Applications</strong> →
+                <strong>Personal access tokens</strong> → <strong>New access token</strong>. Name it "RepoDoctor", generate it, and copy it.</li>
+            <li>Paste it below, pick a passphrase you'll type on your phone ({{ snapshot_min_len }}+ characters), enter your app password, and click <strong>SET UP &amp; PUBLISH</strong>.</li>
+            <li>Open the link it shows on your phone, type the passphrase, and tick <strong>Remember on this device</strong>.</li>
+        </ol>
+        <div>
+        {% endif %}
+            <form method="POST" action="{{ url_for('snapshot_setup') }}" autocomplete="off" class="mt-sm">
+                <div class="form-group">
+                    <label for="netlify_token">Netlify personal access token</label>
+                    <input type="password" id="netlify_token" name="netlify_token" required autocomplete="off"
+                           placeholder="Paste the token from Netlify">
+                    <span class="form-hint">Stored on this Mac only, encrypted with your app password.</span>
+                </div>
+                <div class="form-group">
+                    <label for="snapshot_passphrase">Snapshot passphrase</label>
+                    <input type="password" id="snapshot_passphrase" name="passphrase" required minlength="{{ snapshot_min_len }}"
+                           autocomplete="new-password" placeholder="{{ snapshot_min_len }}+ characters, not your app password">
+                    <span class="form-hint">You'll type this on your phone. It never leaves your devices; without it the snapshot is unreadable, even to Netlify.</span>
+                </div>
+                <div class="form-group">
+                    <label for="snapshot_passphrase_confirm">Passphrase again</label>
+                    <input type="password" id="snapshot_passphrase_confirm" name="passphrase_confirm" required
+                           minlength="{{ snapshot_min_len }}" autocomplete="new-password">
+                </div>
+                <div class="form-group">
+                    <label for="snapshot_password">App password</label>
+                    <input type="password" id="snapshot_password" name="password" required autocomplete="current-password"
+                           placeholder="The password you unlock RepoDoctor with">
+                </div>
+                <button type="submit" class="btn btn-primary" data-loading-text="SETTING UP…">SET UP &amp; PUBLISH</button>
+            </form>
+        {% if st.site_id %}
+        </details>
+        {% else %}
+        </div>
+        {% endif %}
     </div>
 
     <!-- Credentials -->

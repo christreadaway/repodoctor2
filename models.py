@@ -1129,3 +1129,34 @@ def log_nextup_event(event: str, **fields):
 def tail_nextup_log(n: int = 100) -> list[dict]:
     return _tail_log(NEXTUP_LOG_PATH, n)
 # --- END [S24-E] ---
+
+
+
+# --- Phone snapshot (Netlify) ---------------------------------------------
+# Non-secret state only (site id / URL / last publish). The Netlify token and
+# the snapshot passphrase live encrypted in config/snapshot.enc (security.py).
+SNAPSHOT_STATE_PATH = os.path.join(USER_DATA_DIR, "snapshot.json")
+SNAPSHOT_LOG_PATH = os.path.join(DATA_DIR, "logs", "snapshot.log")
+
+
+def get_snapshot_state() -> dict:
+    data = _load_json(SNAPSHOT_STATE_PATH)
+    return data if isinstance(data, dict) else {}
+
+
+def save_snapshot_state(state: dict) -> None:
+    os.makedirs(USER_DATA_DIR, exist_ok=True)
+    _save_json(SNAPSHOT_STATE_PATH, state)
+
+
+def clear_snapshot_state() -> None:
+    if os.path.exists(SNAPSHOT_STATE_PATH):
+        os.remove(SNAPSHOT_STATE_PATH)
+
+
+def log_snapshot_event(event: str, **fields):
+    _append_log_event(SNAPSHOT_LOG_PATH, event, fields)
+
+
+def tail_snapshot_log(n: int = 100) -> list[dict]:
+    return _tail_log(SNAPSHOT_LOG_PATH, n)

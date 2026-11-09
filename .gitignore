@@ -12,6 +12,8 @@ env/
 
 # Config (contains encrypted credentials)
 config/credentials.enc
+# Phone snapshot secrets (Netlify token + passphrase, encrypted)
+config/snapshot.enc
 # Preferences the app writes (config/preferences.json is the tracked seed)
 config/preferences.local.json
 

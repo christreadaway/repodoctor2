@@ -9,6 +9,13 @@
         <button type="button" class="btn btn-primary" id="copy-review-btn">COPY FOR CLAUDE</button>
         <a href="{{ url_for('weekly_review_export', group=active_group or None) }}" class="btn btn-secondary">DOWNLOAD .MD</a>
         {% endif %}
+        {% if snapshot_ready %}
+        <form method="POST" action="{{ url_for('snapshot_publish') }}" class="inline-form">
+            <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
+            <button type="submit" class="btn btn-secondary" data-loading-text="PUBLISHING…"
+                    title="Re-encrypt and publish the phone snapshot to Netlify">PUBLISH TO PHONE</button>
+        </form>
+        {% endif %}
     </div>
 </div>
 
