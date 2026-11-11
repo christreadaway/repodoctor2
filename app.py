@@ -155,6 +155,16 @@ def _reject_bad_reset_token(page_name: str, target: str):
 
 
 @app.context_processor
+def inject_snapshot_flag():
+    """PUBLISH TO PHONE shows only when the snapshot is set up and unlocked."""
+    try:
+        ready = bool(_snapshot_secrets) and bool(models.get_snapshot_state().get("site_id"))
+    except Exception:  # noqa: BLE001 - never break a page over this
+        ready = False
+    return {"snapshot_ready": ready}
+
+
+@app.context_processor
 def inject_anthropic_key_flag():
     """Lets AI buttons warn up front when the key was rejected at the last
     check (login, Settings), instead of failing per repo."""
@@ -260,10 +270,18 @@ def _local_only_guard():
         return Response("RepoDoctor only answers on 127.0.0.1.", status=403)
     if request.method == "POST":
         origin = request.headers.get("Origin")
-        if origin and origin != "null":
-            if urllib.parse.urlsplit(origin).netloc != request.host:
-                logger.warning("Rejected cross-origin POST from %s to %s", origin, request.path)
-                return Response("Cross-site request blocked.", status=403)
+        # "null" is what a browser sends after a cross-origin redirect (a page
+        # on another 127.0.0.1 port posting to itself, then 307-ing here). The
+        # app's own forms never send it (no no-referrer policy anywhere).
+        if origin == "null" or (origin and urllib.parse.urlsplit(origin).netloc != request.host):
+            logger.warning("Rejected cross-origin POST from %s to %s", origin, request.path)
+            return Response("Cross-site request blocked.", status=403)
+        # Fetch metadata, where the browser sends it: only same-origin forms
+        # (or a user-typed navigation, "none") may POST here.
+        site = request.headers.get("Sec-Fetch-Site")
+        if site and site not in ("same-origin", "none"):
+            logger.warning("Rejected %s POST (Sec-Fetch-Site) to %s", site, request.path)
+            return Response("Cross-site request blocked.", status=403)
     return None
 
 
@@ -430,6 +448,7 @@ def login():
             _init_session(creds, user_info)
             session["authenticated"] = True
             _check_anthropic_key_at_login(creds)
+            _unlock_snapshot(password)
             return redirect(_safe_next() or url_for("dashboard"))
         else:
             github_pat = request.form.get("github_pat", "").strip()
@@ -483,6 +502,7 @@ def logout():
     if session.get("authenticated"):
         _github_client = None
         _credentials = None
+        _lock_snapshot()
     session.clear()
     return redirect(url_for("login"))
 
@@ -558,6 +578,7 @@ def login_reset():
     _github_client = None
     _credentials = None
     security.delete_credentials()
+    _forget_snapshot_secrets("login reset")
     session.clear()
     flash(
         "Stored credentials deleted. Enter your new GitHub PAT and Anthropic key below.",
@@ -891,6 +912,7 @@ def settings():
             if rejected:
                 return rejected
             security.delete_credentials()
+            _forget_snapshot_secrets("settings reset")
             flash("Credentials deleted. You will need to re-enter them.", "success")
             return redirect(url_for("logout"))
 
@@ -905,6 +927,13 @@ def settings():
         app_log_tail=models.tail_app_log(150),
         app_log_path=models.APP_LOG_PATH,
         anthropic_key_status=get_anthropic_key_status(),
+        snapshot_state=models.get_snapshot_state(),
+        snapshot_configured=security.snapshot_secrets_exist(),
+        snapshot_unlocked=_snapshot_secrets is not None,
+        snapshot_min_len=_snapshot_min_len(),
+        snapshot_inline_flash=True,
+        snapshot_weak=_snapshot_weak(),
+        snapshot_qr=_snapshot_qr(models.get_snapshot_state().get("url")),
     )
 
 
@@ -2384,6 +2413,772 @@ def weekly_review_export():
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 # --- END [S24-E] ---
+
+# --- Phone snapshot (Netlify) ---------------------------------------------
+#
+# A read-only copy of Do next, Weekly review, What changed (Week / Month /
+# Quarter / YTD) and Portfolio, rendered here, ENCRYPTED here with a passphrase
+# only the owner knows (snapshot.py), and published as static files to a
+# Netlify site (netlify_publish.py). Netlify only ever holds ciphertext; the
+# phone's browser decrypts it. The Netlify token and the passphrase are stored
+# encrypted with the app password (config/snapshot.enc) and unlocked into
+# memory at login, like the GitHub / Anthropic keys. Every setup, publish,
+# preview and takedown is logged to data/logs/snapshot.log (never a secret).
+
+_snapshot_secrets: dict | None = None
+
+
+def _snapshot_min_len() -> int:
+    try:
+        import snapshot as _snap
+        return _snap.MIN_PASSPHRASE_LEN
+    except Exception:  # noqa: BLE001 - Settings must render regardless
+        return 12
+
+
+def _unlock_snapshot(password: str) -> None:
+    """At login: load the snapshot secrets with the same app password."""
+    global _snapshot_secrets
+    try:
+        _snapshot_secrets = security.decrypt_snapshot_secrets(password)
+    except OSError as e:
+        logger.warning("snapshot: could not read secrets: %s", e)
+        _snapshot_secrets = None
+
+
+def _lock_snapshot() -> None:
+    global _snapshot_secrets
+    _snapshot_secrets = None
+
+
+def _forget_snapshot_secrets(reason: str) -> None:
+    """A credential reset changes the app password, so the snapshot secrets
+    (encrypted with the old one) could never unlock again and the live site
+    couldn't be taken down. Drop them and mark the site as needing setup;
+    setup with the same Netlify account reuses or replaces the site. Waits
+    for a running setup / publish so neither writes back over this."""
+    with _snapshot_op_lock:
+        _lock_snapshot()
+        if security.snapshot_secrets_exist():
+            security.delete_snapshot_secrets()
+            state = models.get_snapshot_state()
+            if state:
+                models.save_snapshot_state({**state, "needs_setup": True})
+            models.log_snapshot_event("secrets_forgotten", reason=reason)
+
+
+# One snapshot operation at a time: a publish racing a takedown could write
+# the state back after the takedown cleared it. Re-entrant, so a credential
+# reset (which takes it too) can never deadlock against itself.
+_snapshot_op_lock = threading.RLock()
+
+
+def _snapshot_weak() -> bool:
+    """The saved passphrase fails today's rules (they were tightened after
+    it was chosen). It still works; Settings suggests replacing it."""
+    secrets_now = _snapshot_secrets
+    if not secrets_now:
+        return False
+    try:
+        import snapshot as snap
+        return bool(snap.check_passphrase(secrets_now.get("passphrase", "")))
+    except Exception:  # noqa: BLE001 - Settings must render regardless
+        return False
+
+
+def _snapshot_qr(url):
+    """The phone link as an inline SVG QR code (qr.py, no dependencies), so
+    the owner can open it with the phone's camera. None when there's no link
+    or it can't be drawn (Settings still shows the link and COPY LINK)."""
+    if not url:
+        return None
+    try:
+        import qr
+        from markupsafe import Markup
+        return Markup(qr.svg(url, scale=4, border=4, label="QR code for your phone snapshot link"))
+    except Exception as e:  # noqa: BLE001 - never break Settings over a QR code
+        logger.warning("snapshot: QR code not drawn: %s", e)
+        return None
+
+
+def _snapshot_data(scan: dict) -> dict:
+    """Everything the snapshot shows, from the same caches the pages use.
+    One Stats read (widened to cover YTD) serves all four ranges."""
+    import snapshot as snap
+    groups = models.get_groups()
+    model = models.get_ai_model()
+    client = _get_github_client()
+    keys = ("week", "month", "quarter", "ytd")
+    rngs = {k: activity.resolve_range({"range": k})[0] for k in keys}
+    widest = min(rngs.values(), key=lambda r: r.start_date)
+    result = _activity_data(client, scan, widest)  # None only when offline with no cache
+    reports = {}
+    if result is not None:
+        for k in keys:
+            rep = _stats_report(scan, result, "", groups, rngs[k])
+            _stats_attach_ai(rep, "", model)
+            reports[k] = rep
+    ranges = [{
+        "key": k, "name": rngs[k].name, "dates": rngs[k].dates_label,
+        "totals": reports[k]["totals"], "updated": reports[k]["updated"],
+        "failed": reports[k]["failed"], "ai_portfolio": reports[k].get("ai_portfolio"),
+    } for k in keys if k in reports]
+
+    cached, items, scoped, _all, dn = _do_next_data(scan, "", groups)
+    review = nextup.build_review(reports.get("week"), reports.get("quarter"), dn, items, scoped)
+
+    by_full = {_repo_full_name(r): r for r in scan.get("repos", [])}
+    _groups, view, _infra = _portfolio_view_data()
+
+    def prow(row):
+        h = row.get("health") or {}
+        return {"name": row["name"], "one_liner": row.get("one_liner") or "",
+                "grade": h.get("grade") or "—", "tone": h.get("tone") or "none",
+                "summary": h.get("summary") or "",
+                "html_url": (by_full.get(row["full_name"]) or {}).get("html_url") or "",
+                "pushed_at": row.get("pushed_at") or "", "open_branches": row.get("open_branches") or 0}
+    portfolio_sections = [{"tag": sec["tag"], "rows": [prow(r) for r in sec["repos"]]}
+                          for sec in view["sections"] if sec["repos"]]
+    if view["untagged"]:
+        portfolio_sections.append({"tag": "Untagged", "rows": [prow(r) for r in view["untagged"]]})
+
+    built_at = datetime.datetime.now(datetime.timezone.utc)
+    return {
+        "built_at": built_at.isoformat(),
+        "built_label": snap.make_built_label(built_at),
+        "owner": session.get("github_user", ""),
+        "do_next": dn,
+        "review": review,
+        "review_week_label": rngs["week"].dates_label,
+        "ranges": ranges,
+        "portfolio": portfolio_sections,
+        "inflight_gathered_at": (cached or {}).get("gathered_at", ""),
+        "activity_fetched_at": (result or {}).get("fetched_at", ""),
+    }
+
+
+def _snapshot_build(scan: dict, passphrase: str, preview: bool = False) -> dict:
+    """Render -> encrypt -> shell -> files. Returns {"files", "zip", "bytes"}.
+    preview: the Mac's local preview never offers "Remember on this device"
+    (it would store the key on the app's own origin)."""
+    import snapshot as snap
+    data = _snapshot_data(scan)
+    body = snap.render_body(data)
+    payload = snap.encrypt(body, passphrase)
+    shell = snap.build_shell(payload, data["built_label"], allow_remember=not preview)
+    files = snap.site_files(shell)
+    blob = snap.build_zip(files)
+    return {"files": files, "zip": blob, "bytes": len(blob), "body_chars": len(body)}
+
+
+def _snapshot_csp(files: dict) -> str:
+    """The Content-Security-Policy line from the generated _headers, so the
+    local preview runs under the same policy as Netlify."""
+    for line in (files.get("_headers") or b"").decode("utf-8", "replace").splitlines():
+        line = line.strip()
+        if line.lower().startswith("content-security-policy:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def _snap_flash(message: str, category: str = "info") -> None:
+    """Snapshot messages render INSIDE the Settings card (#snapshot), where
+    the redirect lands; base.html would draw them at the top of the page,
+    out of sight. On other pages (PUBLISH TO PHONE on Weekly review) they
+    show as ordinary messages."""
+    flash(message, "snapshot-" + category)
+
+
+def _snapshot_back(form: bool = False, new: bool = False):
+    """Back to the Settings card. form: reopen the setup form (a setup
+    problem); new: open the QR code (a new phone link)."""
+    args = {}
+    if form:
+        args["snapshot_form"] = 1
+    if new:
+        args["snapshot_new"] = 1
+    return redirect(url_for("settings", **args) + "#snapshot")
+
+
+_SNAPSHOT_PUBLISHED_KEYS = ("last_published_at", "last_bytes", "last_deploy_id",
+                            "pending_deploy", "gone_url")
+
+
+def _snapshot_save(state: dict, drop=(), **updates) -> dict:
+    new = {k: v for k, v in state.items() if k not in drop}
+    new.update(updates)
+    models.save_snapshot_state(new)
+    return new
+
+
+def _snapshot_locked_reason() -> str:
+    """Why publish / preview / takedown can't run right now, and what to do."""
+    if security.snapshot_secrets_exist():
+        return ("The phone snapshot is locked because the app restarted. Unlock it in Settings → "
+                "Phone snapshot with your app password.")
+    state = models.get_snapshot_state()
+    if state.get("site_id") or state.get("needs_setup"):
+        return ("The Netlify token and passphrase were cleared when your credentials were reset. "
+                "Run setup again in Settings → Phone snapshot.")
+    return ("The phone snapshot isn't set up (or it was taken down). Set it up in Settings → "
+            "Phone snapshot.")
+
+
+def _snapshot_site_url(site: dict) -> str:
+    """The site's https link; Netlify always serves <name>.netlify.app, so
+    that's the fallback when a reply leaves the URL out."""
+    name = str(site.get("name") or "")
+    fallback = f"https://{name}.netlify.app" if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", name) else ""
+    return site.get("url") or fallback
+
+
+def _snapshot_queue(state: dict) -> list[dict]:
+    return [p for p in (state.get("retire") or []) if isinstance(p, dict) and p.get("site_id")]
+
+
+def _snapshot_transient(e) -> bool:
+    return e.status is None or e.status == 429 or e.status >= 500
+
+
+def _snapshot_retire(nf, tokens) -> list[tuple[str, str]]:
+    """Delete the sites a new site replaced (state["retire"]), now that the
+    new one is live. tokens: [(token, account_key)], the previous token
+    first when setup still has it. A site is only tried with tokens of the
+    Netlify account that owns it, and a 404 ("already gone") only counts
+    from that account: from any other token it proves nothing. Sites
+    RepoDoctor can't delete stay listed in the card ("manual") with where to
+    delete them, until the owner says they did. A temporary failure stays
+    queued for the next successful publish. Returns (message, category)."""
+    state = models.get_snapshot_state()
+    queue = _snapshot_queue(state)
+    if not queue:
+        return []
+    known = list(dict.fromkeys((t, a or "") for t, a in tokens if t))
+    notes, keep = [], []
+    for old in queue:
+        if old.get("manual"):
+            keep.append(old)
+            continue
+        where = old.get("url") or "the old site"
+        admin = old.get("admin_url") or "app.netlify.com"
+        acct = old.get("account") or ""
+        usable = [t for t, a in known if not acct or a == acct]
+        if acct and not usable:
+            keep.append({**old, "manual": "foreign"})
+            models.log_snapshot_event("site_retire_manual", site_id=old["site_id"], why="other_account")
+            notes.append((f"Your previous phone site ({where}) is on another Netlify account, so RepoDoctor "
+                          f"can't delete it. Delete it in Netlify: {admin}", "warning"))
+            continue
+        outcome, temporary = None, False
+        for tok in usable:
+            try:
+                got = nf.NetlifyClient(tok, log_event=models.log_snapshot_event).delete_site(old["site_id"])
+            except nf.NetlifyError as e:
+                models.log_snapshot_event("site_retire_failed", site_id=old["site_id"], status=e.status,
+                                          kind=e.kind)
+                temporary = temporary or _snapshot_transient(e)
+                continue
+            outcome = got if outcome != "deleted" else outcome
+            if got == "deleted" or acct:
+                break
+        if outcome == "deleted" or (outcome == "already_gone" and acct):
+            models.log_snapshot_event("site_retired", site_id=old["site_id"], outcome=outcome)
+            if outcome == "deleted":
+                notes.append((f"Your previous phone link ({where}) was deleted, so old copies are gone.",
+                              "success"))
+        elif temporary:
+            keep.append(old)
+            notes.append((f"Your previous phone link ({where}) couldn't be deleted right now (Netlify "
+                          "didn't answer). RepoDoctor tries again after the next publish.", "warning"))
+        elif outcome == "already_gone":  # account unknown: a 404 proves nothing
+            keep.append({**old, "manual": "unconfirmed"})
+            models.log_snapshot_event("site_retire_manual", site_id=old["site_id"], why="unconfirmed")
+            notes.append((f"RepoDoctor couldn't confirm your previous phone site ({where}) was deleted. "
+                          f"If it still opens, delete it in Netlify: {admin}", "warning"))
+        else:
+            keep.append({**old, "manual": "refused"})
+            models.log_snapshot_event("site_retire_manual", site_id=old["site_id"], why="refused")
+            notes.append((f"Your previous phone link ({where}) is still online and this token can't "
+                          f"delete it. Delete it in Netlify: {admin}", "warning"))
+    _snapshot_save(models.get_snapshot_state(), retire=keep)
+    return notes
+
+
+def _snapshot_mark_foreign(account: str) -> list[tuple[str, str]]:
+    """After a setup whose publish didn't go through: queued sites on a
+    different Netlify account can't be deleted later (the previous token is
+    only held during setup), so say so now instead of promising it."""
+    state = models.get_snapshot_state()
+    queue, notes, changed = _snapshot_queue(state), [], False
+    for i, old in enumerate(queue):
+        if not old.get("manual") and account and old.get("account") and old["account"] != account:
+            queue[i] = {**old, "manual": "foreign"}
+            changed = True
+            models.log_snapshot_event("site_retire_manual", site_id=old["site_id"], why="other_account")
+            notes.append((f"Your previous phone site ({old.get('url') or 'the old site'}) is on another "
+                          "Netlify account and stays online until you delete it there: "
+                          f"{old.get('admin_url') or 'app.netlify.com'}", "warning"))
+    if changed:
+        _snapshot_save(state, retire=queue)
+    return notes
+
+
+def _snapshot_publish_now(scan: dict, old: tuple | None = None) -> bool:
+    """Build and deploy. Flashes the outcome; True on success. old: during
+    setup, (previous token, its account) to delete the replaced site with.
+    The secrets are read ONCE: logging out mid-publish can't break it."""
+    import netlify_publish as nf
+    secrets_now = _snapshot_secrets
+    if secrets_now is None:
+        _snap_flash(_snapshot_locked_reason(), "error")
+        return False
+    state = models.get_snapshot_state()
+    if not state.get("site_id"):
+        _snap_flash("There's no Netlify site to publish to yet. Set one up in Settings → Phone snapshot.",
+                    "error")
+        return False
+    site_id = state["site_id"]
+    t0 = time.monotonic()
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    built = None
+    try:
+        built = _snapshot_build(scan, secrets_now["passphrase"])
+        client = nf.NetlifyClient(secrets_now["netlify_token"], log_event=models.log_snapshot_event)
+        dep = client.deploy_zip(site_id, built["zip"])
+    except nf.NetlifyError as e:
+        models.log_snapshot_event("publish_error", status=e.status, kind=e.kind, error=e.message)
+        state = models.get_snapshot_state()
+        if e.kind == "site_gone":
+            gone = state.get("url", "")
+            msg = (f"The phone site{f' ({gone})' if gone else ''} no longer exists on Netlify: it was "
+                   "deleted there, or the token belongs to a different Netlify account.")
+            _snapshot_save(state, drop=("pending_deploy",), site_id="", url="", admin_url="",
+                           gone_url=gone, last_error=msg)
+            _snap_flash(msg + " CREATE NEW SITE & PUBLISH in Settings → Phone snapshot makes a new one "
+                        "with your saved token and passphrase (the phone link changes).", "error")
+            return False
+        if e.deploy_id and e.kind != "deploy_failed" and built:
+            # Netlify has the upload; only the wait for it ended (too slow,
+            # or a status check failed). It may well go live: keep it.
+            _snapshot_save(state, last_error="", pending_deploy={
+                "deploy_id": e.deploy_id, "bytes": built["bytes"], "started_at": now})
+            if e.kind == "deploy_timeout":
+                lead = "Netlify is still processing this publish; it usually finishes on its own."
+            else:
+                lead = (f"Netlify took the upload, but RepoDoctor lost track of it ({e.message.rstrip('.')}). "
+                        "It may still go live.")
+            _snap_flash(lead + " Press CHECK in Settings → Phone snapshot in a minute to confirm, or "
+                        "PUBLISH NOW to send a fresh copy.", "warning")
+            return False
+        _snapshot_save(state, last_error=e.message)
+        _snap_flash(f"Snapshot not published: {e.message}", "error")
+        return False
+    except gh.GitHubAuthError:
+        raise
+    except Exception as e:  # noqa: BLE001 - say what failed, keep the app up
+        logger.exception("snapshot: publish failed")
+        msg = f"{type(e).__name__}: {str(e)[:200]}"
+        models.log_snapshot_event("publish_error", error=msg)
+        _snapshot_save(models.get_snapshot_state(), last_error=msg)
+        _snap_flash(f"Snapshot not published ({msg}). Details are in data/logs/snapshot.log.", "error")
+        return False
+    state = models.get_snapshot_state()
+    url = state.get("url") or dep.get("site_url") or dep.get("url") or _snapshot_site_url(state)
+    state = _snapshot_save(state, drop=("pending_deploy", "gone_url"), url=url, last_published_at=now,
+                           last_bytes=built["bytes"], last_deploy_id=dep.get("deploy_id", ""),
+                           last_error="")
+    models.log_snapshot_event("publish", site_id=site_id, deploy_id=dep.get("deploy_id"),
+                              bytes=built["bytes"], elapsed_ms=int((time.monotonic() - t0) * 1000))
+    _snap_flash(f"Snapshot published{f' to {url}' if url else ''}. Your phone shows it the next time you "
+                "open the link.", "success")
+    tokens = ([old] if old else []) + [(secrets_now["netlify_token"], state.get("account", ""))]
+    for note, cat in _snapshot_retire(nf, tokens):
+        _snap_flash(note, cat)
+    return True
+
+
+@app.route("/snapshot/setup", methods=["POST"])
+@_require_auth
+def snapshot_setup():
+    with _snapshot_op_lock:
+        return _snapshot_setup_locked()
+
+
+def _snapshot_setup_locked():
+    """Settings -> Phone snapshot: save the Netlify token + passphrase
+    (encrypted with the app password), create the site if needed, publish.
+
+    A blank token or passphrase keeps the saved one. The phone link stays
+    the same unless the passphrase changes (or the site can't be reached
+    with the token): a new passphrase gets a NEW site, because Netlify keeps
+    every old deploy at its own address. The new site is created and
+    published FIRST; the old one is deleted only once the new one is live."""
+    global _snapshot_secrets
+    import netlify_publish as nf
+    import snapshot as snap
+    token_in = request.form.get("netlify_token", "").strip()
+    pass_in = request.form.get("passphrase", "")
+    confirm = request.form.get("passphrase_confirm", "")
+    password = request.form.get("password", "")
+
+    def refuse(message: str):
+        _snap_flash(message, "error")
+        return _snapshot_back(form=True)
+
+    if pass_in or confirm:
+        problem = snap.check_passphrase(pass_in)
+        if problem:
+            return refuse(problem)
+        if pass_in != confirm:
+            return refuse("The two passphrases don't match. Nothing was changed.")
+    if not password or security.decrypt_credentials(password) is None:
+        return refuse("Wrong app password. Nothing was changed.")
+    # What was set up before (in memory, or unlockable with this password).
+    old = _snapshot_secrets or security.decrypt_snapshot_secrets(password) or {}
+    token = token_in or old.get("netlify_token", "")
+    passphrase = pass_in or old.get("passphrase", "")
+    if not token:
+        return refuse("Paste your Netlify personal access token first.")
+    if not passphrase:
+        return refuse("Pick a passphrase you'll type on your phone (or click SUGGEST).")
+    if pass_in and (pass_in == password or security.decrypt_credentials(pass_in) is not None):
+        # The ciphertext is public: a passphrase equal to the app password
+        # would let anyone guess at the password protecting your keys.
+        return refuse("Use a passphrase that's different from your app password. Nothing was changed.")
+    state = models.get_snapshot_state()
+    had_site = bool(state.get("site_id"))
+    # Unknown old passphrase (forgotten at a credential reset) counts as changed.
+    pass_changed = passphrase != old.get("passphrase")
+    client = nf.NetlifyClient(token, log_event=models.log_snapshot_event)
+    site, created, replace_reason = None, False, ""
+    try:
+        account = client.verify().get("account_key") or ""
+        if had_site and not pass_changed:
+            try:
+                site = client.get_site(state["site_id"])
+            except nf.NetlifyError as e:
+                if e.status not in (403, 404):
+                    raise
+                replace_reason = "unreachable"  # deleted, or on another Netlify account
+        elif had_site:
+            replace_reason = "passphrase"
+        if site is None:
+            site, created = client.create_site(), True
+    except nf.NetlifyError as e:
+        models.log_snapshot_event("setup_error", status=e.status, kind=e.kind, error=e.message)
+        return refuse(f"Netlify setup failed: {e.message} Nothing was changed.")
+
+    def undo_created(why: str) -> str:
+        """Delete the site this setup just made; a sentence if that failed."""
+        if not created:
+            return ""
+        try:
+            client.delete_site(site["site_id"])
+            return ""
+        except nf.NetlifyError as e:
+            models.log_snapshot_event("setup_cleanup_failed", site_id=site["site_id"], status=e.status, why=why)
+            return (f" The new, empty site it had just made couldn't be removed; delete it in Netlify: "
+                    f"{site.get('admin_url') or 'app.netlify.com'}")
+
+    try:
+        security.encrypt_snapshot_secrets(password, {"netlify_token": token, "passphrase": passphrase})
+    except OSError as e:
+        logger.error("snapshot: could not save secrets: %s", e)
+        return refuse(f"Couldn't save the snapshot settings ({type(e).__name__}). Nothing was changed."
+                      + undo_created("secrets"))
+    old_token = old.get("netlify_token") or None
+    old_account = state.get("account", "")
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    new_state = dict(state)
+    if created:
+        retire = _snapshot_queue(state)
+        if had_site:
+            retire.append({"site_id": state["site_id"], "url": state.get("url", ""),
+                           "admin_url": state.get("admin_url", ""), "reason": replace_reason,
+                           "account": old_account})
+        new_state = {k: v for k, v in state.items() if k not in _SNAPSHOT_PUBLISHED_KEYS}
+        new_state["retire"] = retire
+    new_state = {k: v for k, v in new_state.items() if k != "needs_setup"}
+    new_state.update(site_id=site["site_id"], name=site.get("name", ""),
+                     # A new site never inherits the old link.
+                     url=_snapshot_site_url(site) if created else (site.get("url") or state.get("url", "")),
+                     admin_url=site.get("admin_url", ""), set_up_at=now, last_error="", account=account)
+    try:
+        models.save_snapshot_state(new_state)
+    except OSError as e:
+        logger.error("snapshot: could not save state: %s", e)
+        try:  # keep the secrets and the site they belong to in step
+            if old:
+                security.encrypt_snapshot_secrets(password, old)
+            else:
+                security.delete_snapshot_secrets()
+        except OSError:
+            pass
+        return refuse(f"Couldn't save the snapshot settings ({type(e).__name__}). Nothing was changed."
+                      + undo_created("state"))
+    _snapshot_secrets = {"netlify_token": token, "passphrase": passphrase}
+    models.log_snapshot_event("setup", site_id=site["site_id"], created=created,
+                              replaced=replace_reason or None, token_changed=token != old_token,
+                              passphrase_changed=pass_changed, account_known=bool(account),
+                              same_account=bool(account) and account == old_account)
+    if _scan_results:
+        _snapshot_publish_now(_scan_results, old=(old_token, old_account) if old_token else None)
+    else:
+        later = " Your previous phone link stays online until then." if new_state.get("retire") else ""
+        _snap_flash("Snapshot site is ready. Run a scan, then PUBLISH NOW." + later, "success")
+    # The previous token is gone after this request: anything still queued
+    # on its account can't be deleted later, so say so now.
+    for note, cat in _snapshot_mark_foreign(account):
+        _snap_flash(note, cat)
+    return _snapshot_back(new=created)
+
+
+@app.route("/snapshot/publish", methods=["POST"])
+@_require_auth
+def snapshot_publish():
+    back = _safe_next()
+    if not _scan_results:
+        _snap_flash("No scan data yet — run a scan first.", "error")
+    elif _snapshot_secrets is None:
+        _snap_flash(_snapshot_locked_reason(), "error")
+    else:
+        with _snapshot_op_lock:
+            _snapshot_publish_now(_scan_results)
+    return redirect(back) if back else _snapshot_back()
+
+
+@app.route("/snapshot/recreate", methods=["POST"])
+@_require_auth
+def snapshot_recreate():
+    """The site was deleted on Netlify (or moved accounts): make a new one
+    with the saved token and passphrase, then publish. No re-typing."""
+    with _snapshot_op_lock:
+        import netlify_publish as nf
+        state = models.get_snapshot_state()
+        secrets_now = _snapshot_secrets
+        if secrets_now is None:
+            _snap_flash(_snapshot_locked_reason(), "error")
+            return _snapshot_back()
+        if state.get("site_id"):
+            _snap_flash("The phone snapshot already has a site. Use PUBLISH NOW.", "info")
+            return _snapshot_back()
+        try:
+            site = nf.NetlifyClient(secrets_now["netlify_token"],
+                                    log_event=models.log_snapshot_event).create_site()
+        except nf.NetlifyError as e:
+            models.log_snapshot_event("recreate_error", status=e.status, kind=e.kind, error=e.message)
+            _snap_flash(f"Couldn't create a new Netlify site: {e.message} Nothing was changed.", "error")
+            return _snapshot_back()
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        _snapshot_save(state, drop=_SNAPSHOT_PUBLISHED_KEYS + ("needs_setup",), site_id=site["site_id"],
+                       name=site.get("name", ""), url=_snapshot_site_url(site),
+                       admin_url=site.get("admin_url", ""), set_up_at=now, last_error="")
+        models.log_snapshot_event("recreate", site_id=site["site_id"])
+        if _scan_results:
+            _snapshot_publish_now(_scan_results)
+        else:
+            _snap_flash("New snapshot site is ready. Run a scan, then PUBLISH NOW.", "success")
+        return _snapshot_back(new=True)
+
+
+@app.route("/snapshot/check", methods=["POST"])
+@_require_auth
+def snapshot_check():
+    """A publish Netlify took but RepoDoctor didn't see finish: ask how it ended."""
+    with _snapshot_op_lock:
+        import netlify_publish as nf
+        state = models.get_snapshot_state()
+        pend = state.get("pending_deploy") or {}
+        secrets_now = _snapshot_secrets
+        if not pend.get("deploy_id"):
+            _snap_flash("Nothing is waiting on Netlify.", "info")
+            return _snapshot_back()
+        if secrets_now is None:
+            _snap_flash(_snapshot_locked_reason(), "error")
+            return _snapshot_back()
+        client = nf.NetlifyClient(secrets_now["netlify_token"], log_event=models.log_snapshot_event)
+        try:
+            dep = client.get_deploy(pend["deploy_id"])
+        except nf.NetlifyError as e:
+            models.log_snapshot_event("check_error", deploy_id=pend["deploy_id"], status=e.status,
+                                      kind=e.kind)
+            if e.status == 404:
+                _snapshot_save(state, drop=("pending_deploy",),
+                               last_error="Netlify no longer has that publish. Press PUBLISH NOW.")
+                _snap_flash("Netlify no longer has that publish. Press PUBLISH NOW to send a fresh copy.",
+                            "error")
+            else:
+                _snap_flash(f"Couldn't check with Netlify: {e.message}", "error")
+            return _snapshot_back()
+        models.log_snapshot_event("check", deploy_id=pend["deploy_id"], state=dep["state"])
+        if dep["state"] == nf.DEPLOY_READY:
+            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            state = _snapshot_save(state, drop=("pending_deploy", "gone_url"), last_published_at=now,
+                                   last_bytes=pend.get("bytes") or state.get("last_bytes"),
+                                   last_deploy_id=pend["deploy_id"], last_error="")
+            _snap_flash("That publish finished: your phone has the latest snapshot.", "success")
+            for note, cat in _snapshot_retire(nf, [(secrets_now["netlify_token"], state.get("account", ""))]):
+                _snap_flash(note, cat)
+        elif dep["state"] in nf.DEPLOY_FAILED_STATES:
+            why = dep.get("error_message") or "Netlify didn't say why"
+            msg = f"Netlify couldn't publish that snapshot ({why}). Press PUBLISH NOW to try again."
+            _snapshot_save(state, drop=("pending_deploy",), last_error=msg)
+            _snap_flash(msg, "error")
+        else:
+            _snap_flash(f"Netlify is still working on it ({dep['state']}). Check again in a minute.", "info")
+        return _snapshot_back()
+
+
+@app.route("/snapshot/forget-old", methods=["POST"])
+@_require_auth
+def snapshot_forget_old():
+    """'I deleted it': drop a previous site RepoDoctor couldn't delete
+    itself from the card's list."""
+    site_id = request.form.get("site_id", "")
+    with _snapshot_op_lock:
+        state = models.get_snapshot_state()
+        queue = _snapshot_queue(state)
+        keep = [p for p in queue if not (p["site_id"] == site_id and p.get("manual"))]
+        if len(keep) != len(queue):
+            if keep or len(state) > 1:
+                _snapshot_save(state, retire=keep)
+            else:
+                models.clear_snapshot_state()
+            models.log_snapshot_event("site_retired", site_id=site_id, outcome="owner_deleted")
+            _snap_flash("Removed from the list.", "success")
+    return _snapshot_back()
+
+
+@app.route("/snapshot/unlock", methods=["POST"])
+@_require_auth
+def snapshot_unlock():
+    """After a restart: unlock the snapshot with the app password, right in
+    the card (instead of logging out and back in)."""
+    global _snapshot_secrets
+    password = request.form.get("password", "")
+    if not security.snapshot_secrets_exist():
+        _snap_flash("There's nothing to unlock: set up the phone snapshot below.", "info")
+        return _snapshot_back()
+    secrets_found = security.decrypt_snapshot_secrets(password) if password else None
+    if secrets_found is None:
+        if password and security.decrypt_credentials(password) is not None:
+            models.log_snapshot_event("unlock_error", reason="unreadable")
+            _snap_flash("That's your app password, but the saved snapshot settings couldn't be read. "
+                        "Run setup again below.", "error")
+        else:
+            models.log_snapshot_event("unlock_error", reason="wrong_password")
+            _snap_flash("Wrong app password. The phone snapshot is still locked.", "error")
+        return _snapshot_back()
+    _snapshot_secrets = secrets_found
+    models.log_snapshot_event("unlock")
+    state = models.get_snapshot_state()
+    if state.get("site_id"):
+        what = "PUBLISH NOW, PREVIEW and TAKE DOWN work"
+    elif state.get("gone_url"):
+        what = "CREATE NEW SITE & PUBLISH and TAKE DOWN work"
+    else:
+        what = "The saved settings are ready"
+    _snap_flash(f"Unlocked. {what} until you log out.", "success")
+    return _snapshot_back()
+
+
+@app.route("/snapshot/preview")
+@_require_auth
+def snapshot_preview():
+    """The exact page the phone gets (encrypted with the real passphrase),
+    served locally under the same Content-Security-Policy, to try unlocking
+    before publishing."""
+    if request.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+        return Response("Open PREVIEW from RepoDoctor's Settings page.", status=403)
+    if not _scan_results:
+        _snap_flash("No scan data yet — run a scan first.", "error")
+        return _snapshot_back()
+    secrets_now = _snapshot_secrets
+    if secrets_now is None:
+        _snap_flash(_snapshot_locked_reason(), "error")
+        return _snapshot_back()
+    try:
+        built = _snapshot_build(_scan_results, secrets_now["passphrase"], preview=True)
+    except gh.GitHubAuthError:
+        raise
+    except Exception as e:  # noqa: BLE001 - a message, never a 500
+        logger.exception("snapshot: preview failed")
+        msg = f"{type(e).__name__}: {str(e)[:200]}"
+        models.log_snapshot_event("preview_error", error=msg)
+        _snap_flash(f"Couldn't build the preview ({msg}). Details are in data/logs/snapshot.log.", "error")
+        return _snapshot_back()
+    models.log_snapshot_event("preview", bytes=built["bytes"])
+    resp = Response(built["files"]["index.html"], content_type="text/html; charset=utf-8")
+    csp = _snapshot_csp(built["files"])
+    if csp:
+        resp.headers["Content-Security-Policy"] = csp
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/snapshot/takedown", methods=["POST"])
+@_require_auth
+def snapshot_takedown():
+    """Delete the Netlify site(s) and forget the snapshot settings. Needs the
+    per-boot form token: it destroys the site and the stored secrets."""
+    if not _reset_token_ok():
+        logger.warning("Rejected snapshot takedown without a valid token")
+        _snap_flash("That TAKE DOWN button came from a page opened before the app restarted, so nothing "
+                    "was deleted. Unlock the snapshot below if it asks, then press TAKE DOWN again.", "error")
+        return _snapshot_back()
+    with _snapshot_op_lock:
+        return _snapshot_takedown_locked()
+
+
+def _snapshot_takedown_locked():
+    import netlify_publish as nf
+    state = models.get_snapshot_state()
+    queued = [p for p in _snapshot_queue(state) if not p.get("manual")]
+    secrets_now = _snapshot_secrets
+    if state.get("site_id") or queued:
+        if secrets_now is None:
+            if not security.snapshot_secrets_exist():
+                admin = state.get("admin_url") or "app.netlify.com"
+                _snap_flash("The Netlify token was cleared (credentials were reset), so RepoDoctor can't "
+                            f"delete the site. Run setup again below, or delete it in Netlify: {admin}",
+                            "error")
+            else:
+                _snap_flash(_snapshot_locked_reason(), "error")
+            return _snapshot_back()
+        if state.get("site_id"):
+            try:
+                nf.NetlifyClient(secrets_now["netlify_token"],
+                                 log_event=models.log_snapshot_event).delete_site(state["site_id"])
+            except nf.NetlifyError as e:
+                models.log_snapshot_event("takedown_error", status=e.status, error=e.message)
+                _snap_flash(f"Couldn't delete the Netlify site: {e.message} Nothing was changed.", "error")
+                return _snapshot_back()
+    notes = []
+    if queued:
+        notes = _snapshot_retire(nf, [(secrets_now["netlify_token"], state.get("account", ""))])
+    # Whatever is still online and can't be deleted from here stays listed
+    # (with where to delete it), even with everything else forgotten.
+    left = [p if p.get("manual") else {**p, "manual": "refused"}
+            for p in _snapshot_queue(models.get_snapshot_state())]
+    security.delete_snapshot_secrets()
+    models.clear_snapshot_state()
+    if left:
+        models.save_snapshot_state({"retire": left})
+    _lock_snapshot()
+    models.log_snapshot_event("takedown", site_id=state.get("site_id", ""), retired=len(queued) - len(left),
+                              left=len(left))
+    if left:
+        _snap_flash("Phone snapshot taken down: the Netlify site is deleted and the token and passphrase are "
+                    "forgotten. Your previous phone site(s) listed below are NOT deleted; delete them in "
+                    "Netlify.", "warning")
+    else:
+        _snap_flash("Phone snapshot taken down: the Netlify site is deleted and the token and passphrase are "
+                    "forgotten.", "success")
+    for note, cat in notes:
+        if cat == "success":
+            _snap_flash(note, cat)
+    return _snapshot_back()
+
 
 
 # --- In Flight: every unmerged branch / open PR across repos -----------------

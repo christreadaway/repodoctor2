@@ -1,11 +1,94 @@
 # REPODOCTOR2 - Session History & Project Status
 
 **Repository:** `repodoctor2`
-**Total Sessions Logged:** 24
+**Total Sessions Logged:** 25
 **Date Range:** 2025-02-14 to 2026-11-09
-**Last Updated:** 2026-11-09 (Session 24)
+**Last Updated:** 2026-11-09 (Session 25)
 
 This file contains a complete history of Claude Code sessions for this repository and current project status. Sessions are listed in reverse chronological order (most recent first).
+
+---
+
+## Session 25 — 2026-11-09 (Phone snapshot: encrypted read-only copy on Netlify)
+
+Branch: `claude/sweet-fermi-yt1v9m`. Asked "is this set up to run on Netlify?" — no: the `netlify/` folder is an old Node.js port of the first few screens, decommissioned 2026-07-23, and the real app can't run on Netlify as-is (10–26 s function limit vs 30–90 s scans / reads, local files + in-memory caches, and it kept the GitHub token online). Offered three options; chose **1, the read-only snapshot**: "use multiple agents, fix low→critical bugs, then update .md files."
+
+### Decisions
+- **Encrypt on the Mac, decrypt in the phone's browser.** Netlify password protection is a paid feature and still leaves plaintext on Netlify; client-side encryption keeps Netlify ciphertext-only on the free plan. AES-256-GCM, PBKDF2-SHA256 600k iterations, fresh salt + nonce every publish.
+- **Netlify zip deploy through its API** (no Netlify CLI, no Node, no git link): the app creates the site, uploads, waits until ready.
+- **Secrets on the Mac only,** encrypted with the app password in `config/snapshot.enc`, same scheme as the GitHub / Anthropic keys, unlocked at login.
+- **Read-only and self-contained:** in-app links (Tracker, In Flight) dropped; OPEN SESSION and GitHub links kept; COPY PROMPT works on the phone.
+- "Remember on this device" is opt-in and stores a non-extractable key in the phone's IndexedDB, never the passphrase.
+- **Getting it onto the phone:** a QR code in the card. No new dependency: `qr.py` is a small spec-exact encoder, checked against a reference library.
+- **Keep the phone link stable.** Only a new passphrase changes it, because Netlify keeps every old deploy at its own address, so the old site has to go. The new site goes live first; the old one is deleted after.
+- **Never forget a live site.** If RepoDoctor can't delete an old site (another Netlify account, revoked token), the card keeps listing it with where to delete it.
+- Asked before touching `main` this time (the request didn't mention it).
+
+### How it was built
+- Two builder agents in worktrees, new files only: the renderer (`snapshot.py`, `templates/snapshot/`, 46 tests + a 112-check browser run proving WebCrypto decrypts what Python encrypts under the hash-pinned CSP) and the Netlify client (`netlify_publish.py`, 68 tests, checked against Netlify's published OpenAPI spec).
+- This session: encrypted secrets storage, Settings card with step-by-step token instructions, setup / publish / preview / takedown routes, `_snapshot_data` (one Stats read widened to YTD serves all four ranges), PUBLISH TO PHONE on Weekly review, 18 route tests; merged both branches.
+- Fixed while integrating: the Netlify client retried a POST /sites after a 502/504, which could leave a stray empty site → POSTs retry only on 429/503; one snapshot log path for app + renderer.
+- Fix rounds used two more helper agents in worktrees: the passphrase-strength rewrite plus phone-page polish, and `qr.py`. The settings card, the publish / replace / recover flow and their tests were done here. The one cross-agent change: the app now takes its build label from `snapshot.make_built_label`, which shows seconds.
+
+### Review round 1: security (agent)
+0 critical, 0 high, 3 medium, 5 low. All fixed in `a418f60`, with tests:
+- M1: a page on another 127.0.0.1 port could POST through a 307 with `Origin: null`. The guard now refuses `null` / foreign origins and any `Sec-Fetch-Site` other than same-origin / none.
+- M2: a credential reset left `snapshot.enc` encrypted with the old password, so it could never unlock and the site couldn't be taken down. A reset now deletes it and marks the snapshot as needing setup.
+- M3: weak passphrases were accepted, including the app password itself. Added strength rules and SUGGEST.
+- L4–L8:
+  - orphaned site on a token change;
+  - plaintext passphrase in localStorage (now a non-extractable PBKDF2 key in IndexedDB, with the old copy migrated and removed);
+  - a labeled site name (now 24 random characters);
+  - size leak (padded to 32 KB) and old deploys surviving a passphrase change (new site);
+  - autocomplete off;
+  - TAKE DOWN needs the per-boot form token.
+
+### Review round 2: end-to-end in Chromium (agent, fake Netlify, 11 scripts)
+3 high, 5 medium, 14 low, all fixed:
+- **H1:** every snapshot message was drawn at the top of Settings while the redirect scrolled to the card. Messages now carry a `snapshot-` category and render inside the card; the heading clears the sticky nav; a setup problem reopens the form.
+- **H2:** a passphrase or token change DELETED the live site before creating the new one, and a failed create then said "Nothing was changed". Now it's create → publish → delete the old one.
+- **H3:** a site deleted on Netlify silently turned the card back into first-time setup. Now the card explains it and offers CREATE NEW SITE & PUBLISH with the saved token and passphrase.
+- **M1:** `password12345678` and similar passed. Guessable pieces are now stripped in a loop and only the rest is scored (helper agent).
+- **M2:** a blank token now keeps the saved one.
+- **M3:** a token-only change keeps the site and link.
+- **M4:** a deploy timeout is kept as pending, with CHECK.
+- **M5:** COPY LINK, and a QR code in an "Open it on your phone" panel (helper agent: `qr.py`).
+- **LOWs:**
+  - Settings card: URL wrap, SUGGEST nowrap, honest locked / reset / taken-down wording, UNLOCK in the card, a stale TAKE DOWN explains itself, a single charset, 44px buttons.
+  - Phone page: trims and NFC-normalizes the typed passphrase, build time to the second, the preview hint aligned, 44px tap targets.
+  - Weekly review: the overview wraps, and PUBLISH TO PHONE says it covers all repos.
+
+### Review round 3: fresh-eyes code review of the round-2 fixes (agent)
+2 high, 2 medium, 6 low, all fixed in `c562fe5`:
+- **H1:** a 404 from a token on another account counted as "deleted", so an old site could stay live and be forgotten. `verify()` now returns an account fingerprint (a hash of the user id). Deletes only use tokens from the site's own account, and only that account's 404 counts. Sites that can't be deleted stay listed with a Netlify link and I DELETED IT.
+- **H2:** TAKE DOWN claimed all was deleted. It now names what it couldn't delete and keeps it listed.
+- **M3:** the card no longer promises a later publish will delete a site on another account.
+- **M4:** the strength rules ran at build time, so tightening them broke publishing a saved passphrase and logged part of it. They now run only when a passphrase is chosen.
+- **L5:** logout mid-publish caused a 500. The secrets are read once, and a credential reset waits for the lock.
+- **L6:** a status check that failed after upload is now pending, not a failure.
+- **L7:** the no-site card gets TAKE DOWN, the old-site list, and why there's no site.
+- **L8:** messages only name buttons that are on the page.
+- **L9:** a new site never inherits the old link.
+- **L10:** a failed save removes the new site and keeps the secrets in step.
+
+### Tests
+**1,072 passing, 410 subtests** (was 867):
+- `test_snapshot.py`: render, crypto, passphrase rules incl. 2,000 SUGGEST samples, shell.
+- `test_netlify_publish.py`: client, retries, scrubbing, account fingerprint.
+- `test_snapshot_routes.py`: 53 tests for setup, change, replace order, accounts, recovery, CHECK, UNLOCK, TAKE DOWN, guard, card states.
+- `test_qr.py`: 13 known answers matching a reference QR library, plus structure.
+
+Chromium at 375px and 1280px against a fake Netlify:
+- 172 checks (each message in view, setup / change / failure / recovery flows, no horizontal scroll, buttons at least 44px, no console errors);
+- the Settings QR code decodes to the exact link with zxing-cpp and OpenCV;
+- the phone page: 42 checks, plus unlock with trailing spaces;
+- all 1,536 card state combinations render balanced HTML with the right buttons.
+
+### Next Steps
+1. Merge the branch to `main` on GitHub, pull, and launch as usual. There are no new dependencies.
+2. In Netlify, go to User settings → Applications → Personal access tokens → New access token, and pick the longest expiration it offers. Then in Settings → Phone snapshot, paste it, click SUGGEST (or pick your own passphrase), enter your app password, and click SET UP & PUBLISH.
+3. Scan the QR code in the card with your phone, enter the passphrase, and tick Remember on this device. Add it to your home screen.
+4. Mondays: Weekly review → PUBLISH TO PHONE.
 
 ---
 

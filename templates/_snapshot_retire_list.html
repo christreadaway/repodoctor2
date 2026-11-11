@@ -1,0 +1,18 @@
+{# Phone snapshot card: previous sites that are still (or may still be) online. #}
+{% for old in (st.retire or []) if old.site_id %}
+<div class="cred-item"><span class="status-warn">&#9888;</span>
+    <span class="snapshot-site">
+    {% if old.manual == 'foreign' %}Your previous phone site ({{ old.url or 'old site' }}) is on another Netlify account, so RepoDoctor can't delete it.
+    {% elif old.manual == 'unconfirmed' %}RepoDoctor couldn't confirm your previous phone site ({{ old.url or 'old site' }}) was deleted. If it still opens, delete it.
+    {% elif old.manual %}Your previous phone site ({{ old.url or 'old site' }}) is still online and RepoDoctor can't delete it.
+    {% else %}Your previous phone link ({{ old.url or 'old site' }}) is still online. It's deleted after the next successful publish.{% endif %}
+    {% if old.manual %}<a href="{{ old.admin_url or 'https://app.netlify.com' }}" target="_blank" rel="noopener">Delete it in Netlify</a>{% endif %}
+    </span>
+    {% if old.manual %}
+    <form method="POST" action="{{ url_for('snapshot_forget_old') }}" class="inline-form">
+        <input type="hidden" name="site_id" value="{{ old.site_id }}">
+        <button type="submit" class="btn btn-secondary btn-sm snapshot-small" title="Remove it from this list once it's gone from Netlify">I DELETED IT</button>
+    </form>
+    {% endif %}
+</div>
+{% endfor %}

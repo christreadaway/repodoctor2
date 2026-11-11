@@ -80,6 +80,59 @@ def credentials_exist() -> bool:
     return os.path.exists(CREDENTIALS_PATH)
 
 
+# --- Phone snapshot secrets (Netlify token + snapshot passphrase) -----------
+# Same scheme as the main credentials (PBKDF2 + Fernet, app password), in a
+# separate file so the existing credentials format is untouched.
+SNAPSHOT_SECRETS_PATH = os.path.join(os.path.dirname(CREDENTIALS_PATH), "snapshot.enc")
+
+
+def _atomic_write_bytes(path: str, data: bytes) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def encrypt_snapshot_secrets(password: str, secrets: dict) -> None:
+    """Encrypt {"netlify_token", "passphrase"} with the app password."""
+    salt = os.urandom(SALT_LENGTH)
+    token = Fernet(_derive_key(password, salt)).encrypt(json.dumps(secrets).encode())
+    _atomic_write_bytes(SNAPSHOT_SECRETS_PATH, salt + token)
+
+
+def decrypt_snapshot_secrets(password: str) -> dict | None:
+    """The snapshot secrets, or None (no file, wrong password, or corrupt)."""
+    if not os.path.exists(SNAPSHOT_SECRETS_PATH):
+        return None
+    with open(SNAPSHOT_SECRETS_PATH, "rb") as f:
+        data = f.read()
+    try:
+        out = json.loads(Fernet(_derive_key(password, data[:SALT_LENGTH]))
+                         .decrypt(data[SALT_LENGTH:]).decode())
+    except (InvalidToken, ValueError):
+        return None
+    return out if isinstance(out, dict) else None
+
+
+def snapshot_secrets_exist() -> bool:
+    return os.path.exists(SNAPSHOT_SECRETS_PATH)
+
+
+def delete_snapshot_secrets() -> None:
+    if os.path.exists(SNAPSHOT_SECRETS_PATH):
+        os.remove(SNAPSHOT_SECRETS_PATH)
+
+
 def delete_credentials() -> None:
     if os.path.exists(CREDENTIALS_PATH):
         os.remove(CREDENTIALS_PATH)

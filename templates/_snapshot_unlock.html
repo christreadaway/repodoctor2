@@ -1,0 +1,9 @@
+{# Phone snapshot card: unlock after a restart with the app password. #}
+<form method="POST" action="{{ url_for('snapshot_unlock') }}" autocomplete="off" class="snapshot-unlock mt-sm">
+    <label for="snapshot_unlock_password" class="text-secondary">The app restarted, so the phone snapshot is locked. Enter your app password to unlock it.</label>
+    <div class="snapshot-pass-row">
+        <input type="password" id="snapshot_unlock_password" name="password" required autocomplete="current-password"
+               placeholder="App password">
+        <button type="submit" class="btn btn-primary" data-loading-text="UNLOCKING…">UNLOCK</button>
+    </div>
+</form>

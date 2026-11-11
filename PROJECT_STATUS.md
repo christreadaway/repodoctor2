@@ -1,7 +1,7 @@
 # RepoDoctor2 — Project Status
 
-**Last Updated:** 2026-11-09 (Session 24 — Do next, Weekly review, OPEN SESSION links, health grade, What we shipped (AI), parallel scan, Anthropic key check)
-**Current Branch:** `main` (Sessions 23-24 pushed to `main`; also on `claude/sweet-fermi-yt1v9m`)
+**Last Updated:** 2026-11-09 (Session 25 — Phone snapshot: encrypted read-only copy on Netlify)
+**Current Branch:** `claude/sweet-fermi-yt1v9m` (Session 25, not yet on `main`; Sessions 23-24 are on `main`)
 **Overall Progress:** ~97%
 
 ---
@@ -12,7 +12,22 @@ RepoDoctor2 is a Flask web app that visualizes all your GitHub repos: branch cou
 
 ---
 
-## Latest — Session 24 (2026-11-09)
+## Latest — Session 25 (2026-11-09)
+
+- **Phone snapshot (Settings → Phone snapshot).** A read-only copy of Do next, Weekly review, What changed (Week / Month / Quarter / YTD) and Portfolio with health grades, published to a free Netlify site so you can read it on your phone. The Mac encrypts it (AES-256-GCM, key from your passphrase via PBKDF2 600k) before it leaves; Netlify only stores scrambled text and the phone's browser unlocks it. Only the build time is readable. A hash-pinned security policy lets nothing but the unlock script run.
+- **Setup in Settings:** paste a Netlify personal access token, pick a passphrase (12+, or SUGGEST), enter the app password, SET UP & PUBLISH, then scan the QR code in the card with your phone (or COPY LINK). After that: PUBLISH NOW, PREVIEW (try the exact page locally), TAKE DOWN (deletes the site, forgets the token). **PUBLISH TO PHONE** on Weekly review for the Monday routine.
+- **Built to recover on its own:** blank fields keep the saved token / passphrase; a new token on the same account keeps the phone link; a new passphrase gets a new site, created and published BEFORE the old one is deleted; a site deleted on Netlify → CREATE NEW SITE & PUBLISH with the saved settings; a slow deploy → CHECK; after a restart → UNLOCK with the app password right in the card. Old sites RepoDoctor can't delete stay listed with a link to delete them.
+- **Secrets stay on the Mac,** encrypted with the app password (`config/snapshot.enc`), unlocked at login, locked at logout / restart. Logged to `data/logs/snapshot.log`, never a secret.
+- The old Node.js port in `netlify/` is untouched and unused (reference only).
+- **Three independent reviews, every finding fixed, each with a regression test.**
+  - Security (0 critical / 0 high, 3 medium, 5 low): a page on another localhost port could POST via `Origin: null`; a credential reset left the secrets unopenable and the site un-deletable; weak passphrases (incl. the app password) were accepted; old copies survived a passphrase change; "Remember" kept the plaintext passphrase in localStorage (now a non-extractable key in IndexedDB); a labeled site name; file size leaked how much changed (now padded to 32 KB).
+  - End-to-end in Chromium against a fake Netlify (3 high, 5 medium, 14 low): every snapshot message was drawn out of sight; changing the passphrase deleted the live site before the new one existed; a site deleted on Netlify silently reset the card; weak passphrases like `password12345678` still passed; a passphrase change needed a new token; a token change replaced the link; a slow deploy had no way to check; no easy way to get the link to the phone (now COPY LINK + QR code); plus wording, wrapping and tap-target fixes on the card, the phone page and Weekly review.
+  - Fresh-eyes code review of those fixes (2 high, 2 medium, 6 low): a 404 from a token on another Netlify account was taken as proof an old site was deleted, so it could stay online forgotten (now account-aware, and sites RepoDoctor can't delete stay listed); TAKE DOWN claimed everything was deleted; tightened passphrase rules broke publishing a saved passphrase; logout mid-publish gave a 500; plus pending-deploy, no-site card, message and save-ordering fixes.
+- **Tests: 1,072 passing** (was 867). New: `test_snapshot.py`, `test_netlify_publish.py`, `test_snapshot_routes.py`, `test_qr.py` (QR matches a reference library module for module; decoded by two independent scanners). Chromium at 375px and 1280px: 172 setup / change / failure / recovery checks, the Settings QR code decodes to the exact link, a 42-check phone-page run, and all 1,536 card states render balanced HTML with the right buttons.
+
+---
+
+## Session 24 (2026-11-09)
 
 Seven improvements picked from the ideas list (1, 2, 4, 5, 6, 7, 12), built in parallel by four agents plus this session, merged, then reviewed independently.
 
@@ -226,7 +241,7 @@ Nothing actively in progress. All Session 15 work (Chat Briefing screen + 15b re
 
 ## What's Broken / Known Issues
 
-- **Netlify serverless port is behind Flask and its hosted deployment is decommissioned (2026-07-23).** The code stays in `netlify/` for reference; local Flask is the supported path. Redeploying would mean re-adding env vars in Netlify (and rotating the PAT) plus porting the April/May features listed under Next Steps.
+- **Netlify serverless port is behind Flask and its hosted deployment is decommissioned (2026-07-23).** The code stays in `netlify/` for reference; local Flask is the supported path. Since Session 25 the phone gets an encrypted read-only snapshot instead (Settings → Phone snapshot), which needs none of that port.
 - **Truncated git trees.** Very large repos can have a truncated tree response; a warning is logged and some deep files may be missed.
 - **Scan API volume.** `/languages` per repo doubles API calls vs. the original scan; since Session 24 the scan runs 8 repos at a time, so wall time is much lower.
 - **Stats first-load latency.** The first Stats visit after a scan (or after the hourly cache expires) reads every repo back 90 days; YTD later in the year widens that once. Expect 5-30 seconds on a big account (more for long custom ranges); the page says it's reading. Presets inside the cached window are instant.
@@ -250,7 +265,7 @@ Nothing actively in progress. All Session 15 work (Chat Briefing screen + 15b re
 3. **Try the tracker against a real repo.** Click Tracker in the nav, pick a repo (e.g. parentpoint, catholicevents), click GENERATE TRACKER. Verify the eight tabs populate and the next-actions prompts copy cleanly into Claude Code.
 4. **Generate trackers across the portfolio** to seed the load-bearing IDs. Re-generations from this point on will preserve those IDs.
 5. ~~Wire tracker `next_actions` into What's Next~~ — DONE (Session 24): Do next ranks P0/P1 tracker actions with In Flight work and planned steps.
-6. **(Deprioritized) Netlify port.** The hosted deployment is decommissioned — only revisit if you decide to redeploy. Would need the April/May features ported (auth-error handling, Stats with group filter + rollup, What's Next, groups persistence, recursive search, Size column, refreshed nav, recent-updated sort, business-spec aliasing, unassigned-projects list) plus env vars re-added in Netlify. Tracker stays Flask-only by design.
+6. **(Superseded) Netlify port.** Replaced for phone use by the encrypted Phone snapshot (Session 25); only revisit a full hosted app if you need to change things from the phone. Would need the April/May features ported (auth-error handling, Stats with group filter + rollup, What's Next, groups persistence, recursive search, Size column, refreshed nav, recent-updated sort, business-spec aliasing, unassigned-projects list) plus env vars re-added in Netlify. Tracker stays Flask-only by design.
 7. ~~Parallelize initial scan~~ — DONE (Session 24): 8 repos at a time, identical output.
 8. ~~Verify Anthropic key at login~~ — DONE (Session 24): checked at login and in Settings (Update Anthropic key + CHECK KEY).
 

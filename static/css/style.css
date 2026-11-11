@@ -6594,6 +6594,7 @@ button.health-chip[aria-expanded="true"] { box-shadow: inset 0 -2px 0 currentCol
 .rv-more-items a { color: var(--green-80); font-size: 0.75rem; }
 .rv-overview {
   max-width: 75ch;
+  overflow-wrap: anywhere;
   margin: 0 0 var(--space-md);
   padding: 12px 14px;
   border-left: 3px solid var(--tk-green-bd);
@@ -6691,3 +6692,28 @@ main .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 
 .pf-chip { max-width: 100%; overflow-wrap: anywhere; min-width: 0; }
 .pf-tags { min-width: 0; max-width: 100%; }
+
+/* Settings → Phone snapshot */
+.snapshot-steps { margin: var(--space-sm) 0 0; padding-left: 2em; font-size: 0.85rem; line-height: 1.6; color: var(--text-primary); }
+.snapshot-steps li { margin-bottom: 4px; }
+.snapshot-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: var(--space-sm); }
+.status-warn { color: var(--tk-amber-fg); }
+.snapshot-pass-row { display: flex; gap: 8px; align-items: stretch; }
+.snapshot-pass-row input { flex: 1 1 auto; min-width: 0; }
+/* The redirect lands on #snapshot: clear the sticky nav, and keep the
+   card's own messages (rendered inside it) in view. */
+#snapshot { scroll-margin-top: 84px; }
+.snapshot-messages { margin: 0 0 var(--space-sm); }
+.snapshot-messages .flash:last-child { margin-bottom: 0; }
+.snapshot-site, .snapshot-site a { min-width: 0; overflow-wrap: anywhere; }
+#snapshot .cred-item { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 4px; }
+#snapshot .cred-item > span + span { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
+#snapshot-suggest, #snapshot .snapshot-copy, #snapshot .snapshot-small { white-space: nowrap; overflow-wrap: normal; flex: 0 0 auto; }
+.snapshot-actions .btn, .snapshot-unlock .btn, .snapshot-submit, .snapshot-publish-btn { min-height: 44px; }
+#snapshot .snapshot-copy, #snapshot .snapshot-small { min-height: 36px; }
+.snapshot-unlock label { display: block; margin-bottom: 6px; font-size: 0.85rem; }
+.snapshot-phone > summary { cursor: pointer; font-size: 0.9rem; color: var(--text-primary); }
+.snapshot-phone-body { display: flex; flex-wrap: wrap; gap: var(--space-md); align-items: flex-start; margin-top: var(--space-sm); }
+.snapshot-phone-body .snapshot-steps { flex: 1 1 16rem; margin-top: 0; }
+.snapshot-qr { flex: 0 0 auto; line-height: 0; }
+.snapshot-qr svg { display: block; max-width: 100%; height: auto; border-radius: 4px; }
